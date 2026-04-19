@@ -17,6 +17,7 @@ pub struct RouteEntry {
     pub name: Option<String>,
     pub action: Option<String>,
     pub middleware: Vec<String>,
+    pub registration: RouteRegistration,
 }
 
 #[derive(Debug, Serialize)]
@@ -25,6 +26,15 @@ pub struct RouteReport {
     pub project_root: PathBuf,
     pub route_count: usize,
     pub routes: Vec<RouteEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteRegistration {
+    pub kind: String,
+    pub declared_in: PathBuf,
+    pub line: usize,
+    pub column: usize,
+    pub provider_class: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

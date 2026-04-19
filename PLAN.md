@@ -23,6 +23,8 @@ Implemented:
 - `config:list --json`
 - `provider:list`
 - `provider:list --json`
+- `route:sources`
+- route registration-source attribution
 - terminal-friendly text tables
 - basic malformed-route recovery
 - basic provider graph
@@ -30,8 +32,8 @@ Implemented:
 
 Gaps:
 
-- no `loadRoutesFrom(...)` or `mergeConfigFrom(...)` extraction yet
-- no route/config source attribution yet
+- no `mergeConfigFrom(...)` extraction yet
+- no config source attribution yet
 - no tests yet
 - no LSP transport yet
 
@@ -140,7 +142,7 @@ Planned outputs:
 - `route:sources`
 - JSON source graph
 
-Status: `pending`
+Status: `completed`
 
 ## Milestone 4: Config Sources
 

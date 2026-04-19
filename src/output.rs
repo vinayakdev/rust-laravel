@@ -1,5 +1,6 @@
 use crate::types::{
-    ConfigItem, ConfigReport, OutputMode, ProviderEntry, ProviderReport, RouteEntry, RouteReport,
+    ConfigItem, ConfigReport, OutputMode, ProviderEntry, ProviderReport, RouteEntry,
+    RouteRegistration, RouteReport,
 };
 use comfy_table::{
     Cell, CellAlignment, Color, ColumnConstraint, ContentArrangement, Row, Table,
@@ -13,6 +14,18 @@ pub fn print_routes(report: &RouteReport, mode: OutputMode) -> Result<(), String
             println!("{json}");
         }
         OutputMode::Text => print_route_table(&report.routes),
+    }
+
+    Ok(())
+}
+
+pub fn print_route_sources(report: &RouteReport, mode: OutputMode) -> Result<(), String> {
+    match mode {
+        OutputMode::Json => {
+            let json = serde_json::to_string_pretty(report).map_err(|error| error.to_string())?;
+            println!("{json}");
+        }
+        OutputMode::Text => print_route_source_table(&report.routes),
     }
 
     Ok(())
@@ -69,6 +82,7 @@ fn print_route_table(routes: &[RouteEntry]) {
                 header("Name"),
                 header("Action"),
                 header("Middleware"),
+                header("Registered Via"),
             ]);
             current_file = Some(file);
         }
@@ -80,6 +94,52 @@ fn print_route_table(routes: &[RouteEntry]) {
             wrap_cell(route.name.as_deref().unwrap_or("-"), widths.name),
             wrap_cell(route.action.as_deref().unwrap_or("-"), widths.action),
             wrap_cell(&join_or_dash(&route.middleware), widths.middleware),
+            wrap_cell(
+                &route_registration_summary(&route.registration),
+                widths.registration,
+            ),
+        ]));
+    }
+
+    println!("{table}");
+}
+
+fn print_route_source_table(routes: &[RouteEntry]) {
+    if routes.is_empty() {
+        println!("No routes found.");
+        return;
+    }
+
+    let widths = route_source_widths();
+    let mut table = new_table();
+    table.set_header(vec![
+        header("Route"),
+        header("Method"),
+        header("Uri"),
+        header("Provider"),
+        header("Declared At"),
+        header("Kind"),
+    ]);
+
+    for route in routes {
+        table.add_row(Row::from(vec![
+            wrap_cell(
+                &format!("{}:{}:{}", route.file.display(), route.line, route.column),
+                widths.route,
+            ),
+            Cell::new(route.methods.join("|")),
+            wrap_cell(&route.uri, widths.uri),
+            provider_registration_cell(&route.registration, widths.provider),
+            wrap_cell(
+                &format!(
+                    "{}:{}:{}",
+                    route.registration.declared_in.display(),
+                    route.registration.line,
+                    route.registration.column
+                ),
+                widths.declared_at,
+            ),
+            registration_kind_cell(&route.registration, widths.kind),
         ]));
     }
 
@@ -273,6 +333,7 @@ struct RouteWidths {
     name: usize,
     action: usize,
     middleware: usize,
+    registration: usize,
 }
 
 struct ConfigWidths {
@@ -291,6 +352,14 @@ struct ProviderWidths {
     status: usize,
 }
 
+struct RouteSourceWidths {
+    route: usize,
+    uri: usize,
+    provider: usize,
+    declared_at: usize,
+    kind: usize,
+}
+
 fn route_widths() -> RouteWidths {
     let terminal = terminal_width();
     if terminal < 110 {
@@ -299,6 +368,7 @@ fn route_widths() -> RouteWidths {
             name: 16,
             action: 20,
             middleware: 14,
+            registration: 18,
         }
     } else if terminal < 150 {
         RouteWidths {
@@ -306,6 +376,7 @@ fn route_widths() -> RouteWidths {
             name: 20,
             action: 28,
             middleware: 18,
+            registration: 24,
         }
     } else {
         RouteWidths {
@@ -313,6 +384,36 @@ fn route_widths() -> RouteWidths {
             name: 26,
             action: 42,
             middleware: 24,
+            registration: 32,
+        }
+    }
+}
+
+fn route_source_widths() -> RouteSourceWidths {
+    let terminal = terminal_width();
+    if terminal < 110 {
+        RouteSourceWidths {
+            route: 18,
+            uri: 18,
+            provider: 18,
+            declared_at: 18,
+            kind: 14,
+        }
+    } else if terminal < 150 {
+        RouteSourceWidths {
+            route: 28,
+            uri: 24,
+            provider: 24,
+            declared_at: 24,
+            kind: 18,
+        }
+    } else {
+        RouteSourceWidths {
+            route: 38,
+            uri: 30,
+            provider: 30,
+            declared_at: 34,
+            kind: 20,
         }
     }
 }
@@ -415,6 +516,39 @@ fn status_cell(provider: &ProviderEntry, width: usize) -> Cell {
         cell = cell.fg(Color::Green);
     } else {
         cell = cell.fg(Color::Red);
+    }
+    cell
+}
+
+fn route_registration_summary(registration: &RouteRegistration) -> String {
+    match &registration.provider_class {
+        Some(provider) => format!(
+            "{provider} @ {}:{}:{}",
+            registration.declared_in.display(),
+            registration.line,
+            registration.column
+        ),
+        None => registration.kind.clone(),
+    }
+}
+
+fn provider_registration_cell(registration: &RouteRegistration, width: usize) -> Cell {
+    let text = registration.provider_class.as_deref().unwrap_or("-");
+    let mut cell = wrap_cell(text, width);
+    if registration.provider_class.is_some() {
+        cell = cell.fg(Color::Cyan);
+    } else {
+        cell = cell.fg(Color::DarkGrey);
+    }
+    cell
+}
+
+fn registration_kind_cell(registration: &RouteRegistration, width: usize) -> Cell {
+    let mut cell = wrap_cell(&registration.kind, width);
+    if registration.provider_class.is_some() {
+        cell = cell.fg(Color::Green);
+    } else {
+        cell = cell.fg(Color::DarkGrey);
     }
     cell
 }

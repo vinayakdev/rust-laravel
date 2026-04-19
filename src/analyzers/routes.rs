@@ -1,12 +1,14 @@
 use bumpalo::Bump;
-use php_parser::ast::{Arg, Expr, ExprId, Stmt, StmtId};
+use php_parser::ast::{Arg, BinaryOp, ClassMember, Expr, ExprId, MagicConstKind, Stmt, StmtId};
 use php_parser::lexer::Lexer;
 use php_parser::parser::Parser;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use crate::analyzers::providers;
 use crate::project::LaravelProject;
-use crate::types::{RouteEntry, RouteReport};
+use crate::types::{RouteEntry, RouteRegistration, RouteReport};
 
 #[derive(Clone, Default)]
 struct RouteContext {
@@ -26,6 +28,12 @@ struct RouteChunk {
     text: Vec<u8>,
     line: usize,
     complete: bool,
+}
+
+#[derive(Clone)]
+struct RegisteredRouteFile {
+    file: PathBuf,
+    registration: RouteRegistration,
 }
 
 #[derive(Clone, Copy)]
@@ -56,17 +64,18 @@ struct ScanState {
 }
 
 pub fn analyze(project: &LaravelProject) -> Result<RouteReport, String> {
-    let routes_dir = project.root.join("routes");
-    let files = collect_php_files(&routes_dir);
     let mut routes = Vec::new();
+    let route_files = collect_registered_route_files(project)?;
 
-    for file in &files {
+    for registered in &route_files {
+        let file = &registered.file;
         let source = fs::read(file)
             .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
         collect_routes_from_source(
             &source,
             &project.root,
             file,
+            &registered.registration,
             1,
             &RouteContext::default(),
             &mut routes,
@@ -104,23 +113,160 @@ fn collect_php_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn collect_registered_route_files(
+    project: &LaravelProject,
+) -> Result<Vec<RegisteredRouteFile>, String> {
+    let routes_dir = project.root.join("routes");
+    let direct_files = collect_php_files(&routes_dir);
+    let discovered = discover_provider_route_files(project)?;
+    let mut by_file: BTreeMap<PathBuf, Vec<RouteRegistration>> = BTreeMap::new();
+
+    for registered in discovered {
+        if registered.file.is_file() {
+            by_file
+                .entry(registered.file)
+                .or_default()
+                .push(registered.registration);
+        }
+    }
+
+    let direct_file_set: BTreeSet<PathBuf> = direct_files.iter().cloned().collect();
+    let mut all_files = Vec::new();
+
+    for file in &direct_files {
+        if let Some(registrations) = by_file.get(file) {
+            for registration in registrations {
+                all_files.push(RegisteredRouteFile {
+                    file: file.clone(),
+                    registration: registration.clone(),
+                });
+            }
+        } else {
+            all_files.push(RegisteredRouteFile {
+                file: file.clone(),
+                registration: default_route_registration(&project.root, file),
+            });
+        }
+    }
+
+    for (file, registrations) in by_file {
+        if direct_file_set.contains(&file) {
+            continue;
+        }
+        for registration in registrations {
+            all_files.push(RegisteredRouteFile {
+                file: file.clone(),
+                registration,
+            });
+        }
+    }
+
+    all_files.sort_by(|left, right| {
+        left.file
+            .cmp(&right.file)
+            .then(
+                left.registration
+                    .declared_in
+                    .cmp(&right.registration.declared_in),
+            )
+            .then(left.registration.line.cmp(&right.registration.line))
+    });
+
+    Ok(all_files)
+}
+
+fn default_route_registration(project_root: &Path, file: &Path) -> RouteRegistration {
+    RouteRegistration {
+        kind: "route-file".to_string(),
+        declared_in: strip_root(project_root, file),
+        line: 1,
+        column: 1,
+        provider_class: None,
+    }
+}
+
+fn discover_provider_route_files(
+    project: &LaravelProject,
+) -> Result<Vec<RegisteredRouteFile>, String> {
+    let provider_report = providers::analyze(project)?;
+    let mut files = Vec::new();
+    let mut seen_sources = BTreeSet::new();
+
+    for provider in provider_report.providers {
+        let Some(relative_source_file) = provider.source_file.as_ref() else {
+            continue;
+        };
+        if !provider.source_available {
+            continue;
+        }
+        if !seen_sources.insert((
+            provider.provider_class.clone(),
+            relative_source_file.clone(),
+        )) {
+            continue;
+        }
+
+        let source_file = project.root.join(relative_source_file);
+        let source = fs::read(&source_file)
+            .map_err(|error| format!("failed to read {}: {error}", source_file.display()))?;
+
+        files.extend(extract_provider_route_files(
+            project,
+            &provider,
+            &source_file,
+            &source,
+        ));
+    }
+
+    Ok(files)
+}
+
+fn extract_provider_route_files(
+    project: &LaravelProject,
+    provider: &crate::types::ProviderEntry,
+    provider_file: &Path,
+    source: &[u8],
+) -> Vec<RegisteredRouteFile> {
+    let arena = Bump::new();
+    let lexer = Lexer::new(source);
+    let mut parser = Parser::new(lexer, &arena);
+    let program = parser.parse_program();
+    if !program.errors.is_empty() {
+        return Vec::new();
+    }
+
+    let mut files = Vec::new();
+    for statement in program.statements {
+        collect_provider_route_files_from_stmt(
+            statement,
+            source,
+            project,
+            provider,
+            provider_file,
+            &mut files,
+        );
+    }
+    files
+}
+
 fn collect_routes_from_source(
     source: &[u8],
     project_root: &Path,
     file: &Path,
+    registration: &RouteRegistration,
     start_line: usize,
     context: &RouteContext,
     routes: &mut Vec<RouteEntry>,
 ) {
     if start_line == 1
         && source_can_use_full_parse(source)
-        && collect_routes_with_full_parse(source, project_root, file, context, routes)
+        && collect_routes_with_full_parse(source, project_root, file, registration, context, routes)
     {
         return;
     }
 
     for chunk in split_route_chunks(source, start_line) {
-        parse_route_chunk(&chunk, project_root, file, context, routes);
+        parse_route_chunk(&chunk, project_root, file, registration, context, routes);
     }
 }
 
@@ -128,6 +274,7 @@ fn collect_routes_with_full_parse(
     source: &[u8],
     project_root: &Path,
     file: &Path,
+    registration: &RouteRegistration,
     context: &RouteContext,
     routes: &mut Vec<RouteEntry>,
 ) -> bool {
@@ -145,6 +292,7 @@ fn collect_routes_with_full_parse(
             source,
             project_root,
             file,
+            registration,
             context,
             routes,
             1,
@@ -158,6 +306,7 @@ fn parse_route_chunk(
     chunk: &RouteChunk,
     project_root: &Path,
     file: &Path,
+    registration: &RouteRegistration,
     context: &RouteContext,
     routes: &mut Vec<RouteEntry>,
 ) {
@@ -183,6 +332,7 @@ fn parse_route_chunk(
             &snippet,
             project_root,
             file,
+            registration,
             context,
             routes,
             chunk.line,
@@ -196,6 +346,7 @@ fn collect_routes_from_stmt(
     source: &[u8],
     project_root: &Path,
     file: &Path,
+    registration: &RouteRegistration,
     context: &RouteContext,
     routes: &mut Vec<RouteEntry>,
     line_offset: usize,
@@ -208,6 +359,7 @@ fn collect_routes_from_stmt(
                 source,
                 project_root,
                 file,
+                registration,
                 context,
                 routes,
                 line_offset,
@@ -224,6 +376,7 @@ fn collect_routes_from_stmt(
                     source,
                     project_root,
                     file,
+                    registration,
                     context,
                     routes,
                     line_offset,
@@ -240,6 +393,7 @@ fn collect_routes_from_stmt(
                     source,
                     project_root,
                     file,
+                    registration,
                     context,
                     routes,
                     line_offset,
@@ -258,6 +412,7 @@ fn collect_routes_from_stmt(
                     source,
                     project_root,
                     file,
+                    registration,
                     context,
                     routes,
                     line_offset,
@@ -271,6 +426,7 @@ fn collect_routes_from_stmt(
                         source,
                         project_root,
                         file,
+                        registration,
                         context,
                         routes,
                         line_offset,
@@ -290,6 +446,7 @@ fn collect_routes_from_stmt(
                     source,
                     project_root,
                     file,
+                    registration,
                     context,
                     routes,
                     line_offset,
@@ -306,6 +463,7 @@ fn analyze_route_expression(
     source: &[u8],
     project_root: &Path,
     file: &Path,
+    registration: &RouteRegistration,
     base_context: &RouteContext,
     routes: &mut Vec<RouteEntry>,
     line_offset: usize,
@@ -337,6 +495,7 @@ fn analyze_route_expression(
                         &context,
                         project_root,
                         file,
+                        registration,
                         route_line(expr, source, line_offset),
                         signature,
                         args,
@@ -361,6 +520,7 @@ fn analyze_route_expression(
                                 &body,
                                 project_root,
                                 file,
+                                registration,
                                 body_line,
                                 &context,
                                 routes,
@@ -373,6 +533,7 @@ fn analyze_route_expression(
                                 source,
                                 project_root,
                                 file,
+                                registration,
                                 &context,
                                 routes,
                                 line_offset,
@@ -394,6 +555,7 @@ fn analyze_route_expression(
                             &context,
                             project_root,
                             file,
+                            registration,
                             route_line(expr, source, line_offset),
                             signature,
                             args,
@@ -419,6 +581,7 @@ fn analyze_route_expression(
                                 &body,
                                 project_root,
                                 file,
+                                registration,
                                 body_line,
                                 &context,
                                 routes,
@@ -431,6 +594,7 @@ fn analyze_route_expression(
                                 source,
                                 project_root,
                                 file,
+                                registration,
                                 &context,
                                 routes,
                                 line_offset,
@@ -447,6 +611,165 @@ fn analyze_route_expression(
     if let Some(route) = current_route {
         routes.push(route);
     }
+}
+
+fn collect_provider_route_files_from_stmt(
+    statement: StmtId<'_>,
+    source: &[u8],
+    project: &LaravelProject,
+    provider: &crate::types::ProviderEntry,
+    provider_file: &Path,
+    files: &mut Vec<RegisteredRouteFile>,
+) {
+    match statement {
+        Stmt::Expression { expr, .. } => {
+            collect_provider_route_files_from_expr(
+                expr,
+                source,
+                project,
+                provider,
+                provider_file,
+                files,
+            );
+        }
+        Stmt::Block { statements, .. }
+        | Stmt::Declare {
+            body: statements, ..
+        } => {
+            for statement in *statements {
+                collect_provider_route_files_from_stmt(
+                    statement,
+                    source,
+                    project,
+                    provider,
+                    provider_file,
+                    files,
+                );
+            }
+        }
+        Stmt::Namespace {
+            body: Some(body), ..
+        } => {
+            for statement in *body {
+                collect_provider_route_files_from_stmt(
+                    statement,
+                    source,
+                    project,
+                    provider,
+                    provider_file,
+                    files,
+                );
+            }
+        }
+        Stmt::Class { members, .. }
+        | Stmt::Interface { members, .. }
+        | Stmt::Trait { members, .. }
+        | Stmt::Enum { members, .. } => {
+            for member in *members {
+                if let ClassMember::Method { body, .. } = member {
+                    for statement in *body {
+                        collect_provider_route_files_from_stmt(
+                            statement,
+                            source,
+                            project,
+                            provider,
+                            provider_file,
+                            files,
+                        );
+                    }
+                }
+            }
+        }
+        Stmt::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            for statement in *then_block {
+                collect_provider_route_files_from_stmt(
+                    statement,
+                    source,
+                    project,
+                    provider,
+                    provider_file,
+                    files,
+                );
+            }
+            if let Some(else_block) = else_block {
+                for statement in *else_block {
+                    collect_provider_route_files_from_stmt(
+                        statement,
+                        source,
+                        project,
+                        provider,
+                        provider_file,
+                        files,
+                    );
+                }
+            }
+        }
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::Foreach { body, .. }
+        | Stmt::Try { body, .. } => {
+            for statement in *body {
+                collect_provider_route_files_from_stmt(
+                    statement,
+                    source,
+                    project,
+                    provider,
+                    provider_file,
+                    files,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_provider_route_files_from_expr(
+    expr: ExprId<'_>,
+    source: &[u8],
+    project: &LaravelProject,
+    provider: &crate::types::ProviderEntry,
+    provider_file: &Path,
+    files: &mut Vec<RegisteredRouteFile>,
+) {
+    let Expr::MethodCall { method, args, .. } = expr else {
+        return;
+    };
+    let Some(method_name) = expr_name(method, source) else {
+        return;
+    };
+    if method_name != "loadRoutesFrom" {
+        return;
+    }
+
+    let Some(path_expr) = args.first().map(|arg| arg.value) else {
+        return;
+    };
+    let Some(route_file) = expr_to_path(path_expr, source, project, provider_file) else {
+        return;
+    };
+
+    let line_info = path_expr.span().line_info(source);
+    let line = line_info.map_or(provider.line, |info| info.line);
+    let column = line_info.map_or(provider.column, |info| info.column);
+
+    files.push(RegisteredRouteFile {
+        file: route_file,
+        registration: RouteRegistration {
+            kind: "provider-loadRoutesFrom".to_string(),
+            declared_in: provider
+                .source_file
+                .clone()
+                .unwrap_or_else(|| strip_root(&project.root, provider_file)),
+            line,
+            column,
+            provider_class: Some(provider.provider_class.clone()),
+        },
+    });
 }
 
 fn flatten_route_chain<'ast>(expr: ExprId<'ast>) -> Option<Vec<ChainOp<'ast>>> {
@@ -547,6 +870,7 @@ fn build_route_entry(
     context: &RouteContext,
     project_root: &Path,
     file: &Path,
+    registration: &RouteRegistration,
     line: usize,
     signature: RouteSignature,
     args: &[Arg<'_>],
@@ -570,6 +894,7 @@ fn build_route_entry(
         name: (!context.name_prefix.is_empty()).then(|| context.name_prefix.clone()),
         action,
         middleware: context.middleware.clone(),
+        registration: registration.clone(),
     }
 }
 
@@ -630,6 +955,71 @@ fn expr_to_string(expr: ExprId<'_>, source: &[u8]) -> Option<String> {
             let class_name = expr_name(class, source)?;
             let constant_name = expr_name(constant, source)?;
             Some(format!("{class_name}::{constant_name}"))
+        }
+        _ => None,
+    }
+}
+
+fn expr_to_path(
+    expr: ExprId<'_>,
+    source: &[u8],
+    project: &LaravelProject,
+    provider_file: &Path,
+) -> Option<PathBuf> {
+    let raw = expr_to_path_fragment(expr, source, project, provider_file)?;
+    let path = PathBuf::from(raw);
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        project.root.join(path)
+    };
+    Some(normalize_path(&absolute))
+}
+
+fn expr_to_path_fragment(
+    expr: ExprId<'_>,
+    source: &[u8],
+    project: &LaravelProject,
+    provider_file: &Path,
+) -> Option<String> {
+    match expr {
+        Expr::String { .. } => expr_to_string(expr, source),
+        Expr::MagicConst { kind, .. } => {
+            if *kind == MagicConstKind::Dir {
+                provider_file
+                    .parent()
+                    .map(|path| path.display().to_string())
+            } else {
+                None
+            }
+        }
+        Expr::Binary {
+            left, op, right, ..
+        } if *op == BinaryOp::Concat => {
+            let left = expr_to_path_fragment(left, source, project, provider_file)?;
+            let right = expr_to_path_fragment(right, source, project, provider_file)?;
+            Some(format!("{left}{right}"))
+        }
+        Expr::Call { func, args, .. } => {
+            let function_name = span_text(func.span(), source)
+                .trim()
+                .trim_start_matches('\\')
+                .to_string();
+            let arg = args.first().map(|arg| arg.value)?;
+            let inner = expr_to_path_fragment(arg, source, project, provider_file)?;
+            match function_name.as_str() {
+                "base_path" => Some(project.root.join(inner).display().to_string()),
+                "app_path" => Some(project.root.join("app").join(inner).display().to_string()),
+                "resource_path" => Some(
+                    project
+                        .root
+                        .join("resources")
+                        .join(inner)
+                        .display()
+                        .to_string(),
+                ),
+                _ => None,
+            }
         }
         _ => None,
     }
@@ -718,6 +1108,20 @@ fn parse_php_string_literal(value: &[u8]) -> String {
         }
     }
     text
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn route_line(expr: ExprId<'_>, source: &[u8], line_offset: usize) -> usize {
