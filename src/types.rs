@@ -11,6 +11,7 @@ pub enum OutputMode {
 pub struct RouteEntry {
     pub file: PathBuf,
     pub line: usize,
+    pub column: usize,
     pub methods: Vec<String>,
     pub uri: String,
     pub name: Option<String>,
@@ -30,6 +31,8 @@ pub struct RouteReport {
 pub struct ConfigReference {
     pub file: PathBuf,
     pub line: usize,
+    pub column: usize,
+    pub kind: String,
     pub key: String,
 }
 

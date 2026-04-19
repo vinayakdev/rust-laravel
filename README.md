@@ -8,7 +8,7 @@ Right now the project gives you:
 
 - `route:list`: parse Laravel route files and print discovered routes
 - `route:list --json`: emit the same route data as machine-readable JSON
-- `config:list`: scan PHP files for `config(...)` references
+- `config:list`: inspect config definitions, `config(...)` usages, `env(...)` usages, and env-file declarations
 - broken-file recovery for route parsing, so useful output still appears even when some PHP is malformed
 
 The long-term direction is:
@@ -44,6 +44,12 @@ laravel-example/
     config/
     routes/
 ```
+
+Important:
+
+- By default, this tool should parse Laravel code under `laravel-example/`.
+- The Rust workspace itself is not the target application code.
+- Use `--project <name>` or `--project <path>` when you want to be explicit.
 
 ## Commands
 
@@ -86,9 +92,11 @@ When you pass `--project`, resolution works like this:
 
 When you do not pass `--project`, resolution works like this:
 
-1. If the current directory looks like a Laravel app, use it.
-2. Otherwise, if `./laravel-example` itself looks like a Laravel app, use it.
+1. If `./laravel-example` itself looks like a Laravel app, use it.
+2. Otherwise, if the current directory looks like a Laravel app, use it.
 3. Otherwise auto-pick a single Laravel app under `./laravel-example/`.
+
+This means local debugging should normally target Laravel code from `laravel-example/`.
 
 ## Output Modes
 
@@ -98,8 +106,8 @@ Human-friendly table output grouped by file:
 
 ```text
 routes/web.php
-  LINE  METHOD    URI                 NAME            ACTION                  MIDDLEWARE
-    16  GET       /products/{slug}    products.show   ProductController@show  -
+  LINE:COL  METHOD    URI                 NAME            ACTION                  MIDDLEWARE
+  16:12     GET       /products/{slug}    products.show   ProductController@show  -
 ```
 
 ### JSON output
@@ -115,6 +123,7 @@ Structured output for extension/LSP work:
     {
       "file": "routes/web.php",
       "line": 16,
+      "column": 12,
       "methods": ["GET"],
       "uri": "/products/{slug}",
       "name": "products.show",
@@ -162,7 +171,14 @@ Laravel route analyzer. This is currently the most advanced module:
 
 ### `src/analyzers/configs.rs`
 
-Starter analyzer for config references. This is intentionally simple and can later move from string scanning to parser-backed extraction.
+Config analyzer. It currently reports:
+
+- config definitions from `config/*.php`
+- `config(...)` usages
+- `env(...)` usages
+- `.env` and `.env.example` declarations
+
+It is still scanner-based and can later move to parser-backed extraction.
 
 ## How To Extend This
 

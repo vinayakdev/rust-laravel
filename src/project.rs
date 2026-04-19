@@ -30,10 +30,10 @@ pub fn resolve(project_arg: Option<&str>) -> Result<LaravelProject, String> {
             }
         }
         None => {
-            if looks_like_laravel_project(&cwd) {
-                cwd
-            } else if looks_like_laravel_project(&workspace_root) {
+            if looks_like_laravel_project(&workspace_root) {
                 workspace_root
+            } else if looks_like_laravel_project(&cwd) {
+                cwd
             } else {
                 auto_pick_project(&workspace_root)?
             }
@@ -77,5 +77,5 @@ fn auto_pick_project(workspace_root: &Path) -> Result<PathBuf, String> {
 }
 
 fn looks_like_laravel_project(path: &Path) -> bool {
-    path.is_dir() && path.join("routes").is_dir()
+    path.is_dir() && path.join("routes").is_dir() && path.join("config").is_dir()
 }

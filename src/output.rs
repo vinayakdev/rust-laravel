@@ -30,6 +30,12 @@ fn print_route_table(routes: &[RouteEntry]) {
         return;
     }
 
+    let location_width = routes
+        .iter()
+        .map(|route| format!("{}:{}", route.line, route.column).len())
+        .max()
+        .unwrap_or(8)
+        .max("LINE:COL".len());
     let method_width = routes
         .iter()
         .map(|route| route.methods.join("|").len())
@@ -64,21 +70,23 @@ fn print_route_table(routes: &[RouteEntry]) {
             }
             println!("{}", file.display());
             println!(
-                "  {line:>4}  {method:<method_width$}  {uri:<uri_width$}  {name:<name_width$}  {action:<action_width$}  {middleware}",
-                line = "LINE",
+                "  {location:<location_width$}  {method:<method_width$}  {uri:<uri_width$}  {name:<name_width$}  {action:<action_width$}  {middleware}",
+                location = "LINE:COL",
                 method = "METHOD",
                 uri = "URI",
                 name = "NAME",
                 action = "ACTION",
                 middleware = "MIDDLEWARE",
+                location_width = location_width,
                 method_width = method_width,
                 uri_width = uri_width,
                 name_width = name_width,
                 action_width = action_width,
             );
             println!(
-                "  {line:>4}  {method:-<method_width$}  {uri:-<uri_width$}  {name:-<name_width$}  {action:-<action_width$}  ----------",
-                line = "",
+                "  {location:-<location_width$}  {method:-<method_width$}  {uri:-<uri_width$}  {name:-<name_width$}  {action:-<action_width$}  ----------",
+                location = "",
+                location_width = location_width,
                 method = "",
                 uri = "",
                 name = "",
@@ -101,13 +109,14 @@ fn print_route_table(routes: &[RouteEntry]) {
         };
 
         println!(
-            "  {line:>4}  {method:<method_width$}  {uri:<uri_width$}  {name:<name_width$}  {action:<action_width$}  {middleware}",
-            line = route.line,
+            "  {location:<location_width$}  {method:<method_width$}  {uri:<uri_width$}  {name:<name_width$}  {action:<action_width$}  {middleware}",
+            location = format!("{}:{}", route.line, route.column),
             method = methods,
             uri = route.uri,
             name = name,
             action = action,
             middleware = middleware,
+            location_width = location_width,
             method_width = method_width,
             uri_width = uri_width,
             name_width = name_width,
@@ -118,10 +127,24 @@ fn print_route_table(routes: &[RouteEntry]) {
 
 fn print_config_table(report: &ConfigReport) {
     if report.references.is_empty() {
-        println!("No config(...) references found.");
+        println!("No config items found.");
         return;
     }
 
+    let location_width = report
+        .references
+        .iter()
+        .map(|reference| format!("{}:{}", reference.line, reference.column).len())
+        .max()
+        .unwrap_or(8)
+        .max("LINE:COL".len());
+    let kind_width = report
+        .references
+        .iter()
+        .map(|reference| reference.kind.len())
+        .max()
+        .unwrap_or(4)
+        .max("KIND".len());
     let key_width = report
         .references
         .iter()
@@ -139,22 +162,33 @@ fn print_config_table(report: &ConfigReport) {
             }
             println!("{}", file.display());
             println!(
-                "  LINE  {key:<key_width$}",
+                "  {location:<location_width$}  {kind:<kind_width$}  {key:<key_width$}",
+                location = "LINE:COL",
+                kind = "KIND",
                 key = "KEY",
+                location_width = location_width,
+                kind_width = kind_width,
                 key_width = key_width
             );
             println!(
-                "  ----  {key:-<key_width$}",
+                "  {location:-<location_width$}  {kind:-<kind_width$}  {key:-<key_width$}",
+                location = "",
+                kind = "",
                 key = "",
+                location_width = location_width,
+                kind_width = kind_width,
                 key_width = key_width
             );
             current_file = Some(file);
         }
 
         println!(
-            "  {line:>4}  {key:<key_width$}",
-            line = reference.line,
+            "  {location:<location_width$}  {kind:<kind_width$}  {key:<key_width$}",
+            location = format!("{}:{}", reference.line, reference.column),
+            kind = reference.kind,
             key = reference.key,
+            location_width = location_width,
+            kind_width = kind_width,
             key_width = key_width,
         );
     }

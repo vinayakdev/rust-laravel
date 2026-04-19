@@ -552,6 +552,7 @@ fn build_route_entry(
     args: &[Arg<'_>],
     source: &[u8],
 ) -> RouteEntry {
+    let (line, column) = route_position(source, args, line);
     let raw_uri = args
         .get(signature.uri_arg_index)
         .and_then(|arg| expr_to_string(arg.value, source))
@@ -563,6 +564,7 @@ fn build_route_entry(
     RouteEntry {
         file: strip_root(project_root, file),
         line,
+        column,
         methods: signature.methods,
         uri: join_uri(&context.uri_prefix, &raw_uri),
         name: (!context.name_prefix.is_empty()).then(|| context.name_prefix.clone()),
@@ -720,6 +722,16 @@ fn parse_php_string_literal(value: &[u8]) -> String {
 
 fn route_line(expr: ExprId<'_>, source: &[u8], line_offset: usize) -> usize {
     line_offset + chunk_relative_line(expr, source) - 1
+}
+
+fn route_position(source: &[u8], args: &[Arg<'_>], fallback_line: usize) -> (usize, usize) {
+    if let Some(arg) = args.first()
+        && let Some(info) = arg.value.span().line_info(source)
+    {
+        return (fallback_line, info.column);
+    }
+
+    (fallback_line, 1)
 }
 
 fn chunk_relative_line(expr: ExprId<'_>, source: &[u8]) -> usize {
