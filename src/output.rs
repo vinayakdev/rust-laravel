@@ -1,5 +1,5 @@
 use crate::types::{
-    ConfigItem, ConfigReport, OutputMode, ProviderEntry, ProviderReport, RouteEntry,
+    ConfigItem, ConfigReport, ConfigSource, OutputMode, ProviderEntry, ProviderReport, RouteEntry,
     RouteRegistration, RouteReport,
 };
 use comfy_table::{
@@ -38,6 +38,18 @@ pub fn print_configs(report: &ConfigReport, mode: OutputMode) -> Result<(), Stri
             println!("{json}");
         }
         OutputMode::Text => print_config_table(report),
+    }
+
+    Ok(())
+}
+
+pub fn print_config_sources(report: &ConfigReport, mode: OutputMode) -> Result<(), String> {
+    match mode {
+        OutputMode::Json => {
+            let json = serde_json::to_string_pretty(report).map_err(|error| error.to_string())?;
+            println!("{json}");
+        }
+        OutputMode::Text => print_config_source_table(report),
     }
 
     Ok(())
@@ -172,6 +184,7 @@ fn print_config_table(report: &ConfigReport) {
                 header("Env Key"),
                 header("Default"),
                 header("Env Value"),
+                header("Registered Via"),
             ]);
             current_file = Some(file);
         }
@@ -213,6 +226,52 @@ fn print_provider_table(report: &ProviderReport) {
     println!("Legend: green = source resolved, red = source missing, grey = not package-backed");
 }
 
+fn print_config_source_table(report: &ConfigReport) {
+    if report.items.is_empty() {
+        println!("No config items found.");
+        return;
+    }
+
+    let widths = config_source_widths();
+    let mut table = new_table();
+    table.set_header(vec![
+        header("Config"),
+        header("Env Key"),
+        header("Provider"),
+        header("Declared At"),
+        header("Kind"),
+    ]);
+
+    for item in &report.items {
+        table.add_row(Row::from(vec![
+            wrap_cell(
+                &format!(
+                    "{}:{}:{} ({})",
+                    item.file.display(),
+                    item.line,
+                    item.column,
+                    item.key
+                ),
+                widths.config,
+            ),
+            env_key_cell(item, widths.env_key),
+            config_provider_cell(&item.source, widths.provider),
+            wrap_cell(
+                &format!(
+                    "{}:{}:{}",
+                    item.source.declared_in.display(),
+                    item.source.line,
+                    item.source.column
+                ),
+                widths.declared_at,
+            ),
+            config_source_kind_cell(&item.source, widths.kind),
+        ]));
+    }
+
+    println!("{table}");
+}
+
 fn config_row(item: &ConfigItem, widths: &ConfigWidths) -> Row {
     Row::from(vec![
         location_cell(item.line, item.column),
@@ -220,6 +279,7 @@ fn config_row(item: &ConfigItem, widths: &ConfigWidths) -> Row {
         env_key_cell(item, widths.env_key),
         default_cell(item, widths.default),
         env_value_cell(item, widths.env_value),
+        wrap_cell(&config_source_summary(&item.source), widths.registration),
     ])
 }
 
@@ -341,6 +401,7 @@ struct ConfigWidths {
     env_key: usize,
     default: usize,
     env_value: usize,
+    registration: usize,
 }
 
 struct ProviderWidths {
@@ -355,6 +416,14 @@ struct ProviderWidths {
 struct RouteSourceWidths {
     route: usize,
     uri: usize,
+    provider: usize,
+    declared_at: usize,
+    kind: usize,
+}
+
+struct ConfigSourceWidths {
+    config: usize,
+    env_key: usize,
     provider: usize,
     declared_at: usize,
     kind: usize,
@@ -426,6 +495,7 @@ fn config_widths() -> ConfigWidths {
             env_key: 16,
             default: 14,
             env_value: 16,
+            registration: 18,
         }
     } else if terminal < 150 {
         ConfigWidths {
@@ -433,6 +503,7 @@ fn config_widths() -> ConfigWidths {
             env_key: 20,
             default: 18,
             env_value: 20,
+            registration: 24,
         }
     } else {
         ConfigWidths {
@@ -440,6 +511,36 @@ fn config_widths() -> ConfigWidths {
             env_key: 26,
             default: 26,
             env_value: 26,
+            registration: 32,
+        }
+    }
+}
+
+fn config_source_widths() -> ConfigSourceWidths {
+    let terminal = terminal_width();
+    if terminal < 110 {
+        ConfigSourceWidths {
+            config: 22,
+            env_key: 16,
+            provider: 18,
+            declared_at: 18,
+            kind: 14,
+        }
+    } else if terminal < 150 {
+        ConfigSourceWidths {
+            config: 34,
+            env_key: 20,
+            provider: 24,
+            declared_at: 24,
+            kind: 18,
+        }
+    } else {
+        ConfigSourceWidths {
+            config: 46,
+            env_key: 26,
+            provider: 30,
+            declared_at: 34,
+            kind: 22,
         }
     }
 }
@@ -546,6 +647,39 @@ fn provider_registration_cell(registration: &RouteRegistration, width: usize) ->
 fn registration_kind_cell(registration: &RouteRegistration, width: usize) -> Cell {
     let mut cell = wrap_cell(&registration.kind, width);
     if registration.provider_class.is_some() {
+        cell = cell.fg(Color::Green);
+    } else {
+        cell = cell.fg(Color::DarkGrey);
+    }
+    cell
+}
+
+fn config_source_summary(source: &ConfigSource) -> String {
+    match &source.provider_class {
+        Some(provider) => format!(
+            "{provider} @ {}:{}:{}",
+            source.declared_in.display(),
+            source.line,
+            source.column
+        ),
+        None => source.kind.clone(),
+    }
+}
+
+fn config_provider_cell(source: &ConfigSource, width: usize) -> Cell {
+    let text = source.provider_class.as_deref().unwrap_or("-");
+    let mut cell = wrap_cell(text, width);
+    if source.provider_class.is_some() {
+        cell = cell.fg(Color::Cyan);
+    } else {
+        cell = cell.fg(Color::DarkGrey);
+    }
+    cell
+}
+
+fn config_source_kind_cell(source: &ConfigSource, width: usize) -> Cell {
+    let mut cell = wrap_cell(&source.kind, width);
+    if source.provider_class.is_some() {
         cell = cell.fg(Color::Green);
     } else {
         cell = cell.fg(Color::DarkGrey);

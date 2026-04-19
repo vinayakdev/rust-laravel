@@ -5,6 +5,7 @@ pub enum Command {
     RouteList,
     RouteSources,
     ConfigList,
+    ConfigSources,
     ProviderList,
 }
 
@@ -28,6 +29,7 @@ where
             "route:list" => command = Command::RouteList,
             "route:sources" => command = Command::RouteSources,
             "config:list" => command = Command::ConfigList,
+            "config:sources" => command = Command::ConfigSources,
             "provider:list" => command = Command::ProviderList,
             "--json" => json = OutputMode::Json,
             "--project" => {
@@ -54,6 +56,7 @@ fn help_text() -> String {
         "  rust-php route:list [--project <path-or-name>] [--json]",
         "  rust-php route:sources [--project <path-or-name>] [--json]",
         "  rust-php config:list [--project <path-or-name>] [--json]",
+        "  rust-php config:sources [--project <path-or-name>] [--json]",
         "  rust-php provider:list [--project <path-or-name>] [--json]",
         "",
         "Project resolution:",
@@ -65,6 +68,7 @@ fn help_text() -> String {
         "Examples:",
         "  cargo run -- route:list",
         "  cargo run -- route:sources --project sandbox-app",
+        "  cargo run -- config:sources --project sandbox-app",
         "  cargo run -- provider:list --project sandbox-app",
         "  cargo run -- route:list --project laravel-example/demo-app",
         "  cargo run -- route:list --project demo-app --json",

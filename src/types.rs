@@ -54,6 +54,16 @@ pub struct ConfigItem {
     pub env_key: Option<String>,
     pub default_value: Option<String>,
     pub env_value: Option<String>,
+    pub source: ConfigSource,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigSource {
+    pub kind: String,
+    pub declared_in: PathBuf,
+    pub line: usize,
+    pub column: usize,
+    pub provider_class: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

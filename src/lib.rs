@@ -23,6 +23,10 @@ pub fn run() -> Result<(), String> {
             let report = analyzers::configs::analyze(&project)?;
             output::print_configs(&report, options.json)?;
         }
+        Command::ConfigSources => {
+            let report = analyzers::configs::analyze(&project)?;
+            output::print_config_sources(&report, options.json)?;
+        }
         Command::ProviderList => {
             let report = analyzers::providers::analyze(&project)?;
             output::print_providers(&report, options.json)?;

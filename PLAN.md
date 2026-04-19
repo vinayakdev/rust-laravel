@@ -25,6 +25,8 @@ Implemented:
 - `provider:list --json`
 - `route:sources`
 - route registration-source attribution
+- `config:sources`
+- config registration-source attribution
 - terminal-friendly text tables
 - basic malformed-route recovery
 - basic provider graph
@@ -32,8 +34,6 @@ Implemented:
 
 Gaps:
 
-- no `mergeConfigFrom(...)` extraction yet
-- no config source attribution yet
 - no tests yet
 - no LSP transport yet
 
@@ -168,7 +168,7 @@ Planned outputs:
 - `config:sources`
 - effective config model in JSON
 
-Status: `pending`
+Status: `completed`
 
 ## Milestone 5: Middleware And Route Enrichment
 
