@@ -9,6 +9,7 @@ Right now the project gives you:
 - `route:list`: parse Laravel route files and print discovered routes
 - `route:list --json`: emit the same route data as machine-readable JSON
 - `config:list`: inspect config definitions, `config(...)` usages, `env(...)` usages, and env-file declarations
+  Current text output is normalized into `key`, `env_key`, `default_value`, and resolved `env_value`.
 - broken-file recovery for route parsing, so useful output still appears even when some PHP is malformed
 
 The long-term direction is:
@@ -16,6 +17,14 @@ The long-term direction is:
 - reusable analyzers in Rust
 - CLI commands for debugging those analyzers on real Laravel apps
 - LSP-friendly data structures and output
+
+## Quick Reference
+
+| File | Purpose |
+| --- | --- |
+| [README.md](/Users/hotdogb/Work/rust-php/README.md) | Project overview, architecture, commands, and roadmap |
+| [example.md](/Users/hotdogb/Work/rust-php/example.md) | Concrete input/output examples for `route:list` and `config:list` |
+| [laravel-example/README.md](/Users/hotdogb/Work/rust-php/laravel-example/README.md) | Where to place Laravel projects for analysis |
 
 ## Workspace Layout
 
@@ -109,6 +118,15 @@ routes/web.php
   LINE:COL  METHOD    URI                 NAME            ACTION                  MIDDLEWARE
   16:12     GET       /products/{slug}    products.show   ProductController@show  -
 ```
+
+Terminal notes:
+
+- boxed Unicode tables are used for better readability
+- long values are truncated with `…` on narrower terminals
+- config output uses semantic colors:
+  - green: env value is present
+  - yellow: default value is being used
+  - red: env key is referenced but missing from `.env`
 
 ### JSON output
 

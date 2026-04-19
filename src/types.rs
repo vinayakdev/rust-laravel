@@ -28,18 +28,20 @@ pub struct RouteReport {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ConfigReference {
-    pub file: PathBuf,
-    pub line: usize,
-    pub column: usize,
-    pub kind: String,
-    pub key: String,
-}
-
-#[derive(Debug, Serialize)]
 pub struct ConfigReport {
     pub project_name: String,
     pub project_root: PathBuf,
-    pub reference_count: usize,
-    pub references: Vec<ConfigReference>,
+    pub item_count: usize,
+    pub items: Vec<ConfigItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConfigItem {
+    pub file: PathBuf,
+    pub line: usize,
+    pub column: usize,
+    pub key: String,
+    pub env_key: Option<String>,
+    pub default_value: Option<String>,
+    pub env_value: Option<String>,
 }

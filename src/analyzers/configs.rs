@@ -1,55 +1,12 @@
 use crate::project::LaravelProject;
-use crate::types::{ConfigReference, ConfigReport};
+use crate::types::{ConfigItem, ConfigReport};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn analyze(project: &LaravelProject) -> Result<ConfigReport, String> {
-    let mut references = Vec::new();
-
-    collect_config_definitions(project, &mut references)?;
-    collect_env_files(project, &mut references)?;
-
-    let mut php_files = Vec::new();
-    collect_php_files(&project.root, &mut php_files);
-    for file in php_files {
-        let source = fs::read(&file)
-            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
-        references.extend(find_function_references(
-            &project.root,
-            &file,
-            &source,
-            "config",
-            "usage",
-        ));
-        references.extend(find_function_references(
-            &project.root,
-            &file,
-            &source,
-            "env",
-            "env-usage",
-        ));
-    }
-
-    references.sort_by(|left, right| {
-        left.file
-            .cmp(&right.file)
-            .then(left.line.cmp(&right.line))
-            .then(left.kind.cmp(&right.kind))
-            .then(left.key.cmp(&right.key))
-    });
-
-    Ok(ConfigReport {
-        project_name: project.name.clone(),
-        project_root: project.root.clone(),
-        reference_count: references.len(),
-        references,
-    })
-}
-
-fn collect_config_definitions(
-    project: &LaravelProject,
-    references: &mut Vec<ConfigReference>,
-) -> Result<(), String> {
+    let env = load_env_map(project)?;
+    let mut items = Vec::new();
     let config_dir = project.root.join("config");
     let entries = fs::read_dir(&config_dir)
         .map_err(|error| format!("failed to read {}: {error}", config_dir.display()))?;
@@ -60,7 +17,7 @@ fn collect_config_definitions(
             continue;
         }
 
-        let source = fs::read(&path)
+        let source = fs::read_to_string(&path)
             .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
         let namespace = path
             .file_stem()
@@ -68,99 +25,181 @@ fn collect_config_definitions(
             .unwrap_or("config")
             .to_string();
 
-        references.extend(find_config_definitions(
+        items.extend(find_config_items(
             &project.root,
             &path,
             &source,
             &namespace,
+            &env,
         ));
     }
 
-    Ok(())
+    items.sort_by(|left, right| {
+        left.file
+            .cmp(&right.file)
+            .then(left.line.cmp(&right.line))
+            .then(left.column.cmp(&right.column))
+            .then(left.key.cmp(&right.key))
+    });
+
+    Ok(ConfigReport {
+        project_name: project.name.clone(),
+        project_root: project.root.clone(),
+        item_count: items.len(),
+        items,
+    })
 }
 
-fn collect_env_files(
-    project: &LaravelProject,
-    references: &mut Vec<ConfigReference>,
-) -> Result<(), String> {
+fn load_env_map(project: &LaravelProject) -> Result<BTreeMap<String, String>, String> {
     for name in [".env", ".env.example"] {
         let path = project.root.join(name);
-        if !path.is_file() {
-            continue;
-        }
-
-        let text = fs::read_to_string(&path)
-            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-
-        for (index, line) in text.lines().enumerate() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            if let Some((key, _)) = trimmed.split_once('=') {
-                let column = line.find(key).map_or(1, |offset| offset + 1);
-                references.push(ConfigReference {
-                    file: strip_root(&project.root, &path),
-                    line: index + 1,
-                    column,
-                    kind: "env-file".to_string(),
-                    key: key.trim().to_string(),
-                });
-            }
+        if path.is_file() {
+            let text = fs::read_to_string(&path)
+                .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+            let raw = parse_env_pairs(&text);
+            return Ok(resolve_env_pairs(&raw));
         }
     }
 
-    Ok(())
+    Ok(BTreeMap::new())
 }
 
-fn find_config_definitions(
+fn parse_env_pairs(text: &str) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            env.insert(
+                key.trim().to_string(),
+                strip_quotes(value.trim()).to_string(),
+            );
+        }
+    }
+
+    env
+}
+
+fn resolve_env_pairs(raw: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut resolved = BTreeMap::new();
+    for key in raw.keys() {
+        let value = resolve_env_value(key, raw, &mut Vec::new());
+        resolved.insert(key.clone(), value);
+    }
+    resolved
+}
+
+fn resolve_env_value(key: &str, raw: &BTreeMap<String, String>, stack: &mut Vec<String>) -> String {
+    if stack.iter().any(|item| item == key) {
+        return raw.get(key).cloned().unwrap_or_default();
+    }
+
+    let Some(value) = raw.get(key) else {
+        return String::new();
+    };
+
+    stack.push(key.to_string());
+    let expanded = expand_env_placeholders(value, raw, stack);
+    stack.pop();
+    expanded
+}
+
+fn expand_env_placeholders(
+    value: &str,
+    raw: &BTreeMap<String, String>,
+    stack: &mut Vec<String>,
+) -> String {
+    let mut output = String::new();
+    let chars: Vec<char> = value.chars().collect();
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index] == '$' && chars.get(index + 1) == Some(&'{') {
+            let mut end = index + 2;
+            while end < chars.len() && chars[end] != '}' {
+                end += 1;
+            }
+            if end < chars.len() {
+                let key: String = chars[index + 2..end].iter().collect();
+                output.push_str(&resolve_env_value(&key, raw, stack));
+                index = end + 1;
+                continue;
+            }
+        }
+
+        output.push(chars[index]);
+        index += 1;
+    }
+
+    output
+}
+
+fn find_config_items(
     root: &Path,
     file: &Path,
-    source: &[u8],
+    source: &str,
     namespace: &str,
-) -> Vec<ConfigReference> {
-    let text = String::from_utf8_lossy(source);
+    env: &BTreeMap<String, String>,
+) -> Vec<ConfigItem> {
     let mut stack: Vec<String> = Vec::new();
-    let mut references = Vec::new();
+    let mut items = Vec::new();
 
-    for (index, raw_line) in text.lines().enumerate() {
+    for (index, raw_line) in source.lines().enumerate() {
         let trimmed = raw_line.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
             continue;
         }
 
         let close_count = trimmed.chars().filter(|ch| *ch == ']').count();
-        if let Some((key, opens_array, column)) = parse_config_assignment(raw_line) {
+        if let Some(parsed) = parse_config_assignment(raw_line) {
             let full_key = if stack.is_empty() {
-                format!("{namespace}.{key}")
+                format!("{namespace}.{}", parsed.key)
             } else {
-                format!("{namespace}.{}.{}", stack.join("."), key)
+                format!("{namespace}.{}.{}", stack.join("."), parsed.key)
             };
 
-            references.push(ConfigReference {
+            let env_value = parsed
+                .env_key
+                .as_ref()
+                .and_then(|env_key| env.get(env_key).cloned());
+
+            items.push(ConfigItem {
                 file: strip_root(root, file),
                 line: index + 1,
-                column,
-                kind: "definition".to_string(),
+                column: parsed.column,
                 key: full_key,
+                env_key: parsed.env_key.clone(),
+                default_value: parsed.default_value.clone(),
+                env_value,
             });
 
-            if opens_array {
-                stack.push(key);
+            if parsed.opens_array {
+                stack.push(parsed.key);
             }
         } else {
             pop_many(&mut stack, close_count);
         }
     }
 
-    references
+    items
 }
 
-fn parse_config_assignment(line: &str) -> Option<(String, bool, usize)> {
+#[derive(Clone)]
+struct ParsedConfigLine {
+    key: String,
+    column: usize,
+    opens_array: bool,
+    env_key: Option<String>,
+    default_value: Option<String>,
+}
+
+fn parse_config_assignment(line: &str) -> Option<ParsedConfigLine> {
     let trimmed = line.trim_start();
     let leading = line.len() - trimmed.len();
-    let mut chars = trimmed.chars();
-    let quote = chars.next()?;
+    let quote = trimmed.chars().next()?;
     if quote != '\'' && quote != '"' {
         return None;
     }
@@ -191,54 +230,129 @@ fn parse_config_assignment(line: &str) -> Option<(String, bool, usize)> {
         return None;
     }
 
-    let value = rest[2..].trim_start();
-    Some((key, value.starts_with('['), leading + 1))
+    let value = rest[2..].trim_start().trim_end_matches(',');
+    let opens_array = value.starts_with('[');
+    let (env_key, default_value) = parse_env_call(value)
+        .map(|(env_key, default_value)| (Some(env_key), default_value))
+        .unwrap_or_else(|| (None, parse_literal_value(value)));
+
+    Some(ParsedConfigLine {
+        key,
+        column: leading + 1,
+        opens_array,
+        env_key,
+        default_value,
+    })
 }
 
-fn find_function_references(
-    root: &Path,
-    file: &Path,
-    source: &[u8],
-    function_name: &str,
-    kind: &str,
-) -> Vec<ConfigReference> {
-    let text = String::from_utf8_lossy(source);
-    let needle = format!("{function_name}(");
-    let mut references = Vec::new();
-    let mut search_start = 0;
+fn parse_env_call(value: &str) -> Option<(String, Option<String>)> {
+    let env_index = value.find("env(")?;
+    let args = extract_call_args(&value[env_index + 4..])?;
+    let env_key = parse_quoted_string(args.first()?.trim())?;
+    let default_value = args
+        .get(1)
+        .and_then(|part| parse_literal_value(part.trim()));
+    Some((env_key, default_value))
+}
 
-    while let Some(relative_index) = text[search_start..].find(&needle) {
-        let index = search_start + relative_index;
-        let line = 1 + text[..index].bytes().filter(|byte| *byte == b'\n').count();
-        let line_start = text[..index].rfind('\n').map_or(0, |offset| offset + 1);
-        let column = index - line_start + 1;
-        let key = parse_first_string_arg(&text[index + needle.len()..])
-            .unwrap_or_else(|| "<dynamic>".to_string());
-        references.push(ConfigReference {
-            file: strip_root(root, file),
-            line,
-            column,
-            kind: kind.to_string(),
-            key,
-        });
-        search_start = index + needle.len();
+fn extract_call_args(text: &str) -> Option<Vec<String>> {
+    let mut depth = 1usize;
+    let mut current = String::new();
+    let mut args = Vec::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for ch in text.chars() {
+        if in_single {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+
+        if in_double {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_single = true;
+                current.push(ch);
+            }
+            '"' => {
+                in_double = true;
+                current.push(ch);
+            }
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    args.push(current.trim().to_string());
+                    return Some(args);
+                }
+                current.push(ch);
+            }
+            ',' if depth == 1 => {
+                args.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
     }
 
-    references
+    None
 }
 
-fn parse_first_string_arg(text: &str) -> Option<String> {
-    let mut chars = text.chars();
+fn parse_literal_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some(string) = parse_quoted_string(value) {
+        return Some(string);
+    }
+
+    if matches!(value, "true" | "false" | "null") || value.parse::<i64>().is_ok() {
+        return Some(value.to_string());
+    }
+
+    if value.starts_with('[') {
+        return Some("[...]".to_string());
+    }
+
+    None
+}
+
+fn parse_quoted_string(value: &str) -> Option<String> {
+    let mut chars = value.chars();
     let quote = chars.next()?;
     if quote != '\'' && quote != '"' {
         return None;
     }
 
-    let mut value = String::new();
+    let mut output = String::new();
     let mut escaped = false;
-    for ch in text[1..].chars() {
+    for ch in value[1..].chars() {
         if escaped {
-            value.push(ch);
+            output.push(ch);
             escaped = false;
             continue;
         }
@@ -247,39 +361,30 @@ fn parse_first_string_arg(text: &str) -> Option<String> {
             continue;
         }
         if ch == quote {
-            return Some(value);
+            return Some(output);
         }
-        value.push(ch);
+        output.push(ch);
     }
 
     None
+}
+
+fn strip_quotes(value: &str) -> &str {
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        if (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
+            || (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
+        {
+            return &value[1..value.len() - 1];
+        }
+    }
+    value
 }
 
 fn pop_many(stack: &mut Vec<String>, count: usize) {
     for _ in 0..count {
         if stack.pop().is_none() {
             break;
-        }
-    }
-}
-
-fn collect_php_files(dir: &Path, files: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let skip = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| {
-                        matches!(name, "vendor" | "node_modules" | "target" | ".git")
-                    });
-                if !skip {
-                    collect_php_files(&path, files);
-                }
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("php") {
-                files.push(path);
-            }
         }
     }
 }
