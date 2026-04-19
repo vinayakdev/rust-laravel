@@ -1,4 +1,6 @@
-use crate::types::{ConfigItem, ConfigReport, OutputMode, RouteEntry, RouteReport};
+use crate::types::{
+    ConfigItem, ConfigReport, OutputMode, ProviderEntry, ProviderReport, RouteEntry, RouteReport,
+};
 use comfy_table::{
     Cell, CellAlignment, Color, ColumnConstraint, ContentArrangement, Row, Table,
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL_CONDENSED,
@@ -23,6 +25,18 @@ pub fn print_configs(report: &ConfigReport, mode: OutputMode) -> Result<(), Stri
             println!("{json}");
         }
         OutputMode::Text => print_config_table(report),
+    }
+
+    Ok(())
+}
+
+pub fn print_providers(report: &ProviderReport, mode: OutputMode) -> Result<(), String> {
+    match mode {
+        OutputMode::Json => {
+            let json = serde_json::to_string_pretty(report).map_err(|error| error.to_string())?;
+            println!("{json}");
+        }
+        OutputMode::Text => print_provider_table(report),
     }
 
     Ok(())
@@ -111,6 +125,34 @@ fn print_config_table(report: &ConfigReport) {
     println!("{table}");
 }
 
+fn print_provider_table(report: &ProviderReport) {
+    if report.providers.is_empty() {
+        println!("No providers found.");
+        return;
+    }
+
+    let widths = provider_widths();
+    let mut table = new_table();
+    table.set_header(vec![
+        header("Line:Col"),
+        header("Declared In"),
+        header("Provider"),
+        header("Kind"),
+        header("Package"),
+        header("Source"),
+        header("Status"),
+    ]);
+
+    for provider in &report.providers {
+        table.add_row(provider_row(provider, &widths));
+    }
+
+    println!("Project: {}", report.project_name);
+    println!("Declared providers: {}", report.provider_count);
+    println!("{table}");
+    println!("Legend: green = source resolved, red = source missing, grey = not package-backed");
+}
+
 fn config_row(item: &ConfigItem, widths: &ConfigWidths) -> Row {
     Row::from(vec![
         location_cell(item.line, item.column),
@@ -118,6 +160,21 @@ fn config_row(item: &ConfigItem, widths: &ConfigWidths) -> Row {
         env_key_cell(item, widths.env_key),
         default_cell(item, widths.default),
         env_value_cell(item, widths.env_value),
+    ])
+}
+
+fn provider_row(provider: &ProviderEntry, widths: &ProviderWidths) -> Row {
+    Row::from(vec![
+        location_cell(provider.line, provider.column),
+        wrap_cell(
+            &provider.declared_in.display().to_string(),
+            widths.declared_in,
+        ),
+        wrap_cell(&provider.provider_class, widths.provider),
+        wrap_cell(&provider.registration_kind, widths.kind),
+        package_cell(provider, widths.package),
+        source_cell(provider, widths.source),
+        status_cell(provider, widths.status),
     ])
 }
 
@@ -225,6 +282,15 @@ struct ConfigWidths {
     env_value: usize,
 }
 
+struct ProviderWidths {
+    declared_in: usize,
+    provider: usize,
+    kind: usize,
+    package: usize,
+    source: usize,
+    status: usize,
+}
+
 fn route_widths() -> RouteWidths {
     let terminal = terminal_width();
     if terminal < 110 {
@@ -277,10 +343,78 @@ fn config_widths() -> ConfigWidths {
     }
 }
 
+fn provider_widths() -> ProviderWidths {
+    let terminal = terminal_width();
+    if terminal < 110 {
+        ProviderWidths {
+            declared_in: 18,
+            provider: 20,
+            kind: 12,
+            package: 16,
+            source: 18,
+            status: 14,
+        }
+    } else if terminal < 150 {
+        ProviderWidths {
+            declared_in: 24,
+            provider: 28,
+            kind: 18,
+            package: 22,
+            source: 28,
+            status: 14,
+        }
+    } else {
+        ProviderWidths {
+            declared_in: 32,
+            provider: 38,
+            kind: 22,
+            package: 28,
+            source: 40,
+            status: 14,
+        }
+    }
+}
+
 fn terminal_width() -> usize {
     std::env::var("COLUMNS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 40)
         .unwrap_or(160)
+}
+
+fn package_cell(provider: &ProviderEntry, width: usize) -> Cell {
+    let text = provider.package_name.as_deref().unwrap_or("-");
+    let mut cell = wrap_cell(text, width);
+    if provider.package_name.is_some() {
+        cell = cell.fg(Color::Cyan);
+    } else {
+        cell = cell.fg(Color::DarkGrey);
+    }
+    cell
+}
+
+fn source_cell(provider: &ProviderEntry, width: usize) -> Cell {
+    let text = provider
+        .source_file
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let mut cell = wrap_cell(&text, width);
+    if provider.source_available {
+        cell = cell.fg(Color::Green);
+    } else {
+        cell = cell.fg(Color::Red);
+    }
+    cell
+}
+
+fn status_cell(provider: &ProviderEntry, width: usize) -> Cell {
+    let mut cell = wrap_cell(&provider.status, width);
+    if provider.source_available {
+        cell = cell.fg(Color::Green);
+    } else {
+        cell = cell.fg(Color::Red);
+    }
+    cell
 }

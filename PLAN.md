@@ -21,14 +21,15 @@ Implemented:
 - `route:list --json`
 - `config:list`
 - `config:list --json`
+- `provider:list`
+- `provider:list --json`
 - terminal-friendly text tables
 - basic malformed-route recovery
+- basic provider graph
 - synthetic Laravel-style fixture support under `laravel-example/`
 
 Gaps:
 
-- no provider graph yet
-- no package discovery analysis yet
 - no `loadRoutesFrom(...)` or `mergeConfigFrom(...)` extraction yet
 - no route/config source attribution yet
 - no tests yet
@@ -118,7 +119,7 @@ Questions to answer:
 - which providers are package-discovered
 - which providers are declared but unresolved
 
-Status: `pending`
+Status: `completed`
 
 ## Milestone 3: Route Sources
 

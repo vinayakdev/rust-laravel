@@ -45,3 +45,24 @@ pub struct ConfigItem {
     pub default_value: Option<String>,
     pub env_value: Option<String>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ProviderReport {
+    pub project_name: String,
+    pub project_root: PathBuf,
+    pub provider_count: usize,
+    pub providers: Vec<ProviderEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProviderEntry {
+    pub provider_class: String,
+    pub line: usize,
+    pub column: usize,
+    pub registration_kind: String,
+    pub declared_in: PathBuf,
+    pub package_name: Option<String>,
+    pub source_file: Option<PathBuf>,
+    pub source_available: bool,
+    pub status: String,
+}
