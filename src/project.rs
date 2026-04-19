@@ -13,7 +13,7 @@ pub fn resolve(project_arg: Option<&str>) -> Result<LaravelProject, String> {
 
     let root = match project_arg {
         Some(value) => {
-            let direct = PathBuf::from(value);
+            let direct = cwd.join(value);
             if looks_like_laravel_project(&direct) {
                 direct
             } else {

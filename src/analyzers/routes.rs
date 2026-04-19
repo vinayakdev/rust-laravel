@@ -862,40 +862,71 @@ fn collect_provider_route_files_from_expr(
     provider_file: &Path,
     files: &mut Vec<RegisteredRouteFile>,
 ) {
-    let Expr::MethodCall { method, args, .. } = expr else {
-        return;
-    };
-    let Some(method_name) = expr_name(method, source) else {
-        return;
-    };
-    if method_name != "loadRoutesFrom" {
-        return;
+    match expr {
+        Expr::MethodCall { method, args, .. } => {
+            let method_name = expr_name(method, source).unwrap_or_default();
+            if method_name == "loadRoutesFrom" {
+                if let Some(path_expr) = args.first().map(|arg| arg.value) {
+                    let resolved = expr_to_path(path_expr, source, project, provider_file);
+                    if let Some(route_file) = resolved
+                    {
+                        let line_info = path_expr.span().line_info(source);
+                        let line = line_info.map_or(provider.line, |info| info.line);
+                        let column = line_info.map_or(provider.column, |info| info.column);
+                        files.push(RegisteredRouteFile {
+                            file: route_file,
+                            registration: RouteRegistration {
+                                kind: "provider-loadRoutesFrom".to_string(),
+                                declared_in: provider
+                                    .source_file
+                                    .clone()
+                                    .unwrap_or_else(|| strip_root(&project.root, provider_file)),
+                                line,
+                                column,
+                                provider_class: Some(provider.provider_class.clone()),
+                            },
+                        });
+                    }
+                }
+            } else {
+                // Recurse into closure/arrow-function arguments so loadRoutesFrom
+                // calls inside callbacks (e.g. callAfterResolving) are found.
+                for arg in *args {
+                    collect_provider_route_files_from_expr(
+                        arg.value,
+                        source,
+                        project,
+                        provider,
+                        provider_file,
+                        files,
+                    );
+                }
+            }
+        }
+        Expr::Closure { body, .. } => {
+            for stmt in *body {
+                collect_provider_route_files_from_stmt(
+                    stmt,
+                    source,
+                    project,
+                    provider,
+                    provider_file,
+                    files,
+                );
+            }
+        }
+        Expr::ArrowFunction { expr: inner, .. } => {
+            collect_provider_route_files_from_expr(
+                *inner,
+                source,
+                project,
+                provider,
+                provider_file,
+                files,
+            );
+        }
+        _ => {}
     }
-
-    let Some(path_expr) = args.first().map(|arg| arg.value) else {
-        return;
-    };
-    let Some(route_file) = expr_to_path(path_expr, source, project, provider_file) else {
-        return;
-    };
-
-    let line_info = path_expr.span().line_info(source);
-    let line = line_info.map_or(provider.line, |info| info.line);
-    let column = line_info.map_or(provider.column, |info| info.column);
-
-    files.push(RegisteredRouteFile {
-        file: route_file,
-        registration: RouteRegistration {
-            kind: "provider-loadRoutesFrom".to_string(),
-            declared_in: provider
-                .source_file
-                .clone()
-                .unwrap_or_else(|| strip_root(&project.root, provider_file)),
-            line,
-            column,
-            provider_class: Some(provider.provider_class.clone()),
-        },
-    });
 }
 
 fn flatten_route_chain<'ast>(expr: ExprId<'ast>) -> Option<Vec<ChainOp<'ast>>> {

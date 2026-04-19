@@ -1,6 +1,12 @@
+use bumpalo::Bump;
+use php_parser::ast::{Expr, Stmt, UseKind};
+use php_parser::lexer::Lexer;
+use php_parser::parser::Parser;
+
 use crate::project::LaravelProject;
 use crate::types::{ProviderEntry, ProviderReport};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -175,28 +181,110 @@ struct ClassReference {
 }
 
 fn extract_class_references(source: &str) -> Vec<ClassReference> {
-    let mut refs = Vec::new();
+    let bytes = source.as_bytes();
+    let arena = Bump::new();
+    let lexer = Lexer::new(bytes);
+    let mut parser = Parser::new(lexer, &arena);
+    let program = parser.parse_program();
 
-    for (index, line) in source.lines().enumerate() {
-        let mut search = 0;
-        while let Some(found) = line[search..].find("::class") {
-            let end = search + found;
-            let start = line[..end]
-                .rfind(|c: char| [' ', '\t', '[', ',', '('].contains(&c))
-                .map_or(0, |value| value + 1);
-            let class = line[start..end].trim().trim_start_matches('\\').to_string();
-            if !class.is_empty() {
-                refs.push(ClassReference {
-                    class,
-                    line: index + 1,
-                    column: start + 1,
-                });
-            }
-            search = end + "::class".len();
+    // Build import map from all use statements: short/alias → FQN.
+    // Handles: plain, aliased, and grouped use imports.
+    let mut imports: HashMap<String, String> = HashMap::new();
+    for stmt in program.statements.iter() {
+        let Stmt::Use { uses, kind, .. } = stmt else {
+            continue;
+        };
+        if *kind != UseKind::Normal {
+            continue;
+        }
+        for item in *uses {
+            // Reconstruct FQN from parts tokens — required for grouped imports
+            // where name.span covers non-contiguous bytes (e.g. `use A\{B, C}`).
+            let fqn = item
+                .name
+                .parts
+                .iter()
+                .map(|t| span_text(t.span, bytes))
+                .collect::<String>()
+                .trim_start_matches('\\')
+                .to_string();
+            let key = if let Some(alias_token) = item.alias {
+                span_text(alias_token.span, bytes)
+            } else {
+                fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
+            };
+            imports.insert(key, fqn);
         }
     }
 
+    let mut refs = Vec::new();
+    collect_class_const_fetches(program.statements, bytes, &imports, &mut refs);
     refs
+}
+
+fn collect_class_const_fetches(
+    stmts: &[php_parser::ast::StmtId<'_>],
+    source: &[u8],
+    imports: &HashMap<String, String>,
+    out: &mut Vec<ClassReference>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Return { expr: Some(expr), .. } => {
+                collect_from_expr(*expr, source, imports, out);
+            }
+            Stmt::Expression { expr, .. } => {
+                collect_from_expr(*expr, source, imports, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_from_expr(
+    expr: php_parser::ast::ExprId<'_>,
+    source: &[u8],
+    imports: &HashMap<String, String>,
+    out: &mut Vec<ClassReference>,
+) {
+    match expr {
+        Expr::Array { items, .. } => {
+            for item in *items {
+                collect_from_expr(item.value, source, imports, out);
+            }
+        }
+        Expr::ClassConstFetch { class, constant, span } => {
+            let constant_text = span_text(constant.span(), source);
+            if constant_text.eq_ignore_ascii_case("class") {
+                let raw = span_text(class.span(), source)
+                    .trim_start_matches('\\')
+                    .to_string();
+                let resolved = if raw.contains('\\') {
+                    raw
+                } else {
+                    imports.get(&raw).cloned().unwrap_or(raw)
+                };
+                let (line, column) = byte_offset_to_line_col(source, span.start);
+                out.push(ClassReference {
+                    class: resolved,
+                    line,
+                    column,
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn span_text(span: php_parser::Span, source: &[u8]) -> String {
+    String::from_utf8_lossy(span.as_str(source)).into_owned()
+}
+
+fn byte_offset_to_line_col(source: &[u8], offset: usize) -> (usize, usize) {
+    let before = &source[..offset.min(source.len())];
+    let line = before.iter().filter(|&&b| b == b'\n').count() + 1;
+    let col = before.iter().rev().position(|&b| b == b'\n').unwrap_or(offset) + 1;
+    (line, col)
 }
 
 fn build_provider_entry(
@@ -333,4 +421,76 @@ fn find_json_string_position(path: &Path, needle: &str) -> Result<(usize, usize)
 
 fn strip_root(root: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(root).unwrap_or(path).to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_fully_qualified_class() {
+        let src = r#"<?php
+return [
+    App\Modules\Blog\BlogServiceProvider::class,
+];"#;
+        let refs = extract_class_references(src);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].class, "App\\Modules\\Blog\\BlogServiceProvider");
+    }
+
+    #[test]
+    fn resolves_short_name_via_use_import() {
+        let src = r#"<?php
+use App\Modules\Blog\BlogServiceProvider;
+use App\Providers\AppServiceProvider;
+
+return [
+    BlogServiceProvider::class,
+    AppServiceProvider::class,
+];"#;
+        let refs = extract_class_references(src);
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].class, "App\\Modules\\Blog\\BlogServiceProvider");
+        assert_eq!(refs[1].class, "App\\Providers\\AppServiceProvider");
+    }
+
+    #[test]
+    fn resolves_aliased_use_import() {
+        let src = r#"<?php
+use App\Modules\Blog\BlogServiceProvider as BlogSP;
+
+return [
+    BlogSP::class,
+];"#;
+        let refs = extract_class_references(src);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].class, "App\\Modules\\Blog\\BlogServiceProvider");
+    }
+
+    #[test]
+    fn resolves_grouped_use_import() {
+        let src = r#"<?php
+use App\Providers\{AppServiceProvider, CoreServiceProvider};
+
+return [
+    AppServiceProvider::class,
+    CoreServiceProvider::class,
+];"#;
+        let refs = extract_class_references(src);
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].class, "App\\Providers\\AppServiceProvider");
+        assert_eq!(refs[1].class, "App\\Providers\\CoreServiceProvider");
+    }
+
+    #[test]
+    fn unresolvable_short_name_kept_as_is() {
+        // Short name with no matching use statement — kept raw so caller can handle.
+        let src = r#"<?php
+return [
+    SomeProvider::class,
+];"#;
+        let refs = extract_class_references(src);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].class, "SomeProvider");
+    }
 }
