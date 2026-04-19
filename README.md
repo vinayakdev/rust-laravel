@@ -1,276 +1,387 @@
 # rust-php
 
-Rust tooling for exploring Laravel codebases while building toward editor and LSP features.
+Rust analyzers for Laravel projects, built as a CLI first and shaped for future editor/LSP use.
 
-## What This Project Does
+## What This Engine Does
 
-Right now the project gives you:
+This project scans Laravel code statically and gives you:
 
-- `route:list`: parse Laravel route files and print discovered routes
-- `route:list --json`: emit the same route data as machine-readable JSON
-- `config:list`: inspect config definitions, `config(...)` usages, `env(...)` usages, and env-file declarations
-  Current text output is normalized into `key`, `env_key`, `default_value`, and resolved `env_value`.
-- broken-file recovery for route parsing, so useful output still appears even when some PHP is malformed
+- routes
+- route registration sources
+- config keys and env-backed values
+- config registration sources
+- providers
+- middleware aliases, groups, and route parameter patterns
 
-The long-term direction is:
+It is designed for two uses:
 
-- reusable analyzers in Rust
-- CLI commands for debugging those analyzers on real Laravel apps
-- LSP-friendly data structures and output
+1. human debugging from the terminal
+2. machine-readable JSON for future extension/LSP work
 
-## Quick Reference
+## Quick Links
 
-| File                                                    | Purpose                                                           |
-| ------------------------------------------------------- | ----------------------------------------------------------------- |
-| [README.md](/README.md)                                 | Project overview, architecture, commands, and roadmap             |
-| [example.md](/example.md)                               | Concrete input/output examples for `route:list` and `config:list` |
-| [laravel-example/README.md](/laravel-example/README.md) | Where to place Laravel projects for analysis                      |
+| File | Purpose |
+| --- | --- |
+| [README.md](/Users/hotdogb/Work/rust-php/README.md) | Main guide and command reference |
+| [example.md](/Users/hotdogb/Work/rust-php/example.md) | Static input/output examples without running the CLI |
+| [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md) | Roadmap and completed milestones |
+| [laravel-example/README.md](/Users/hotdogb/Work/rust-php/laravel-example/README.md) | How to place Laravel apps for analysis |
 
-## Workspace Layout
+## Where To Put Laravel Apps
+
+Put target Laravel projects under `laravel-example/`.
 
 ```text
 rust-php/
   src/
-    analyzers/
-      routes.rs
-      configs.rs
-    cli.rs
-    lib.rs
-    main.rs
-    output.rs
-    project.rs
-    types.rs
   laravel-example/
-    <your-laravel-projects-here>
-```
-
-Put Laravel apps under `laravel-example/` like this:
-
-```text
-laravel-example/
-  demo-app/
-    app/
-    config/
-    routes/
+    demo-app/
+      app/
+      config/
+      routes/
+      composer.json
 ```
 
 Important:
 
-- By default, this tool should parse Laravel code under `laravel-example/`.
-- The Rust workspace itself is not the target application code.
-- Use `--project <name>` or `--project <path>` when you want to be explicit.
+- the Rust repo is the analyzer
+- `laravel-example/<project>` is the target codebase
+- by default, the CLI should analyze Laravel code from `laravel-example/`
 
-## Commands
+## Project Resolution
+
+When you pass `--project`:
+
+1. if it is a real path, that path is used
+2. otherwise it resolves under `./laravel-example/<name>`
+
+When you do not pass `--project`:
+
+1. if the current directory looks like a Laravel app, use it
+2. otherwise auto-pick a single Laravel app under `./laravel-example/`
+
+## One-Look Command Reference
+
+| Command | What You Get | Best For |
+| --- | --- | --- |
+| `route:list` | effective route list with method, URI, name, action, middleware, patterns, and registration summary | day-to-day route inspection |
+| `route:sources` | route-to-provider/source attribution table | debugging where routes came from |
+| `config:list` | effective config rows with key, env key, default, env value, and registration summary | debugging config state |
+| `config:sources` | config-to-provider/source attribution table | debugging merged/package config |
+| `provider:list` | provider graph with declaration file, kind, package, source, and status | debugging package/provider registration |
+| `middleware:list` | middleware aliases, groups, and route patterns | debugging route enrichment |
+
+All commands support:
+
+- `--project <name-or-path>`
+- `--json`
+
+## Fast Start
 
 Development:
 
 ```bash
-cargo run -- route:list
-cargo run -- route:list --json
-cargo run -- config:list
+cargo run -- route:list --project sandbox-app
+cargo run -- route:sources --project sandbox-app
+cargo run -- config:list --project sandbox-app
+cargo run -- config:sources --project sandbox-app
+cargo run -- provider:list --project sandbox-app
+cargo run -- middleware:list --project sandbox-app
 ```
 
-Target a Laravel project by name:
+JSON output:
 
 ```bash
-cargo run -- route:list --project demo-app
-cargo run -- route:list --project demo-app --json
+cargo run -- route:list --project sandbox-app --json
+cargo run -- config:list --project sandbox-app --json
+cargo run -- provider:list --project sandbox-app --json
+cargo run -- middleware:list --project sandbox-app --json
 ```
 
-Target a Laravel project by path:
-
-```bash
-cargo run -- route:list --project ./laravel-example/demo-app
-```
-
-Release binary:
+Release build:
 
 ```bash
 cargo build --release
-./target/release/rust-php route:list
-./target/release/rust-php route:list --json
-./target/release/rust-php config:list
+./target/release/rust-php route:list --project sandbox-app
+./target/release/rust-php config:list --project sandbox-app
 ```
 
-## Project Resolution
+## Commands In Detail
 
-When you pass `--project`, resolution works like this:
+### `route:list`
 
-1. If it is an existing path, use it directly.
-2. Otherwise resolve it under `./laravel-example/<name>`.
+Purpose:
 
-When you do not pass `--project`, resolution works like this:
+- show the effective routes the analyzer can see
 
-1. If `./laravel-example` itself looks like a Laravel app, use it.
-2. Otherwise, if the current directory looks like a Laravel app, use it.
-3. Otherwise auto-pick a single Laravel app under `./laravel-example/`.
+Includes:
 
-This means local debugging should normally target Laravel code from `laravel-example/`.
+- `Line:Column`
+- method(s)
+- URI
+- route name
+- action
+- effective middleware
+- route parameter patterns
+- registration summary
+
+Example:
+
+```bash
+cargo run -- route:list --project sandbox-app
+```
+
+Use this when:
+
+- you want the route table you would scan as a human
+- you want provider-loaded routes included
+- you want middleware groups/aliases expanded
+
+### `route:sources`
+
+Purpose:
+
+- show where each route was registered from
+
+Includes:
+
+- route file location
+- method and URI
+- provider class if applicable
+- declaration file with `Line:Column`
+- registration kind such as `route-file` or `provider-loadRoutesFrom`
+
+Example:
+
+```bash
+cargo run -- route:sources --project sandbox-app
+```
+
+Use this when:
+
+- a route exists but you do not know which provider/package loaded it
+- you are debugging service-provider behavior
+- you want source attribution for LSP work
+
+### `config:list`
+
+Purpose:
+
+- show the effective config rows the analyzer can derive
+
+Includes:
+
+- `Line:Column`
+- config key
+- env key
+- default value
+- resolved env value from `.env` or `.env.example`
+- registration summary
+
+Example:
+
+```bash
+cargo run -- config:list --project sandbox-app
+```
+
+Use this when:
+
+- you want to inspect config state quickly in the terminal
+- you want env default vs env resolved behavior
+- you want package config merged through providers to appear in one view
+
+### `config:sources`
+
+Purpose:
+
+- show where config came from
+
+Includes:
+
+- config item location
+- env key
+- provider class if applicable
+- declaration file with `Line:Column`
+- source kind such as `config-file` or `provider-mergeConfigFrom`
+
+Example:
+
+```bash
+cargo run -- config:sources --project sandbox-app
+```
+
+Use this when:
+
+- a config key exists but you do not know whether it is local or package-provided
+- you are debugging `mergeConfigFrom(...)`
+- you want config source attribution for editor tooling
+
+### `provider:list`
+
+Purpose:
+
+- show which providers exist in the project graph
+
+Includes:
+
+- declaration `Line:Column`
+- declaration file
+- provider class
+- registration kind
+- package name if known
+- resolved source file if available
+- status such as `static_exact` or `source_missing`
+
+Example:
+
+```bash
+cargo run -- provider:list --project sandbox-app
+```
+
+Use this when:
+
+- you want to debug package discovery
+- you want to see unresolved providers without requiring Composer
+- you are tracing route/config behavior back to providers
+
+### `middleware:list`
+
+Purpose:
+
+- show route enrichment data collected from providers
+
+Includes:
+
+- middleware aliases
+- middleware groups
+- route parameter patterns
+- declaration file and `Line:Column`
+
+Example:
+
+```bash
+cargo run -- middleware:list --project sandbox-app
+```
+
+Use this when:
+
+- middleware on routes is confusing
+- aliases or groups are hiding the real stack
+- route parameter constraints affect navigation or validation
 
 ## Output Modes
 
-### Text output
+### Text Mode
 
-Human-friendly table output grouped by file:
+Designed for terminal use:
 
-```text
-routes/web.php
-  LINE:COL  METHOD    URI                 NAME            ACTION                  MIDDLEWARE
-  16:12     GET       /products/{slug}    products.show   ProductController@show  -
+- grouped tables where that helps readability
+- `Line:Column` for quick reference
+- truncation with `…` on narrower terminals
+- color in config output:
+  - green: env value present
+  - yellow: default in use
+  - red: env key referenced but missing
+
+### JSON Mode
+
+Designed for tooling:
+
+- stable typed report shapes
+- includes file, line, column, and source metadata
+- intended as the bridge to future LSP/extension work
+
+Example:
+
+```bash
+cargo run -- route:list --project sandbox-app --json
 ```
 
-Terminal notes:
+## What Makes This Useful
 
-- boxed Unicode tables are used for better readability
-- long values are truncated with `…` on narrower terminals
-- config output uses semantic colors:
-  - green: env value is present
-  - yellow: default value is being used
-  - red: env key is referenced but missing from `.env`
+This engine already handles more than a simple file scan:
 
-### JSON output
+- provider-discovered route files via `loadRoutesFrom(...)`
+- provider-merged config via `mergeConfigFrom(...)`
+- package code without requiring `composer install`
+- missing provider/package source reported without crashing the analysis
+- malformed route file recovery
+- middleware alias/group expansion
+- route parameter patterns
 
-Structured output for extension/LSP work:
+## Current Engine Surface
 
-```json
-{
-  "project_name": "demo-app",
-  "project_root": "/abs/path/to/demo-app",
-  "route_count": 2,
-  "routes": [
-    {
-      "file": "routes/web.php",
-      "line": 16,
-      "column": 12,
-      "methods": ["GET"],
-      "uri": "/products/{slug}",
-      "name": "products.show",
-      "action": "ProductController@show",
-      "middleware": []
-    }
-  ]
-}
-```
+| Area | Current Capability |
+| --- | --- |
+| Routes | direct route files, provider-loaded route files, names, actions, middleware, patterns, source attribution |
+| Config | direct config files, provider-merged config, env keys, defaults, resolved env values, source attribution |
+| Providers | bootstrap registration, Composer-discovered providers, local package providers, missing-source visibility |
+| Middleware | aliases, groups, route patterns |
+| Output | terminal tables and JSON |
 
-## Code Structure
+## Missing Vendor / Missing Composer Handling
 
-### `src/lib.rs`
+This tool does not require Composer to be installed and does not require `vendor/` to be complete for baseline output.
 
-Top-level orchestration. This is the place where commands are resolved and dispatched. For an extension or LSP, this becomes the natural integration entrypoint.
+Current behavior:
 
-### `src/cli.rs`
+- root `composer.json` is still parsed
+- package/provider declarations are still recorded
+- missing source stays visible as `source_missing`
+- local packages under the project can still be analyzed directly
 
-Argument parsing. Keep CLI-only concerns here so analyzers stay reusable.
+This is important for LSP/debug workflows where the codebase may be incomplete.
 
-### `src/project.rs`
+## Recommended Workflow
 
-Resolves which Laravel project to inspect. This is useful both for local debugging and for future editor integration where a workspace folder maps to a project root.
+For a new Laravel codebase:
 
-### `src/types.rs`
+1. put it under `laravel-example/<project>`
+2. run `provider:list`
+3. run `route:list`
+4. run `route:sources`
+5. run `config:list`
+6. run `config:sources`
+7. run `middleware:list`
 
-Shared report types. This is the contract between analyzers and output layers.
+That sequence gives you:
 
-### `src/output.rs`
+- provider graph
+- effective routes
+- route attribution
+- effective config
+- config attribution
+- route enrichment state
 
-Human-readable and JSON rendering. Keeping output separate makes it easy to plug the analyzers into:
+## For Extension / LSP Work
 
-- a CLI
-- tests
-- JSON-RPC handlers
-- LSP features
+The repo is being shaped so analyzers stay reusable:
 
-### `src/analyzers/routes.rs`
+- `src/analyzers/` contains extraction logic
+- `src/types.rs` defines typed report contracts
+- `src/output.rs` handles rendering
+- `src/cli.rs` handles command parsing
+- `src/lib.rs` wires commands to analyzers
 
-Laravel route analyzer. This is currently the most advanced module:
+This separation matters because the CLI is just one frontend. The same reports can later power:
 
-- full-file parse for valid code
-- fallback chunk recovery for broken route files
-- support for route chains, prefixes, names, middleware, and controller groups
+- JSON-RPC
+- editor hovers
+- go-to-definition
+- diagnostics
+- completions
 
-### `src/analyzers/configs.rs`
+## Example Output
 
-Config analyzer. It currently reports:
+See [example.md](/Users/hotdogb/Work/rust-php/example.md) for static examples of:
 
-- config definitions from `config/*.php`
-- `config(...)` usages
-- `env(...)` usages
-- `.env` and `.env.example` declarations
+- example project input
+- example commands
+- text output
+- JSON output
 
-It is still scanner-based and can later move to parser-backed extraction.
+## Roadmap
 
-## How To Extend This
+See [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md).
 
-Recommended pattern for new features:
-
-1. Add a new report type in `src/types.rs`.
-2. Add a new analyzer in `src/analyzers/`.
-3. Add a new CLI command in `src/cli.rs`.
-4. Add output formatting in `src/output.rs`.
-5. Wire the command in `src/lib.rs`.
-
-This keeps parsing logic, transport, and presentation separate.
-
-## LSP Roadmap
-
-A practical path from this CLI to an LSP backend:
-
-1. Keep analyzers pure: input project, output typed report.
-2. Add file-level indexing so changed files can be reanalyzed incrementally.
-3. Add span/range-aware types for diagnostics and symbol navigation.
-4. Add JSON-RPC request handlers around the analyzers.
-5. Add watchers and cache invalidation for edited PHP files.
-
-Likely future features:
-
-- route definition navigation
-- route name completion
-- controller action lookup
-- config key completion
-- diagnostics for unresolved route/controller references
-
-## Rust Learning Notes
-
-This codebase is a good place to learn a few Rust habits:
-
-### 1. Separate data from side effects
-
-The analyzers produce typed reports. Printing is a separate concern.
-
-Why this matters:
-
-- easier to test
-- easier to reuse in an extension
-- easier to serialize to JSON
-
-### 2. Use modules to control complexity
-
-Instead of one large `main.rs`, the code is split by responsibility. This is the first step toward maintainable Rust, especially when the project grows.
-
-### 3. Optimize the common path first
-
-Valid Laravel projects are the common case, so the route analyzer parses full files first. The chunk recovery path is only used when code is malformed.
-
-### 4. Prefer explicit types at boundaries
-
-`RouteReport`, `RouteEntry`, `ConfigReport`, and `ConfigReference` make the code easier to reason about than passing around loose maps or tuples.
-
-## Debugging Workflow
-
-When adding new analyzers or LSP behavior:
-
-1. Put a real Laravel app under `laravel-example/`.
-2. Run the analyzer in text mode first.
-3. Run it again with `--json`.
-4. Compare the output with what Laravel or your editor shows.
-5. Only after the CLI output is correct, wire it into LSP features.
-
-That CLI-first workflow is usually much faster than debugging through an editor integration immediately.
-
-## Next Good Steps
-
-- make `config:list` parser-backed instead of string-backed
-- add `project:list`
-- add file/line ranges instead of only line numbers
-- add controller symbol resolution
-- add tests with example Laravel fixtures
-- add a JSON-RPC layer for editor integration
+The next major step is optional runtime verification and diffing against Laravel itself when available, while keeping static analysis as the default baseline.
