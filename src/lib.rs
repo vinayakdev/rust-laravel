@@ -1,6 +1,7 @@
 mod analyzers;
 mod cli;
 mod output;
+mod php;
 mod project;
 mod types;
 
