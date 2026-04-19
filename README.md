@@ -20,11 +20,11 @@ The long-term direction is:
 
 ## Quick Reference
 
-| File | Purpose |
-| --- | --- |
-| [README.md](/Users/hotdogb/Work/rust-php/README.md) | Project overview, architecture, commands, and roadmap |
-| [example.md](/Users/hotdogb/Work/rust-php/example.md) | Concrete input/output examples for `route:list` and `config:list` |
-| [laravel-example/README.md](/Users/hotdogb/Work/rust-php/laravel-example/README.md) | Where to place Laravel projects for analysis |
+| File                                                    | Purpose                                                           |
+| ------------------------------------------------------- | ----------------------------------------------------------------- |
+| [README.md](/README.md)                                 | Project overview, architecture, commands, and roadmap             |
+| [example.md](/example.md)                               | Concrete input/output examples for `route:list` and `config:list` |
+| [laravel-example/README.md](/laravel-example/README.md) | Where to place Laravel projects for analysis                      |
 
 ## Workspace Layout
 
