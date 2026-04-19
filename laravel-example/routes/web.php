@@ -9,9 +9,9 @@ use Illuminate\Support\Facades\Route;
 
 // Auth::loginUsingId(1);
 
-Route::get('/', function () {
-    return view('welcome');
-})->name('home');
+// Route::get('/', function () {
+//     return view('welcome');
+// })->name('home');
 
 Route::get('/products/{slug}', [ProductController::class, 'show'])->name('products.show');
 
