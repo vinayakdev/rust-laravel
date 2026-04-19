@@ -6,9 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crate::analyzers::providers;
+use crate::analyzers::{middleware, providers};
 use crate::project::LaravelProject;
-use crate::types::{RouteEntry, RouteRegistration, RouteReport};
+use crate::types::{MiddlewareReport, RouteEntry, RouteRegistration, RouteReport};
 
 #[derive(Clone, Default)]
 struct RouteContext {
@@ -34,6 +34,12 @@ struct RouteChunk {
 struct RegisteredRouteFile {
     file: PathBuf,
     registration: RouteRegistration,
+}
+
+struct MiddlewareIndex {
+    aliases: BTreeMap<String, String>,
+    groups: BTreeMap<String, Vec<String>>,
+    patterns: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +72,7 @@ struct ScanState {
 pub fn analyze(project: &LaravelProject) -> Result<RouteReport, String> {
     let mut routes = Vec::new();
     let route_files = collect_registered_route_files(project)?;
+    let middleware_index = build_middleware_index(&middleware::analyze(project)?);
 
     for registered in &route_files {
         let file = &registered.file;
@@ -78,6 +85,7 @@ pub fn analyze(project: &LaravelProject) -> Result<RouteReport, String> {
             &registered.registration,
             1,
             &RouteContext::default(),
+            &middleware_index,
             &mut routes,
         );
     }
@@ -256,17 +264,34 @@ fn collect_routes_from_source(
     registration: &RouteRegistration,
     start_line: usize,
     context: &RouteContext,
+    middleware_index: &MiddlewareIndex,
     routes: &mut Vec<RouteEntry>,
 ) {
     if start_line == 1
         && source_can_use_full_parse(source)
-        && collect_routes_with_full_parse(source, project_root, file, registration, context, routes)
+        && collect_routes_with_full_parse(
+            source,
+            project_root,
+            file,
+            registration,
+            context,
+            middleware_index,
+            routes,
+        )
     {
         return;
     }
 
     for chunk in split_route_chunks(source, start_line) {
-        parse_route_chunk(&chunk, project_root, file, registration, context, routes);
+        parse_route_chunk(
+            &chunk,
+            project_root,
+            file,
+            registration,
+            context,
+            middleware_index,
+            routes,
+        );
     }
 }
 
@@ -276,6 +301,7 @@ fn collect_routes_with_full_parse(
     file: &Path,
     registration: &RouteRegistration,
     context: &RouteContext,
+    middleware_index: &MiddlewareIndex,
     routes: &mut Vec<RouteEntry>,
 ) -> bool {
     let arena = Bump::new();
@@ -294,6 +320,7 @@ fn collect_routes_with_full_parse(
             file,
             registration,
             context,
+            middleware_index,
             routes,
             1,
             None,
@@ -308,6 +335,7 @@ fn parse_route_chunk(
     file: &Path,
     registration: &RouteRegistration,
     context: &RouteContext,
+    middleware_index: &MiddlewareIndex,
     routes: &mut Vec<RouteEntry>,
 ) {
     if !chunk.complete && !chunk.text.windows(5).any(|window| window == b"group") {
@@ -334,6 +362,7 @@ fn parse_route_chunk(
             file,
             registration,
             context,
+            middleware_index,
             routes,
             chunk.line,
             Some(&chunk.text),
@@ -348,6 +377,7 @@ fn collect_routes_from_stmt(
     file: &Path,
     registration: &RouteRegistration,
     context: &RouteContext,
+    middleware_index: &MiddlewareIndex,
     routes: &mut Vec<RouteEntry>,
     line_offset: usize,
     raw_chunk: Option<&[u8]>,
@@ -361,6 +391,7 @@ fn collect_routes_from_stmt(
                 file,
                 registration,
                 context,
+                middleware_index,
                 routes,
                 line_offset,
                 raw_chunk,
@@ -378,6 +409,7 @@ fn collect_routes_from_stmt(
                     file,
                     registration,
                     context,
+                    middleware_index,
                     routes,
                     line_offset,
                     raw_chunk,
@@ -395,6 +427,7 @@ fn collect_routes_from_stmt(
                     file,
                     registration,
                     context,
+                    middleware_index,
                     routes,
                     line_offset,
                     raw_chunk,
@@ -414,6 +447,7 @@ fn collect_routes_from_stmt(
                     file,
                     registration,
                     context,
+                    middleware_index,
                     routes,
                     line_offset,
                     raw_chunk,
@@ -428,6 +462,7 @@ fn collect_routes_from_stmt(
                         file,
                         registration,
                         context,
+                        middleware_index,
                         routes,
                         line_offset,
                         raw_chunk,
@@ -448,6 +483,7 @@ fn collect_routes_from_stmt(
                     file,
                     registration,
                     context,
+                    middleware_index,
                     routes,
                     line_offset,
                     raw_chunk,
@@ -465,6 +501,7 @@ fn analyze_route_expression(
     file: &Path,
     registration: &RouteRegistration,
     base_context: &RouteContext,
+    middleware_index: &MiddlewareIndex,
     routes: &mut Vec<RouteEntry>,
     line_offset: usize,
     raw_chunk: Option<&[u8]>,
@@ -500,6 +537,7 @@ fn analyze_route_expression(
                         signature,
                         args,
                         source,
+                        middleware_index,
                     ));
                     continue;
                 }
@@ -523,6 +561,7 @@ fn analyze_route_expression(
                                 registration,
                                 body_line,
                                 &context,
+                                middleware_index,
                                 routes,
                             );
                         }
@@ -535,6 +574,7 @@ fn analyze_route_expression(
                                 file,
                                 registration,
                                 &context,
+                                middleware_index,
                                 routes,
                                 line_offset,
                                 None,
@@ -560,6 +600,7 @@ fn analyze_route_expression(
                             signature,
                             args,
                             source,
+                            middleware_index,
                         ));
                         continue;
                     }
@@ -584,6 +625,7 @@ fn analyze_route_expression(
                                 registration,
                                 body_line,
                                 &context,
+                                middleware_index,
                                 routes,
                             );
                         }
@@ -596,6 +638,7 @@ fn analyze_route_expression(
                                 file,
                                 registration,
                                 &context,
+                                middleware_index,
                                 routes,
                                 line_offset,
                                 None,
@@ -726,6 +769,89 @@ fn collect_provider_route_files_from_stmt(
         }
         _ => {}
     }
+}
+
+fn build_middleware_index(report: &MiddlewareReport) -> MiddlewareIndex {
+    MiddlewareIndex {
+        aliases: report
+            .aliases
+            .iter()
+            .map(|alias| (alias.name.clone(), alias.target.clone()))
+            .collect(),
+        groups: report
+            .groups
+            .iter()
+            .map(|group| (group.name.clone(), group.members.clone()))
+            .collect(),
+        patterns: report
+            .patterns
+            .iter()
+            .map(|pattern| (pattern.parameter.clone(), pattern.pattern.clone()))
+            .collect(),
+    }
+}
+
+fn resolve_middleware(values: &[String], index: &MiddlewareIndex) -> Vec<String> {
+    let mut resolved = Vec::new();
+    let mut stack = Vec::new();
+    for value in values {
+        expand_middleware(value, index, &mut stack, &mut resolved);
+    }
+    resolved
+}
+
+fn expand_middleware(
+    value: &str,
+    index: &MiddlewareIndex,
+    stack: &mut Vec<String>,
+    resolved: &mut Vec<String>,
+) {
+    if stack.iter().any(|item| item == value) {
+        return;
+    }
+
+    if let Some(group) = index.groups.get(value) {
+        stack.push(value.to_string());
+        for member in group {
+            expand_middleware(member, index, stack, resolved);
+        }
+        stack.pop();
+        return;
+    }
+
+    let target = index
+        .aliases
+        .get(value)
+        .cloned()
+        .unwrap_or_else(|| value.to_string());
+    if !resolved.iter().any(|item| item == &target) {
+        resolved.push(target);
+    }
+}
+
+fn collect_parameter_patterns(uri: &str, index: &MiddlewareIndex) -> BTreeMap<String, String> {
+    let mut patterns = BTreeMap::new();
+    let mut search = uri;
+
+    while let Some(start) = search.find('{') {
+        let rest = &search[start + 1..];
+        let Some(end) = rest.find('}') else {
+            break;
+        };
+        let raw = &rest[..end];
+        let parameter = raw
+            .trim_end_matches('?')
+            .split(':')
+            .next()
+            .unwrap_or(raw)
+            .to_string();
+        if let Some(pattern) = index.patterns.get(&parameter) {
+            patterns.insert(parameter, pattern.clone());
+        }
+        search = &rest[end + 1..];
+    }
+
+    patterns
 }
 
 fn collect_provider_route_files_from_expr(
@@ -875,6 +1001,7 @@ fn build_route_entry(
     signature: RouteSignature,
     args: &[Arg<'_>],
     source: &[u8],
+    middleware_index: &MiddlewareIndex,
 ) -> RouteEntry {
     let (line, column) = route_position(source, args, line);
     let raw_uri = args
@@ -885,15 +1012,21 @@ fn build_route_entry(
         .get(signature.action_arg_index)
         .and_then(|arg| expr_to_action(arg.value, context.controller.as_deref(), source));
 
+    let uri = join_uri(&context.uri_prefix, &raw_uri);
+    let resolved_middleware = resolve_middleware(&context.middleware, middleware_index);
+    let parameter_patterns = collect_parameter_patterns(&uri, middleware_index);
+
     RouteEntry {
         file: strip_root(project_root, file),
         line,
         column,
         methods: signature.methods,
-        uri: join_uri(&context.uri_prefix, &raw_uri),
+        uri,
         name: (!context.name_prefix.is_empty()).then(|| context.name_prefix.clone()),
         action,
         middleware: context.middleware.clone(),
+        resolved_middleware,
+        parameter_patterns,
         registration: registration.clone(),
     }
 }

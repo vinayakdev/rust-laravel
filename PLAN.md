@@ -27,6 +27,8 @@ Implemented:
 - route registration-source attribution
 - `config:sources`
 - config registration-source attribution
+- `middleware:list`
+- middleware aliases/groups and route pattern enrichment
 - terminal-friendly text tables
 - basic malformed-route recovery
 - basic provider graph
@@ -188,7 +190,7 @@ Planned outputs:
 - richer `route:list`
 - `middleware:list`
 
-Status: `pending`
+Status: `completed`
 
 ## Milestone 6: Verification And Diffing
 

@@ -19,6 +19,10 @@ pub fn run() -> Result<(), String> {
             let report = analyzers::routes::analyze(&project)?;
             output::print_route_sources(&report, options.json)?;
         }
+        Command::MiddlewareList => {
+            let report = analyzers::middleware::analyze(&project)?;
+            output::print_middlewares(&report, options.json)?;
+        }
         Command::ConfigList => {
             let report = analyzers::configs::analyze(&project)?;
             output::print_configs(&report, options.json)?;

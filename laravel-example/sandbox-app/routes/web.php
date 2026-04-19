@@ -11,3 +11,9 @@ Route::prefix('labs')->middleware('web')->group(function () {
         return 'pong';
     })->name('labs.ping');
 });
+
+Route::prefix('admin')->middleware('admin')->group(function () {
+    Route::get('/products/{slug}', function (string $slug) {
+        return $slug;
+    })->middleware('auth')->name('admin.products.show');
+});

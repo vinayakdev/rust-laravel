@@ -4,6 +4,7 @@ use crate::types::OutputMode;
 pub enum Command {
     RouteList,
     RouteSources,
+    MiddlewareList,
     ConfigList,
     ConfigSources,
     ProviderList,
@@ -28,6 +29,7 @@ where
         match arg.as_str() {
             "route:list" => command = Command::RouteList,
             "route:sources" => command = Command::RouteSources,
+            "middleware:list" => command = Command::MiddlewareList,
             "config:list" => command = Command::ConfigList,
             "config:sources" => command = Command::ConfigSources,
             "provider:list" => command = Command::ProviderList,
@@ -55,6 +57,7 @@ fn help_text() -> String {
         "Usage:",
         "  rust-php route:list [--project <path-or-name>] [--json]",
         "  rust-php route:sources [--project <path-or-name>] [--json]",
+        "  rust-php middleware:list [--project <path-or-name>] [--json]",
         "  rust-php config:list [--project <path-or-name>] [--json]",
         "  rust-php config:sources [--project <path-or-name>] [--json]",
         "  rust-php provider:list [--project <path-or-name>] [--json]",
@@ -68,6 +71,7 @@ fn help_text() -> String {
         "Examples:",
         "  cargo run -- route:list",
         "  cargo run -- route:sources --project sandbox-app",
+        "  cargo run -- middleware:list --project sandbox-app",
         "  cargo run -- config:sources --project sandbox-app",
         "  cargo run -- provider:list --project sandbox-app",
         "  cargo run -- route:list --project laravel-example/demo-app",

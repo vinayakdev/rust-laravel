@@ -1,6 +1,7 @@
 use crate::types::{
-    ConfigItem, ConfigReport, ConfigSource, OutputMode, ProviderEntry, ProviderReport, RouteEntry,
-    RouteRegistration, RouteReport,
+    ConfigItem, ConfigReport, ConfigSource, MiddlewareAlias, MiddlewareGroup, MiddlewareReport,
+    OutputMode, ProviderEntry, ProviderReport, RouteEntry, RoutePattern, RouteRegistration,
+    RouteReport,
 };
 use comfy_table::{
     Cell, CellAlignment, Color, ColumnConstraint, ContentArrangement, Row, Table,
@@ -67,6 +68,18 @@ pub fn print_providers(report: &ProviderReport, mode: OutputMode) -> Result<(), 
     Ok(())
 }
 
+pub fn print_middlewares(report: &MiddlewareReport, mode: OutputMode) -> Result<(), String> {
+    match mode {
+        OutputMode::Json => {
+            let json = serde_json::to_string_pretty(report).map_err(|error| error.to_string())?;
+            println!("{json}");
+        }
+        OutputMode::Text => print_middleware_tables(report),
+    }
+
+    Ok(())
+}
+
 fn print_route_table(routes: &[RouteEntry]) {
     if routes.is_empty() {
         println!("No routes found.");
@@ -94,6 +107,7 @@ fn print_route_table(routes: &[RouteEntry]) {
                 header("Name"),
                 header("Action"),
                 header("Middleware"),
+                header("Patterns"),
                 header("Registered Via"),
             ]);
             current_file = Some(file);
@@ -105,7 +119,8 @@ fn print_route_table(routes: &[RouteEntry]) {
             wrap_cell(&route.uri, widths.uri),
             wrap_cell(route.name.as_deref().unwrap_or("-"), widths.name),
             wrap_cell(route.action.as_deref().unwrap_or("-"), widths.action),
-            wrap_cell(&join_or_dash(&route.middleware), widths.middleware),
+            wrap_cell(&display_middleware(route), widths.middleware),
+            wrap_cell(&display_patterns(route), widths.patterns),
             wrap_cell(
                 &route_registration_summary(&route.registration),
                 widths.registration,
@@ -224,6 +239,65 @@ fn print_provider_table(report: &ProviderReport) {
     println!("Declared providers: {}", report.provider_count);
     println!("{table}");
     println!("Legend: green = source resolved, red = source missing, grey = not package-backed");
+}
+
+fn print_middleware_tables(report: &MiddlewareReport) {
+    println!("Project: {}", report.project_name);
+
+    if report.aliases.is_empty() && report.groups.is_empty() && report.patterns.is_empty() {
+        println!("No middleware or route patterns found.");
+        return;
+    }
+
+    if !report.aliases.is_empty() {
+        let widths = middleware_widths();
+        let mut table = new_table();
+        table.set_header(vec![
+            header("Alias"),
+            header("Target"),
+            header("Declared At"),
+            header("Provider"),
+        ]);
+        for alias in &report.aliases {
+            table.add_row(middleware_alias_row(alias, &widths));
+        }
+        println!("Aliases");
+        println!("{table}");
+        println!();
+    }
+
+    if !report.groups.is_empty() {
+        let widths = middleware_widths();
+        let mut table = new_table();
+        table.set_header(vec![
+            header("Group"),
+            header("Members"),
+            header("Declared At"),
+            header("Provider"),
+        ]);
+        for group in &report.groups {
+            table.add_row(middleware_group_row(group, &widths));
+        }
+        println!("Groups");
+        println!("{table}");
+        println!();
+    }
+
+    if !report.patterns.is_empty() {
+        let widths = middleware_widths();
+        let mut table = new_table();
+        table.set_header(vec![
+            header("Param"),
+            header("Pattern"),
+            header("Declared At"),
+            header("Provider"),
+        ]);
+        for pattern in &report.patterns {
+            table.add_row(route_pattern_row(pattern, &widths));
+        }
+        println!("Patterns");
+        println!("{table}");
+    }
 }
 
 fn print_config_source_table(report: &ConfigReport) {
@@ -393,6 +467,7 @@ struct RouteWidths {
     name: usize,
     action: usize,
     middleware: usize,
+    patterns: usize,
     registration: usize,
 }
 
@@ -429,6 +504,13 @@ struct ConfigSourceWidths {
     kind: usize,
 }
 
+struct MiddlewareWidths {
+    name: usize,
+    detail: usize,
+    declared_at: usize,
+    provider: usize,
+}
+
 fn route_widths() -> RouteWidths {
     let terminal = terminal_width();
     if terminal < 110 {
@@ -437,6 +519,7 @@ fn route_widths() -> RouteWidths {
             name: 16,
             action: 20,
             middleware: 14,
+            patterns: 16,
             registration: 18,
         }
     } else if terminal < 150 {
@@ -445,6 +528,7 @@ fn route_widths() -> RouteWidths {
             name: 20,
             action: 28,
             middleware: 18,
+            patterns: 18,
             registration: 24,
         }
     } else {
@@ -453,7 +537,34 @@ fn route_widths() -> RouteWidths {
             name: 26,
             action: 42,
             middleware: 24,
+            patterns: 22,
             registration: 32,
+        }
+    }
+}
+
+fn middleware_widths() -> MiddlewareWidths {
+    let terminal = terminal_width();
+    if terminal < 110 {
+        MiddlewareWidths {
+            name: 14,
+            detail: 22,
+            declared_at: 18,
+            provider: 18,
+        }
+    } else if terminal < 150 {
+        MiddlewareWidths {
+            name: 18,
+            detail: 34,
+            declared_at: 24,
+            provider: 24,
+        }
+    } else {
+        MiddlewareWidths {
+            name: 22,
+            detail: 44,
+            declared_at: 32,
+            provider: 30,
         }
     }
 }
@@ -685,4 +796,77 @@ fn config_source_kind_cell(source: &ConfigSource, width: usize) -> Cell {
         cell = cell.fg(Color::DarkGrey);
     }
     cell
+}
+
+fn display_middleware(route: &RouteEntry) -> String {
+    let values = if route.resolved_middleware.is_empty() {
+        &route.middleware
+    } else {
+        &route.resolved_middleware
+    };
+    join_or_dash(values)
+}
+
+fn display_patterns(route: &RouteEntry) -> String {
+    if route.parameter_patterns.is_empty() {
+        return "-".to_string();
+    }
+
+    route
+        .parameter_patterns
+        .iter()
+        .map(|(name, pattern)| format!("{name}={pattern}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn middleware_alias_row(alias: &MiddlewareAlias, widths: &MiddlewareWidths) -> Row {
+    Row::from(vec![
+        wrap_cell(&alias.name, widths.name),
+        wrap_cell(&alias.target, widths.detail),
+        wrap_cell(
+            &format!(
+                "{}:{}:{}",
+                alias.source.declared_in.display(),
+                alias.source.line,
+                alias.source.column
+            ),
+            widths.declared_at,
+        ),
+        wrap_cell(&alias.source.provider_class, widths.provider),
+    ])
+}
+
+fn middleware_group_row(group: &MiddlewareGroup, widths: &MiddlewareWidths) -> Row {
+    Row::from(vec![
+        wrap_cell(&group.name, widths.name),
+        wrap_cell(&group.members.join(","), widths.detail),
+        wrap_cell(
+            &format!(
+                "{}:{}:{}",
+                group.source.declared_in.display(),
+                group.source.line,
+                group.source.column
+            ),
+            widths.declared_at,
+        ),
+        wrap_cell(&group.source.provider_class, widths.provider),
+    ])
+}
+
+fn route_pattern_row(pattern: &RoutePattern, widths: &MiddlewareWidths) -> Row {
+    Row::from(vec![
+        wrap_cell(&pattern.parameter, widths.name),
+        wrap_cell(&pattern.pattern, widths.detail),
+        wrap_cell(
+            &format!(
+                "{}:{}:{}",
+                pattern.source.declared_in.display(),
+                pattern.source.line,
+                pattern.source.column
+            ),
+            widths.declared_at,
+        ),
+        wrap_cell(&pattern.source.provider_class, widths.provider),
+    ])
 }
