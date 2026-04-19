@@ -1,0 +1,15 @@
+{
+  "name": "acme/local-package",
+  "autoload": {
+    "psr-4": {
+      "Acme\\LocalPackage\\": "src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Acme\\LocalPackage\\LocalPackageServiceProvider"
+      ]
+    }
+  }
+}

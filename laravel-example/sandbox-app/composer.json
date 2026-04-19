@@ -1,0 +1,23 @@
+{
+  "name": "sandbox/app",
+  "description": "Synthetic Laravel-style fixture app for rust-php analyzers",
+  "require": {
+    "php": "^8.2",
+    "acme/local-package": "*",
+    "vendor/missing-package": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/",
+      "Acme\\LocalPackage\\": "packages/acme/local-package/src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "Acme\\LocalPackage\\LocalPackageServiceProvider",
+        "Vendor\\MissingPackage\\MissingPackageServiceProvider"
+      ]
+    }
+  }
+}
