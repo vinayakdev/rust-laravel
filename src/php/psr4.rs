@@ -96,6 +96,24 @@ pub fn resolve_class_file(class: &str, mappings: &[Psr4Mapping]) -> Option<PathB
     None
 }
 
+pub fn resolve_namespace_dir(namespace: &str, mappings: &[Psr4Mapping]) -> Option<PathBuf> {
+    let normalized = namespace.trim_start_matches('\\').trim_end_matches('\\');
+    for mapping in mappings {
+        if let Some(rest) = normalized.strip_prefix(mapping.prefix.trim_end_matches('\\')) {
+            let rest = rest.trim_start_matches('\\');
+            let path = if rest.is_empty() {
+                mapping.base_dir.clone()
+            } else {
+                mapping.base_dir.join(rest.replace('\\', "/"))
+            };
+            if path.is_dir() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 pub fn package_name_for_source(path: &Option<PathBuf>, mappings: &[Psr4Mapping]) -> Option<String> {
     let path = path.as_ref()?;
     for mapping in mappings {

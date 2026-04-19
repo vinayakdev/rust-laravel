@@ -2,3 +2,4 @@
 /target/
 laravel-example/.DS_Store
 /test/
+/graphify-out

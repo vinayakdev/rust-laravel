@@ -1,4 +1,5 @@
 use comfy_table::{Cell, Color, Row};
+use std::fmt::Write as _;
 
 use crate::types::{RouteEntry, RouteRegistration};
 use super::{header, join_or_dash, location_cell, new_table, terminal_width, wrap_cell};
@@ -7,8 +8,13 @@ struct RouteWidths { uri: usize, name: usize, action: usize, middleware: usize, 
 struct RouteSourceWidths { route: usize, uri: usize, provider: usize, declared_at: usize, kind: usize }
 
 pub fn print_route_table(routes: &[RouteEntry]) {
-    if routes.is_empty() { println!("No routes found."); return; }
+    println!("{}", render_route_table(routes));
+}
 
+pub fn render_route_table(routes: &[RouteEntry]) -> String {
+    if routes.is_empty() { return "No routes found.".to_string(); }
+
+    let mut output = String::new();
     let widths = route_widths();
     let mut current_file = None;
     let mut table = new_table();
@@ -16,8 +22,11 @@ pub fn print_route_table(routes: &[RouteEntry]) {
     for route in routes {
         let file = route.file.as_path();
         if current_file != Some(file) {
-            if current_file.is_some() { println!("{table}"); println!(); table = new_table(); }
-            println!("{}", file.display());
+            if current_file.is_some() {
+                let _ = writeln!(output, "{table}\n");
+                table = new_table();
+            }
+            let _ = writeln!(output, "{}", file.display());
             table.set_header(vec![
                 header("Line:Col"), header("Method"), header("Uri"), header("Name"),
                 header("Action"), header("Middleware"), header("Patterns"), header("Registered Via"),
@@ -35,12 +44,18 @@ pub fn print_route_table(routes: &[RouteEntry]) {
             wrap_cell(&registration_summary(&route.registration), widths.registration),
         ]));
     }
-    println!("{table}");
+    let _ = write!(output, "{table}");
+    output
 }
 
 pub fn print_route_source_table(routes: &[RouteEntry]) {
-    if routes.is_empty() { println!("No routes found."); return; }
+    println!("{}", render_route_source_table(routes));
+}
 
+pub fn render_route_source_table(routes: &[RouteEntry]) -> String {
+    if routes.is_empty() { return "No routes found.".to_string(); }
+
+    let mut output = String::new();
     let widths = route_source_widths();
     let mut table = new_table();
     table.set_header(vec![
@@ -61,7 +76,8 @@ pub fn print_route_source_table(routes: &[RouteEntry]) {
             kind_cell(&route.registration, widths.kind),
         ]));
     }
-    println!("{table}");
+    let _ = write!(output, "{table}");
+    output
 }
 
 fn display_middleware(route: &RouteEntry) -> String {

@@ -2,6 +2,7 @@ pub mod configs;
 pub mod middleware;
 pub mod providers;
 pub mod routes;
+pub mod views;
 
 use comfy_table::{
     Cell, CellAlignment, ColumnConstraint, ContentArrangement, Table,

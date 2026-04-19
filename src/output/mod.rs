@@ -2,7 +2,7 @@ mod json;
 pub mod text;
 
 use crate::types::{
-    ConfigReport, MiddlewareReport, OutputMode, ProviderReport, RouteReport,
+    ConfigReport, MiddlewareReport, OutputMode, ProviderReport, RouteReport, ViewReport,
 };
 
 #[allow(dead_code)]
@@ -52,5 +52,12 @@ pub fn print_middlewares(report: &MiddlewareReport, mode: OutputMode) -> Result<
     match mode {
         OutputMode::Json => json::print_middlewares(report),
         OutputMode::Text => { text::middleware::print_middleware_tables(report); Ok(()) }
+    }
+}
+
+pub fn print_views(report: &ViewReport, mode: OutputMode) -> Result<(), String> {
+    match mode {
+        OutputMode::Json => json::print_views(report),
+        OutputMode::Text => { text::views::print_view_report(report); Ok(()) }
     }
 }

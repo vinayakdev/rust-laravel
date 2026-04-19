@@ -8,6 +8,9 @@ pub enum Command {
     ConfigList,
     ConfigSources,
     ProviderList,
+    ViewList,
+    DebugBrowse,
+    DebugWeb,
 }
 
 pub struct CliOptions {
@@ -33,6 +36,9 @@ where
             "config:list" => command = Command::ConfigList,
             "config:sources" => command = Command::ConfigSources,
             "provider:list" => command = Command::ProviderList,
+            "view:list" => command = Command::ViewList,
+            "debug:browse" => command = Command::DebugBrowse,
+            "debug:web" => command = Command::DebugWeb,
             "--json" => json = OutputMode::Json,
             "--project" => {
                 let value = iter
@@ -61,6 +67,9 @@ fn help_text() -> String {
         "  rust-php config:list [--project <path-or-name>] [--json]",
         "  rust-php config:sources [--project <path-or-name>] [--json]",
         "  rust-php provider:list [--project <path-or-name>] [--json]",
+        "  rust-php view:list [--project <path-or-name>] [--json]",
+        "  rust-php debug:browse [--project <path-or-name>]",
+        "  rust-php debug:web [--project <path-or-name>]",
         "",
         "Project resolution:",
         "  1. If --project is a real path, use it.",
@@ -74,6 +83,9 @@ fn help_text() -> String {
         "  cargo run -- middleware:list --project sandbox-app",
         "  cargo run -- config:sources --project sandbox-app",
         "  cargo run -- provider:list --project sandbox-app",
+        "  cargo run -- view:list --project starter-demo",
+        "  cargo run -- debug:browse",
+        "  cargo run -- debug:web",
         "  cargo run -- route:list --project laravel-example/demo-app",
         "  cargo run -- route:list --project demo-app --json",
         "  ./target/release/rust-php config:list --project demo-app",

@@ -1,14 +1,20 @@
 use crate::types::{MiddlewareAlias, MiddlewareGroup, MiddlewareReport, RoutePattern};
+use std::fmt::Write as _;
 use super::{header, new_table, terminal_width, wrap_cell};
 
 struct MiddlewareWidths { name: usize, detail: usize, declared_at: usize, provider: usize }
 
 pub fn print_middleware_tables(report: &MiddlewareReport) {
-    println!("Project: {}", report.project_name);
+    println!("{}", render_middleware_tables(report));
+}
+
+pub fn render_middleware_tables(report: &MiddlewareReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Project: {}", report.project_name);
 
     if report.aliases.is_empty() && report.groups.is_empty() && report.patterns.is_empty() {
-        println!("No middleware or route patterns found.");
-        return;
+        let _ = write!(output, "No middleware or route patterns found.");
+        return output;
     }
 
     let widths = middleware_widths();
@@ -19,9 +25,8 @@ pub fn print_middleware_tables(report: &MiddlewareReport) {
         for alias in &report.aliases {
             table.add_row(alias_row(alias, &widths));
         }
-        println!("Aliases");
-        println!("{table}");
-        println!();
+        let _ = writeln!(output, "Aliases");
+        let _ = writeln!(output, "{table}\n");
     }
 
     if !report.groups.is_empty() {
@@ -30,9 +35,8 @@ pub fn print_middleware_tables(report: &MiddlewareReport) {
         for group in &report.groups {
             table.add_row(group_row(group, &widths));
         }
-        println!("Groups");
-        println!("{table}");
-        println!();
+        let _ = writeln!(output, "Groups");
+        let _ = writeln!(output, "{table}\n");
     }
 
     if !report.patterns.is_empty() {
@@ -41,9 +45,10 @@ pub fn print_middleware_tables(report: &MiddlewareReport) {
         for pattern in &report.patterns {
             table.add_row(pattern_row(pattern, &widths));
         }
-        println!("Patterns");
-        println!("{table}");
+        let _ = writeln!(output, "Patterns");
+        let _ = write!(output, "{table}");
     }
+    output
 }
 
 fn alias_row(alias: &MiddlewareAlias, w: &MiddlewareWidths) -> comfy_table::Row {

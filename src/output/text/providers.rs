@@ -1,4 +1,5 @@
 use comfy_table::{Cell, Color};
+use std::fmt::Write as _;
 
 use crate::types::{ProviderEntry, ProviderReport};
 use super::{header, location_cell, new_table, terminal_width, wrap_cell};
@@ -9,8 +10,13 @@ struct ProviderWidths {
 }
 
 pub fn print_provider_table(report: &ProviderReport) {
-    if report.providers.is_empty() { println!("No providers found."); return; }
+    println!("{}", render_provider_table(report));
+}
 
+pub fn render_provider_table(report: &ProviderReport) -> String {
+    if report.providers.is_empty() { return "No providers found.".to_string(); }
+
+    let mut output = String::new();
     let widths = provider_widths();
     let mut table = new_table();
     table.set_header(vec![
@@ -22,10 +28,14 @@ pub fn print_provider_table(report: &ProviderReport) {
         table.add_row(provider_row(provider, &widths));
     }
 
-    println!("Project: {}", report.project_name);
-    println!("Declared providers: {}", report.provider_count);
-    println!("{table}");
-    println!("Legend: green = source resolved, red = source missing, grey = not package-backed");
+    let _ = writeln!(output, "Project: {}", report.project_name);
+    let _ = writeln!(output, "Declared providers: {}", report.provider_count);
+    let _ = writeln!(output, "{table}");
+    let _ = write!(
+        output,
+        "Legend: green = source resolved, red = source missing, grey = not package-backed"
+    );
+    output
 }
 
 fn provider_row(provider: &ProviderEntry, widths: &ProviderWidths) -> comfy_table::Row {

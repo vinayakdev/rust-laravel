@@ -1,4 +1,5 @@
 use comfy_table::{Cell, Color, Row};
+use std::fmt::Write as _;
 
 use crate::types::{ConfigItem, ConfigReport, ConfigSource};
 use super::{header, location_cell, new_table, terminal_width, wrap_cell};
@@ -7,8 +8,13 @@ struct ConfigWidths { key: usize, env_key: usize, default: usize, env_value: usi
 struct ConfigSourceWidths { config: usize, env_key: usize, provider: usize, declared_at: usize, kind: usize }
 
 pub fn print_config_table(report: &ConfigReport) {
-    if report.items.is_empty() { println!("No config items found."); return; }
+    println!("{}", render_config_table(report));
+}
 
+pub fn render_config_table(report: &ConfigReport) -> String {
+    if report.items.is_empty() { return "No config items found.".to_string(); }
+
+    let mut output = String::new();
     let widths = config_widths();
     let mut current_file = None;
     let mut table = new_table();
@@ -16,8 +22,11 @@ pub fn print_config_table(report: &ConfigReport) {
     for item in &report.items {
         let file = item.file.as_path();
         if current_file != Some(file) {
-            if current_file.is_some() { println!("{table}"); println!(); table = new_table(); }
-            println!("{}", file.display());
+            if current_file.is_some() {
+                let _ = writeln!(output, "{table}\n");
+                table = new_table();
+            }
+            let _ = writeln!(output, "{}", file.display());
             table.set_header(vec![
                 header("Line:Col"), header("Key"), header("Env Key"),
                 header("Default"), header("Env Value"), header("Registered Via"),
@@ -27,13 +36,22 @@ pub fn print_config_table(report: &ConfigReport) {
         table.add_row(config_row(item, &widths));
     }
 
-    println!("Legend: green = env value present, yellow = default-only, red = env key missing from .env");
-    println!("{table}");
+    let _ = writeln!(
+        output,
+        "Legend: green = env value present, yellow = default-only, red = env key missing from .env"
+    );
+    let _ = write!(output, "{table}");
+    output
 }
 
 pub fn print_config_source_table(report: &ConfigReport) {
-    if report.items.is_empty() { println!("No config items found."); return; }
+    println!("{}", render_config_source_table(report));
+}
 
+pub fn render_config_source_table(report: &ConfigReport) -> String {
+    if report.items.is_empty() { return "No config items found.".to_string(); }
+
+    let mut output = String::new();
     let widths = config_source_widths();
     let mut table = new_table();
     table.set_header(vec![
@@ -50,7 +68,8 @@ pub fn print_config_source_table(report: &ConfigReport) {
             source_kind_cell(&item.source, widths.kind),
         ]));
     }
-    println!("{table}");
+    let _ = write!(output, "{table}");
+    output
 }
 
 fn config_row(item: &ConfigItem, widths: &ConfigWidths) -> Row {
