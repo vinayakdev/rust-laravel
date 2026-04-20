@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Segoe UI", sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --color-background: #f4efe5;
+  --color-foreground: #211a12;
+  --color-card: rgba(255, 252, 247, 0.88);
+  --color-card-foreground: #211a12;
+  --color-popover: #fffdf9;
+  --color-popover-foreground: #211a12;
+  --color-primary: #145f5a;
+  --color-primary-foreground: #f6fffd;
+  --color-secondary: #e7ddcb;
+  --color-secondary-foreground: #382d20;
+  --color-muted: #efe7d8;
+  --color-muted-foreground: #6b5b4b;
+  --color-accent: #dbb36d;
+  --color-accent-foreground: #322314;
+  --color-border: rgba(60, 43, 22, 0.12);
+  --color-input: rgba(60, 43, 22, 0.12);
+  --color-ring: rgba(20, 95, 90, 0.38);
+  --radius: 1.2rem;
+}
+
+html, body, #root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(20, 95, 90, 0.13), transparent 22rem),
+    radial-gradient(circle at bottom right, rgba(183, 133, 59, 0.18), transparent 28rem),
+    linear-gradient(180deg, #f5f0e8, #eee5d7);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
+}

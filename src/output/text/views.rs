@@ -7,6 +7,7 @@ struct ViewWidths {
     name: usize,
     file: usize,
     kind: usize,
+    vars: usize,
     source: usize,
 }
 
@@ -15,6 +16,7 @@ struct ComponentWidths {
     kind: usize,
     class_name: usize,
     view_name: usize,
+    vars: usize,
     source: usize,
 }
 
@@ -52,6 +54,7 @@ fn render_views_table(views: &[ViewEntry]) -> String {
         header("View"),
         header("File"),
         header("Kind"),
+        header("Inputs"),
         header("Declared In"),
     ]);
 
@@ -60,6 +63,7 @@ fn render_views_table(views: &[ViewEntry]) -> String {
             wrap_cell(&view.name, widths.name),
             wrap_cell(&view.file.display().to_string(), widths.file),
             wrap_cell(&view.kind, widths.kind),
+            wrap_cell(&display_variables(&view.props, &view.variables), widths.vars),
             wrap_cell(
                 &format!(
                     "{}:{}:{}",
@@ -87,6 +91,7 @@ fn render_blade_components_table(components: &[BladeComponentEntry]) -> String {
         header("Kind"),
         header("Class"),
         header("View"),
+        header("Props"),
         header("Declared In"),
     ]);
 
@@ -96,6 +101,7 @@ fn render_blade_components_table(components: &[BladeComponentEntry]) -> String {
             wrap_cell(&component.kind, widths.kind),
             wrap_cell(component.class_name.as_deref().unwrap_or("-"), widths.class_name),
             wrap_cell(component.view_name.as_deref().unwrap_or("-"), widths.view_name),
+            wrap_cell(&display_list(&component.props), widths.vars),
             wrap_cell(
                 &format!(
                     "{}:{}:{}",
@@ -123,6 +129,7 @@ fn render_livewire_components_table(components: &[LivewireComponentEntry]) -> St
         header("Kind"),
         header("Class"),
         header("View"),
+        header("State"),
         header("Declared In"),
     ]);
 
@@ -132,6 +139,7 @@ fn render_livewire_components_table(components: &[LivewireComponentEntry]) -> St
             wrap_cell(&component.kind, widths.kind),
             wrap_cell(component.class_name.as_deref().unwrap_or("-"), widths.class_name),
             wrap_cell(component.view_name.as_deref().unwrap_or("-"), widths.view_name),
+            wrap_cell(&display_list(&component.state), widths.vars),
             wrap_cell(
                 &format!(
                     "{}:{}:{}",
@@ -150,21 +158,53 @@ fn render_livewire_components_table(components: &[LivewireComponentEntry]) -> St
 fn view_widths() -> ViewWidths {
     let t = terminal_width();
     if t < 110 {
-        ViewWidths { name: 20, file: 20, kind: 16, source: 20 }
+        ViewWidths { name: 18, file: 18, kind: 14, vars: 18, source: 18 }
     } else if t < 150 {
-        ViewWidths { name: 28, file: 28, kind: 20, source: 28 }
+        ViewWidths { name: 24, file: 24, kind: 18, vars: 24, source: 24 }
     } else {
-        ViewWidths { name: 36, file: 42, kind: 24, source: 36 }
+        ViewWidths { name: 30, file: 34, kind: 20, vars: 32, source: 30 }
     }
 }
 
 fn component_widths() -> ComponentWidths {
     let t = terminal_width();
     if t < 110 {
-        ComponentWidths { component: 22, kind: 16, class_name: 18, view_name: 18, source: 20 }
+        ComponentWidths { component: 18, kind: 14, class_name: 16, view_name: 16, vars: 18, source: 18 }
     } else if t < 150 {
-        ComponentWidths { component: 30, kind: 20, class_name: 24, view_name: 24, source: 28 }
+        ComponentWidths { component: 24, kind: 18, class_name: 20, view_name: 20, vars: 22, source: 22 }
     } else {
-        ComponentWidths { component: 38, kind: 24, class_name: 32, view_name: 32, source: 36 }
+        ComponentWidths { component: 28, kind: 20, class_name: 24, view_name: 24, vars: 28, source: 26 }
     }
+}
+
+fn display_variables(
+    props: &[crate::types::ViewVariable],
+    variables: &[crate::types::ViewVariable],
+) -> String {
+    let mut parts = Vec::new();
+    if !props.is_empty() {
+        parts.push(format!("props={}", display_list(props)));
+    }
+    if !variables.is_empty() {
+        parts.push(format!("vars={}", display_list(variables)));
+    }
+    if parts.is_empty() {
+        "-".to_string()
+    } else {
+        parts.join(" | ")
+    }
+}
+
+fn display_list(items: &[crate::types::ViewVariable]) -> String {
+    if items.is_empty() {
+        return "-".to_string();
+    }
+    items
+        .iter()
+        .map(|item| match &item.default_value {
+            Some(default) => format!("{}={}", item.name, default),
+            None => item.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

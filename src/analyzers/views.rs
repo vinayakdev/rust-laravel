@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use php_parser::ast::{ClassMember, Expr, ExprId, Stmt, UseKind};
 use php_parser::lexer::Lexer;
 use php_parser::parser::Parser;
+use php_parser::span::LineInfo;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
 use crate::types::{
     BladeComponentEntry, LivewireComponentEntry, ProviderEntry, ViewEntry, ViewReport, ViewSource,
+    ViewUsage, ViewVariable,
 };
 
 pub fn analyze(project: &LaravelProject) -> Result<ViewReport, String> {
@@ -28,6 +30,9 @@ pub fn analyze(project: &LaravelProject) -> Result<ViewReport, String> {
     views.extend(registrations.views);
     blade_components.extend(registrations.blade_components);
     livewire_components.extend(registrations.livewire_components);
+
+    let usage_map = collect_view_usages(project)?;
+    apply_view_usages(&mut views, usage_map);
 
     dedup_views(&mut views);
     dedup_blade_components(&mut blade_components);
@@ -72,6 +77,9 @@ fn collect_app_views(project: &LaravelProject) -> Result<Vec<ViewEntry>, String>
             } else {
                 "app-view".to_string()
             },
+            props: parse_blade_props(&file),
+            variables: Vec::new(),
+            usages: Vec::new(),
             source: ViewSource {
                 declared_in: strip_root(&project.root, &file),
                 line: 1,
@@ -99,6 +107,7 @@ fn collect_default_blade_components(
                 class_file: Some(strip_root(&project.root, &file)),
                 view_name: Some(view_name.clone()),
                 view_file: conventional_view_file(project, &view_name),
+                props: parse_class_component_props(&file),
                 source: ViewSource {
                     declared_in: strip_root(&project.root, &file),
                     line: 1,
@@ -120,6 +129,7 @@ fn collect_default_blade_components(
                 class_file: None,
                 view_name: Some(blade_view_name(&project.root.join("resources/views"), &file, None)),
                 view_file: Some(strip_root(&project.root, &file)),
+                props: parse_blade_props(&file),
                 source: ViewSource {
                     declared_in: strip_root(&project.root, &file),
                     line: 1,
@@ -156,6 +166,7 @@ fn collect_conventional_livewire_components(
                 class_file: Some(strip_root(&project.root, &file)),
                 view_name,
                 view_file,
+                state: parse_livewire_state(&file),
                 source: ViewSource {
                     declared_in: strip_root(&project.root, &file),
                     line: 1,
@@ -279,6 +290,9 @@ fn visit_provider_expr(
                                 name: blade_view_name(&path, &file, Some(&namespace)),
                                 file: strip_root(&project.root, &file),
                                 kind: "provider-view-namespace".to_string(),
+                                props: parse_blade_props(&file),
+                                variables: Vec::new(),
+                                usages: Vec::new(),
                                 source: source_ref.clone(),
                             });
                         }
@@ -288,14 +302,15 @@ fn visit_provider_expr(
                             for file in collect_blade_files(&components_dir) {
                                 blade_components.push(BladeComponentEntry {
                                     component: derive_component_alias(&components_dir, &file, Some(&namespace)),
-                                    kind: "blade-anonymous-package".to_string(),
-                                    class_name: None,
-                                    class_file: None,
-                                    view_name: Some(blade_view_name(&path, &file, Some(&namespace))),
-                                    view_file: Some(strip_root(&project.root, &file)),
-                                    source: source_ref.clone(),
-                                });
-                            }
+                                kind: "blade-anonymous-package".to_string(),
+                                class_name: None,
+                                class_file: None,
+                                view_name: Some(blade_view_name(&path, &file, Some(&namespace))),
+                                view_file: Some(strip_root(&project.root, &file)),
+                                props: parse_blade_props(&file),
+                                source: source_ref.clone(),
+                            });
+                        }
                         }
                     }
                 }
@@ -370,6 +385,7 @@ fn visit_provider_expr(
                                 class_file: None,
                                 view_name: None,
                                 view_file: Some(strip_root(&project.root, &file)),
+                                props: parse_blade_props(&file),
                                 source: source_ref.clone(),
                             });
                         }
@@ -472,6 +488,10 @@ fn build_blade_component_from_class(
         .as_ref()
         .and_then(|name| resolve_class_file(name, mappings))
         .map(|file| strip_root(&project.root, &file));
+    let props = class_file
+        .as_ref()
+        .map(|relative| parse_class_component_props(&project.root.join(relative)))
+        .unwrap_or_default();
     let view_name = class_name
         .as_ref()
         .and_then(|name| resolve_render_view_name(project, name, mappings));
@@ -487,6 +507,7 @@ fn build_blade_component_from_class(
         view_name,
         view_file,
         source: source.clone(),
+        props,
     }
 }
 
@@ -502,6 +523,10 @@ fn build_livewire_component_from_class(
         .as_ref()
         .and_then(|name| resolve_class_file(name, mappings))
         .map(|file| strip_root(&project.root, &file));
+    let state = class_file
+        .as_ref()
+        .map(|relative| parse_livewire_state(&project.root.join(relative)))
+        .unwrap_or_default();
     let view_name = class_name
         .as_ref()
         .and_then(|name| resolve_render_view_name(project, name, mappings))
@@ -518,7 +543,465 @@ fn build_livewire_component_from_class(
         view_name,
         view_file,
         source: source.clone(),
+        state,
     }
+}
+
+fn collect_view_usages(project: &LaravelProject) -> Result<HashMap<String, Vec<ViewUsage>>, String> {
+    let mut usage_map: HashMap<String, Vec<ViewUsage>> = HashMap::new();
+
+    for root in [project.root.join("app"), project.root.join("routes"), project.root.join("packages")] {
+        if !root.is_dir() {
+            continue;
+        }
+        for file in collect_php_files(&root) {
+            for (view_name, usage) in extract_view_usages_from_php(project, &file)? {
+                usage_map.entry(view_name).or_default().push(usage);
+            }
+        }
+    }
+
+    Ok(usage_map)
+}
+
+fn extract_view_usages_from_php(
+    project: &LaravelProject,
+    file: &Path,
+) -> Result<Vec<(String, ViewUsage)>, String> {
+    let source = fs::read(file).map_err(|e| format!("failed to read {}: {e}", file.display()))?;
+    let arena = Bump::new();
+    let lexer = Lexer::new(&source);
+    let mut parser = Parser::new(lexer, &arena);
+    let program = parser.parse_program();
+    if !program.errors.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut usages = Vec::new();
+    collect_view_usages_from_stmts(program.statements, &source, project, file, &mut usages);
+    Ok(usages)
+}
+
+fn collect_view_usages_from_stmts(
+    stmts: &[php_parser::ast::StmtId<'_>],
+    source: &[u8],
+    project: &LaravelProject,
+    file: &Path,
+    out: &mut Vec<(String, ViewUsage)>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Return { expr: Some(expr), .. } => {
+                if let Some((name, variables)) = extract_view_call(*expr, source) {
+                    out.push((
+                        name,
+                        ViewUsage {
+                            kind: "view-call".to_string(),
+                            source: usage_source(project, file, stmt.span().line_info(source)),
+                            variables,
+                        },
+                    ));
+                }
+            }
+            Stmt::Expression { expr, .. } => {
+                if let Some((name, variables)) = extract_route_view_call(*expr, source) {
+                    out.push((
+                        name,
+                        ViewUsage {
+                            kind: "route-view".to_string(),
+                            source: usage_source(project, file, stmt.span().line_info(source)),
+                            variables,
+                        },
+                    ));
+                }
+            }
+            Stmt::Block { statements, .. }
+            | Stmt::Declare { body: statements, .. } => {
+                collect_view_usages_from_stmts(statements, source, project, file, out);
+            }
+            Stmt::Namespace { body: Some(body), .. } => {
+                collect_view_usages_from_stmts(body, source, project, file, out);
+            }
+            Stmt::Class { members, .. }
+            | Stmt::Interface { members, .. }
+            | Stmt::Trait { members, .. }
+            | Stmt::Enum { members, .. } => {
+                for member in members.iter().copied() {
+                    if let ClassMember::Method { body, .. } = member {
+                        collect_view_usages_from_stmts(body, source, project, file, out);
+                    }
+                }
+            }
+            Stmt::If { then_block, else_block, .. } => {
+                collect_view_usages_from_stmts(then_block, source, project, file, out);
+                if let Some(else_block) = else_block {
+                    collect_view_usages_from_stmts(else_block, source, project, file, out);
+                }
+            }
+            Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::Foreach { body, .. }
+            | Stmt::Try { body, .. } => {
+                collect_view_usages_from_stmts(body, source, project, file, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn usage_source(
+    project: &LaravelProject,
+    file: &Path,
+    line_info: Option<LineInfo>,
+) -> ViewSource {
+    ViewSource {
+        declared_in: strip_root(&project.root, file),
+        line: line_info.map_or(1, |info| info.line),
+        column: line_info.map_or(1, |info| info.column),
+        provider_class: None,
+    }
+}
+
+fn extract_view_call(expr: ExprId<'_>, source: &[u8]) -> Option<(String, Vec<ViewVariable>)> {
+    match expr {
+        Expr::Call { func, args, .. } => {
+            let func_name = expr_name(func, source)?;
+            if func_name == "view" || func_name == "\\view" {
+                let view_name = args.first().and_then(|a| expr_to_string(a.value, source))?;
+                let variables = args.get(1).map(|arg| extract_passed_variables(arg.value, source)).unwrap_or_default();
+                Some((view_name, variables))
+            } else if func_name == "response" || func_name == "\\response" {
+                None
+            } else {
+                None
+            }
+        }
+        Expr::MethodCall { target, method, args, .. } => {
+            let method_name = expr_name(method, source)?;
+            if method_name == "view" {
+                if matches!(target, Expr::Call { .. }) {
+                    let view_name = args.first().and_then(|a| expr_to_string(a.value, source))?;
+                    let variables = args.get(1).map(|arg| extract_passed_variables(arg.value, source)).unwrap_or_default();
+                    return Some((view_name, variables));
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn extract_route_view_call(expr: ExprId<'_>, source: &[u8]) -> Option<(String, Vec<ViewVariable>)> {
+    let Expr::StaticCall { class, method, args, .. } = expr else {
+        return None;
+    };
+    if expr_name(class, source).as_deref() != Some("Route") {
+        return None;
+    }
+    if expr_name(method, source).as_deref() != Some("view") {
+        return None;
+    }
+    let view_name = args.get(1).and_then(|a| expr_to_string(a.value, source))?;
+    let variables = args.get(2).map(|arg| extract_passed_variables(arg.value, source)).unwrap_or_default();
+    Some((view_name, variables))
+}
+
+fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable> {
+    match expr {
+        Expr::Array { items, .. } => items
+            .iter()
+            .filter_map(|item| {
+                let key = item.key.and_then(|key| expr_to_string(key, source)).or_else(|| {
+                    item.key.map(|key| crate::php::ast::span_text(key.span(), source).trim_matches('\'').trim_matches('"').to_string())
+                })?;
+                Some(ViewVariable {
+                    name: key,
+                    default_value: expr_literal_default(item.value, source),
+                })
+            })
+            .collect(),
+        Expr::Call { func, args, .. } => {
+            let func_name = expr_name(func, source).unwrap_or_default();
+            if func_name == "compact" || func_name == "\\compact" {
+                return args
+                    .iter()
+                    .filter_map(|arg| expr_to_string(arg.value, source))
+                    .map(|name| ViewVariable { name, default_value: None })
+                    .collect();
+            }
+            if func_name == "array_merge" || func_name == "\\array_merge" {
+                let mut merged = Vec::new();
+                for arg in *args {
+                    merged.extend(extract_passed_variables(arg.value, source));
+                }
+                dedup_variables(&mut merged);
+                return merged;
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn expr_literal_default(expr: ExprId<'_>, source: &[u8]) -> Option<String> {
+    let raw = crate::php::ast::span_text(expr.span(), source).trim().to_string();
+    if raw.is_empty() || raw.starts_with('$') {
+        return None;
+    }
+    Some(raw)
+}
+
+fn apply_view_usages(views: &mut [ViewEntry], usage_map: HashMap<String, Vec<ViewUsage>>) {
+    for view in views {
+        if let Some(mut usages) = usage_map.get(&view.name).cloned() {
+            for usage in &mut usages {
+                dedup_variables(&mut usage.variables);
+            }
+            let mut variables = usages
+                .iter()
+                .flat_map(|usage| usage.variables.clone())
+                .collect::<Vec<_>>();
+            dedup_variables(&mut variables);
+            view.variables = variables;
+            view.usages = usages;
+        }
+        dedup_variables(&mut view.props);
+    }
+}
+
+fn parse_blade_props(file: &Path) -> Vec<ViewVariable> {
+    let Ok(source) = fs::read_to_string(file) else {
+        return Vec::new();
+    };
+    let Some(start) = source.find("@props(") else {
+        return Vec::new();
+    };
+    let body = extract_balanced_segment(&source[start + "@props".len()..], '(', ')');
+    let Some(body) = body else {
+        return Vec::new();
+    };
+    let trimmed = body.trim();
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return Vec::new();
+    }
+    parse_array_like_variables(&trimmed[1..trimmed.len() - 1])
+}
+
+fn parse_class_component_props(file: &Path) -> Vec<ViewVariable> {
+    let Ok(source) = fs::read_to_string(file) else {
+        return Vec::new();
+    };
+    let mut props = parse_public_properties(&source);
+    props.extend(parse_constructor_promoted_properties(&source));
+    dedup_variables(&mut props);
+    props
+}
+
+fn parse_livewire_state(file: &Path) -> Vec<ViewVariable> {
+    let Ok(source) = fs::read_to_string(file) else {
+        return Vec::new();
+    };
+    let mut props = parse_public_properties(&source);
+    dedup_variables(&mut props);
+    props
+}
+
+fn parse_public_properties(source: &str) -> Vec<ViewVariable> {
+    let mut props = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("public ") || trimmed.contains(" function ") || trimmed.starts_with("public function") {
+            continue;
+        }
+        if let Some(dollar) = trimmed.find('$') {
+            let after = &trimmed[dollar + 1..];
+            let name: String = after
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            let default_value = trimmed
+                .split_once('=')
+                .map(|(_, value)| value.trim().trim_end_matches(';').trim().to_string())
+                .filter(|value| !value.is_empty());
+            props.push(ViewVariable { name, default_value });
+        }
+    }
+    props
+}
+
+fn parse_constructor_promoted_properties(source: &str) -> Vec<ViewVariable> {
+    let Some(start) = source.find("function __construct") else {
+        return Vec::new();
+    };
+    let Some(body) = extract_balanced_segment(&source[start..], '(', ')') else {
+        return Vec::new();
+    };
+    let mut props = Vec::new();
+    for param in split_top_level(body, ',') {
+        let trimmed = param.trim();
+        if !(trimmed.contains("public ") || trimmed.starts_with("public") || trimmed.contains("public readonly")) {
+            continue;
+        }
+        if let Some(dollar) = trimmed.find('$') {
+            let after = &trimmed[dollar + 1..];
+            let name: String = after
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            let default_value = trimmed
+                .split_once('=')
+                .map(|(_, value)| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            props.push(ViewVariable { name, default_value });
+        }
+    }
+    props
+}
+
+fn parse_array_like_variables(body: &str) -> Vec<ViewVariable> {
+    split_top_level(body, ',')
+        .into_iter()
+        .filter_map(|entry| {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            if let Some((name, default)) = trimmed.split_once("=>") {
+                Some(ViewVariable {
+                    name: trim_quotes(name.trim()).to_string(),
+                    default_value: Some(default.trim().to_string()),
+                })
+            } else {
+                Some(ViewVariable {
+                    name: trim_quotes(trimmed).to_string(),
+                    default_value: None,
+                })
+            }
+        })
+        .collect()
+}
+
+fn extract_balanced_segment(source: &str, open: char, close: char) -> Option<&str> {
+    let start = source.find(open)?;
+    let mut depth = 0usize;
+    let mut start_index = None;
+    for (index, ch) in source.char_indices().skip(start) {
+        if ch == open {
+            depth += 1;
+            if depth == 1 {
+                start_index = Some(index + ch.len_utf8());
+            }
+        } else if ch == close {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                let begin = start_index?;
+                return source.get(begin..index);
+            }
+        }
+    }
+    None
+}
+
+fn split_top_level(source: &str, separator: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for ch in source.chars() {
+        if in_single {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+        if in_double {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_single = true;
+                current.push(ch);
+            }
+            '"' => {
+                in_double = true;
+                current.push(ch);
+            }
+            '(' => {
+                paren += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren = paren.saturating_sub(1);
+                current.push(ch);
+            }
+            '[' => {
+                bracket += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket = bracket.saturating_sub(1);
+                current.push(ch);
+            }
+            '{' => {
+                brace += 1;
+                current.push(ch);
+            }
+            '}' => {
+                brace = brace.saturating_sub(1);
+                current.push(ch);
+            }
+            _ if ch == separator && paren == 0 && bracket == 0 && brace == 0 => {
+                parts.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+
+    parts
+}
+
+fn trim_quotes(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|rest| rest.strip_suffix('\'')))
+        .unwrap_or(value)
+}
+
+fn dedup_variables(variables: &mut Vec<ViewVariable>) {
+    let mut seen = BTreeSet::new();
+    variables.retain(|entry| seen.insert((entry.name.clone(), entry.default_value.clone())));
 }
 
 fn resolve_render_view_name(

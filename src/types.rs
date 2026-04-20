@@ -148,6 +148,9 @@ pub struct ViewEntry {
     pub name: String,
     pub file: PathBuf,
     pub kind: String,
+    pub props: Vec<ViewVariable>,
+    pub variables: Vec<ViewVariable>,
+    pub usages: Vec<ViewUsage>,
     pub source: ViewSource,
 }
 
@@ -167,6 +170,7 @@ pub struct BladeComponentEntry {
     pub class_file: Option<PathBuf>,
     pub view_name: Option<String>,
     pub view_file: Option<PathBuf>,
+    pub props: Vec<ViewVariable>,
     pub source: ViewSource,
 }
 
@@ -178,5 +182,19 @@ pub struct LivewireComponentEntry {
     pub class_file: Option<PathBuf>,
     pub view_name: Option<String>,
     pub view_file: Option<PathBuf>,
+    pub state: Vec<ViewVariable>,
     pub source: ViewSource,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ViewVariable {
+    pub name: String,
+    pub default_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ViewUsage {
+    pub kind: String,
+    pub source: ViewSource,
+    pub variables: Vec<ViewVariable>,
 }
