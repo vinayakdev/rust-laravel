@@ -798,6 +798,7 @@ dependencies = [
  "bumpalo",
  "comfy-table",
  "crossterm",
+ "libc",
  "php-parser",
  "serde",
  "serde_json",

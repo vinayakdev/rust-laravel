@@ -1,4 +1,5 @@
 mod analyzers;
+mod benchmark;
 mod cli;
 mod debug;
 mod debug_web;
@@ -57,6 +58,10 @@ pub fn run() -> Result<(), String> {
             let project = project::resolve(options.project.as_deref())?;
             let report = analyzers::migrations::analyze(&project)?;
             output::print_migrations(&report, options.json)?;
+        }
+        Command::BenchmarkIndex => {
+            let project = project::resolve(options.project.as_deref())?;
+            benchmark::run(&project, options.json)?;
         }
         Command::DebugBrowse => {
             debug::run(options.project.as_deref())?;
