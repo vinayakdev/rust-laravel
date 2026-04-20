@@ -2,9 +2,25 @@
 
 import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { LocCell, TruncCell, relPath } from "@/components/app/cell"
 import type { ColumnEntry, ModelEntry, ModelReport, Payload, RelationEntry } from "@/lib/types"
+
+type AutocompleteOption = {
+  value: string
+  source: string
+}
+
+const CUSTOM_AUTOCOMPLETE_OPTIONS: AutocompleteOption[] = [
+  { value: 'search("<term>")', source: "custom" },
+  { value: 'whereLike("<column>", "<value>")', source: "custom" },
+  { value: 'forTenant("<tenant-id>")', source: "custom" },
+  { value: 'forWorkspace("<workspace-id>")', source: "custom" },
+  { value: "visibleTo($user)", source: "custom" },
+  { value: 'withinDateRange("<from>", "<to>")', source: "custom" },
+  { value: "applyFilters($filters)", source: "custom" },
+]
 
 function EmptyValue() {
   return <span className="text-xs text-muted-foreground">—</span>
@@ -71,6 +87,87 @@ function SectionCard({
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
+  )
+}
+
+function pushAutocompleteOption(
+  options: AutocompleteOption[],
+  seen: Set<string>,
+  value: string,
+  source: string
+) {
+  const key = `${source}:${value}`
+  if (seen.has(key)) return
+  seen.add(key)
+  options.push({ value, source })
+}
+
+function deriveAutocompleteOptions(model: ModelEntry): AutocompleteOption[] {
+  const options: AutocompleteOption[] = []
+  const seen = new Set<string>()
+
+  pushAutocompleteOption(options, seen, `whereKey("${model.primary_key}")`, "primary key")
+
+  for (const scope of model.scopes) {
+    pushAutocompleteOption(options, seen, `${scope}()`, "scope")
+  }
+
+  for (const relation of model.relations) {
+    pushAutocompleteOption(options, seen, `with("${relation.method}")`, "relation")
+    pushAutocompleteOption(options, seen, `whereHas("${relation.method}")`, "relation")
+    pushAutocompleteOption(options, seen, `withCount("${relation.method}")`, "relation")
+  }
+
+  if (model.soft_deletes) {
+    pushAutocompleteOption(options, seen, "withTrashed()", "soft delete")
+    pushAutocompleteOption(options, seen, "onlyTrashed()", "soft delete")
+    pushAutocompleteOption(options, seen, "withoutTrashed()", "soft delete")
+  }
+
+  for (const column of model.columns) {
+    pushAutocompleteOption(options, seen, `where("${column.name}")`, "column")
+    pushAutocompleteOption(options, seen, `orWhere("${column.name}")`, "column")
+    pushAutocompleteOption(options, seen, `orderBy("${column.name}")`, "column")
+  }
+
+  return options
+}
+
+function AutocompleteList({
+  items,
+  collapsedCount = 5,
+}: {
+  items: AutocompleteOption[]
+  collapsedCount?: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (!items.length) return <EmptyValue />
+
+  const visible = expanded ? items : items.slice(0, collapsedCount)
+  const hiddenCount = Math.max(items.length - collapsedCount, 0)
+
+  return (
+    <div className="space-y-2">
+      <div className="space-y-2">
+        {visible.map((item) => (
+          <div
+            key={`${item.source}:${item.value}`}
+            className="flex items-center justify-between gap-3 rounded-md border bg-muted/20 px-3 py-2"
+          >
+            <code className="min-w-0 truncate text-[0.72rem]">{item.value}</code>
+            <Badge variant="outline" className="h-5 shrink-0 rounded-sm text-[0.6rem]">
+              {item.source}
+            </Badge>
+          </div>
+        ))}
+      </div>
+      {hiddenCount > 0 && (
+        <Button variant="ghost" size="sm" type="button" className="px-0" onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "Show less" : `Show ${hiddenCount} more`}
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -246,9 +343,27 @@ function ModelSummary({ model, root }: { model: ModelEntry; root?: string }) {
 
 function ModelBehavior({ model }: { model: ModelEntry }) {
   const casts = Object.entries(model.casts)
+  const autocompleteOptions = deriveAutocompleteOptions(model)
 
   return (
     <div className="grid gap-4 xl:grid-cols-2">
+      <SectionCard title="Autocomplete" count={autocompleteOptions.length}>
+        <div className="space-y-4">
+          <div>
+            <div className="mb-1 text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">
+              Model Specific
+            </div>
+            <AutocompleteList key={`${model.class_name}:specific`} items={autocompleteOptions} />
+          </div>
+          <div>
+            <div className="mb-1 text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">
+              Custom Test Options
+            </div>
+            <AutocompleteList key={`${model.class_name}:custom`} items={CUSTOM_AUTOCOMPLETE_OPTIONS} collapsedCount={999} />
+          </div>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Attributes">
         <div className="space-y-3">
           <div>

@@ -101,6 +101,12 @@ pub(crate) fn route_signature(
             uri_arg_index: 0,
             action_arg_index: 1,
         }),
+        "livewire" => Some(RouteSignature {
+            creator: "livewire".to_string(),
+            methods: vec!["GET".to_string()],
+            uri_arg_index: 0,
+            action_arg_index: 1,
+        }),
         "redirect" | "permanentRedirect" => Some(RouteSignature {
             creator: method_name.to_string(),
             methods: vec!["GET".to_string()],

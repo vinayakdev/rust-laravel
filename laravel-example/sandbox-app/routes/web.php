@@ -6,6 +6,8 @@ Route::get('/', function () {
     return 'sandbox';
 })->name('sandbox.home');
 
+Route::livewire('best', [Livewire::class, 'sd'])->name('bestmyr');
+
 Route::prefix('labs')
     ->middleware('web')
     ->group(function () {
