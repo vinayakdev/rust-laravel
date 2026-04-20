@@ -3,6 +3,7 @@ mod benchmark;
 mod cli;
 mod debug;
 mod debug_web;
+mod lsp;
 mod output;
 mod php;
 mod project;
@@ -58,6 +59,9 @@ pub fn run() -> Result<(), String> {
             let project = project::resolve(options.project.as_deref())?;
             let report = analyzers::migrations::analyze(&project)?;
             output::print_migrations(&report, options.json)?;
+        }
+        Command::Lsp => {
+            lsp::run_stdio()?;
         }
         Command::BenchmarkIndex => {
             let project = project::resolve(options.project.as_deref())?;

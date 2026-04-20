@@ -1,0 +1,370 @@
+use std::collections::HashMap;
+use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+
+use super::context::detect_symbol_context;
+use super::index::ProjectIndex;
+use super::overrides::FileOverrides;
+use super::query;
+use crate::project;
+
+pub fn run_stdio() -> Result<(), String> {
+    let stdin = io::stdin();
+    let mut stdin = stdin.lock();
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    let mut state = ServerState::default();
+
+    while let Some(message) = read_message(&mut stdin)? {
+        if let Some(response) = handle_message(&mut state, message)? {
+            write_message(&mut stdout, &response)?;
+        }
+        if state.exiting {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Default)]
+struct ServerState {
+    project_root: Option<PathBuf>,
+    project: Option<project::LaravelProject>,
+    index: Option<ProjectIndex>,
+    documents: HashMap<String, String>,
+    shutdown_requested: bool,
+    exiting: bool,
+}
+
+fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Value>, String> {
+    let method = message.get("method").and_then(Value::as_str);
+    let id = message.get("id").cloned();
+
+    match method {
+        Some("initialize") => {
+            let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
+            initialize(state, params);
+            Ok(id.map(|id| success(id, initialize_result())))
+        }
+        Some("initialized") => Ok(None),
+        Some("shutdown") => {
+            state.shutdown_requested = true;
+            Ok(id.map(|id| success(id, Value::Null)))
+        }
+        Some("exit") => {
+            state.exiting = true;
+            Ok(None)
+        }
+        Some("textDocument/didOpen") => {
+            if let Some(params) = message.get("params") {
+                if let (Some(uri), Some(text)) = (
+                    params.pointer("/textDocument/uri").and_then(Value::as_str),
+                    params.pointer("/textDocument/text").and_then(Value::as_str),
+                ) {
+                    state.documents.insert(uri.to_string(), text.to_string());
+                    reindex_for_uri(state, uri);
+                }
+            }
+            Ok(None)
+        }
+        Some("textDocument/didChange") => {
+            if let Some(params) = message.get("params") {
+                if let Some(uri) = params.pointer("/textDocument/uri").and_then(Value::as_str) {
+                    if let Some(text) = params
+                        .pointer("/contentChanges/0/text")
+                        .and_then(Value::as_str)
+                    {
+                        state.documents.insert(uri.to_string(), text.to_string());
+                        reindex_for_uri(state, uri);
+                    }
+                }
+            }
+            Ok(None)
+        }
+        Some("textDocument/didSave") => {
+            if let Some(uri) = message
+                .pointer("/params/textDocument/uri")
+                .and_then(Value::as_str)
+            {
+                reindex_for_uri(state, uri);
+            }
+            Ok(None)
+        }
+        Some("textDocument/didClose") => {
+            if let Some(uri) = message
+                .pointer("/params/textDocument/uri")
+                .and_then(Value::as_str)
+            {
+                state.documents.remove(uri);
+                reindex_for_uri(state, uri);
+            }
+            Ok(None)
+        }
+        Some("textDocument/completion") => {
+            Ok(id.map(|id| success(id, completion_result(state, message.get("params")))))
+        }
+        Some("textDocument/definition") => {
+            Ok(id.map(|id| success(id, definition_result(state, message.get("params")))))
+        }
+        Some("textDocument/hover") => {
+            Ok(id.map(|id| success(id, hover_result(state, message.get("params")))))
+        }
+        Some(_) | None => {
+            if let Some(id) = id {
+                Ok(Some(success(id, Value::Null)))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
+fn initialize(state: &mut ServerState, params: Value) {
+    let root_path = params
+        .get("rootUri")
+        .and_then(Value::as_str)
+        .and_then(file_uri_to_path)
+        .or_else(|| {
+            params
+                .get("rootPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            params
+                .pointer("/workspaceFolders/0/uri")
+                .and_then(Value::as_str)
+                .and_then(file_uri_to_path)
+        });
+
+    state.project_root = root_path.clone();
+    state.project = root_path.and_then(|root| project::from_root(root).ok());
+    state.index = rebuild_index(state).ok();
+}
+
+fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
+    let Some((source, line, character)) = source_and_position(state, params) else {
+        return json!({ "isIncomplete": false, "items": [] });
+    };
+    let Some(index) = &state.index else {
+        return json!({ "isIncomplete": false, "items": [] });
+    };
+    let Some(context) = detect_symbol_context(source, line, character) else {
+        return json!({ "isIncomplete": false, "items": [] });
+    };
+
+    json!({
+        "isIncomplete": false,
+        "items": query::complete(index, &context, line),
+    })
+}
+
+fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
+    let Some((source, line, character)) = source_and_position(state, params) else {
+        return Value::Null;
+    };
+    let Some(index) = &state.index else {
+        return Value::Null;
+    };
+    let Some(context) = detect_symbol_context(source, line, character) else {
+        return Value::Null;
+    };
+
+    let definitions = query::definitions(index, &context);
+    if definitions.is_empty() {
+        Value::Null
+    } else {
+        Value::Array(definitions)
+    }
+}
+
+fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
+    let Some((source, line, character)) = source_and_position(state, params) else {
+        return Value::Null;
+    };
+    let Some(index) = &state.index else {
+        return Value::Null;
+    };
+    let Some(context) = detect_symbol_context(source, line, character) else {
+        return Value::Null;
+    };
+
+    query::hover(index, &context).unwrap_or(Value::Null)
+}
+
+fn source_and_position<'a>(
+    state: &'a ServerState,
+    params: Option<&'a Value>,
+) -> Option<(&'a str, usize, usize)> {
+    let params = params?;
+    let uri = params
+        .pointer("/textDocument/uri")
+        .and_then(Value::as_str)?;
+    let line = params.pointer("/position/line").and_then(Value::as_u64)? as usize;
+    let character = params
+        .pointer("/position/character")
+        .and_then(Value::as_u64)? as usize;
+
+    state
+        .documents
+        .get(uri)
+        .map(|text| (text.as_str(), line, character))
+}
+
+fn initialize_result() -> Value {
+    json!({
+        "capabilities": {
+            "textDocumentSync": {
+                "openClose": true,
+                "change": 1,
+                "save": true
+            },
+            "completionProvider": {
+                "resolveProvider": false,
+                "triggerCharacters": ["'", "\"", "."]
+            },
+            "definitionProvider": true,
+            "hoverProvider": true
+        },
+        "serverInfo": {
+            "name": "rust-php",
+            "version": env!("CARGO_PKG_VERSION")
+        }
+    })
+}
+
+fn success(id: Value, result: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    })
+}
+
+fn read_message(input: &mut impl BufRead) -> Result<Option<Value>, String> {
+    let mut content_length = None;
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let read = input
+            .read_line(&mut line)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            return Ok(None);
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("Content-Length") {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+        }
+    }
+
+    let content_length =
+        content_length.ok_or_else(|| "missing Content-Length header".to_string())?;
+    let mut body = vec![0u8; content_length];
+    input
+        .read_exact(&mut body)
+        .map_err(|error| error.to_string())?;
+
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+fn write_message(output: &mut impl Write, message: &Value) -> Result<(), String> {
+    let body = serde_json::to_vec(message).map_err(|error| error.to_string())?;
+    write!(output, "Content-Length: {}\r\n\r\n", body.len()).map_err(|error| error.to_string())?;
+    output.write_all(&body).map_err(|error| error.to_string())?;
+    output.flush().map_err(|error| error.to_string())
+}
+
+fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
+    let path = uri.strip_prefix("file://")?;
+    Some(PathBuf::from(percent_decode(path)))
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = String::new();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(value) = u8::from_str_radix(&input[index + 1..index + 3], 16) {
+                output.push(value as char);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(bytes[index] as char);
+        index += 1;
+    }
+
+    output
+}
+
+fn rebuild_index(state: &ServerState) -> Result<ProjectIndex, String> {
+    let Some(project) = &state.project else {
+        return Err("no Laravel project resolved".to_string());
+    };
+
+    let overrides = collect_overrides(state, &project.root);
+    ProjectIndex::build_with_overrides(project, &overrides)
+}
+
+fn collect_overrides(state: &ServerState, root: &Path) -> FileOverrides {
+    let mut overrides = FileOverrides::default();
+
+    for (uri, text) in &state.documents {
+        let Some(path) = file_uri_to_path(uri) else {
+            continue;
+        };
+        if !path_affects_index(root, &path) {
+            continue;
+        }
+        overrides.insert(path, text.clone());
+    }
+
+    overrides
+}
+
+fn reindex_for_uri(state: &mut ServerState, _uri: &str) {
+    match rebuild_index(state) {
+        Ok(index) => state.index = Some(index),
+        Err(_) => {}
+    }
+}
+
+fn path_affects_index(root: &Path, path: &Path) -> bool {
+    if !path.starts_with(root) {
+        return false;
+    }
+
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+
+    if relative.starts_with("routes") || relative.starts_with("config") {
+        return path.extension().and_then(|ext| ext.to_str()) == Some("php");
+    }
+
+    if relative == Path::new("bootstrap/app.php")
+        || relative == Path::new("bootstrap/providers.php")
+        || relative == Path::new("composer.json")
+        || relative == Path::new(".env")
+        || relative == Path::new(".env.example")
+    {
+        return true;
+    }
+
+    relative.starts_with(Path::new("app/Providers"))
+        && path.extension().and_then(|ext| ext.to_str()) == Some("php")
+}

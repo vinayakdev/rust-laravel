@@ -3,3 +3,11 @@
 laravel-example/.DS_Store
 /test/
 /graphify-out
+/zed-extension/target/
+/zed-extension/extension.wasm
+/web/.next/
+/web/node_modules/
+/web/out/
+/web/tsconfig.tsbuildinfo
+/laravel-example/.env
+/test.md

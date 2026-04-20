@@ -8,6 +8,7 @@ use context::{RouteContext, build_middleware_index};
 use parser::collect_routes_from_source;
 
 use crate::analyzers::middleware;
+use crate::lsp::overrides::FileOverrides;
 use crate::project::LaravelProject;
 use crate::types::RouteReport;
 use std::collections::BTreeSet;
@@ -15,14 +16,23 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn analyze(project: &LaravelProject) -> Result<RouteReport, String> {
+    analyze_with_overrides(project, &FileOverrides::default())
+}
+
+pub fn analyze_with_overrides(
+    project: &LaravelProject,
+    overrides: &FileOverrides,
+) -> Result<RouteReport, String> {
     let route_files = collect_registered_route_files(project)?;
     let middleware_index = build_middleware_index(&middleware::analyze(project)?);
     let mut routes = Vec::new();
 
     for registered in &route_files {
         let file = &registered.file;
-        let source =
-            fs::read(file).map_err(|e| format!("failed to read {}: {e}", file.display()))?;
+        let source = overrides.get_bytes(file).map_or_else(
+            || fs::read(file).map_err(|e| format!("failed to read {}: {e}", file.display())),
+            Ok,
+        )?;
         collect_routes_from_source(
             &source,
             &project.root,

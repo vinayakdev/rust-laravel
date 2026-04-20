@@ -1,0 +1,12 @@
+id = "rust-php-laravel"
+name = "rust-php Laravel"
+version = "0.0.1"
+schema_version = 1
+authors = ["hotdogb"]
+description = "Laravel route/config navigation and completion powered by rust-php."
+repository = "https://github.com/hotdogb/rust-php"
+
+[language_servers.rust-php-lsp]
+name = "rust-php-lsp"
+languages = ["PHP"]
+language_ids = { PHP = "php" }

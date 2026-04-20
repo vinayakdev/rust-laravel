@@ -155,7 +155,11 @@ fn parse_migration_file(project: &LaravelProject, file: &Path) -> Vec<MigrationE
         if let Stmt::Class { name, members, .. } = stmt {
             let class_name = span_text(name.span, &source);
             entries.extend(find_up_method(
-                members, &source, &class_name, &timestamp, &relative,
+                members,
+                &source,
+                &class_name,
+                &timestamp,
+                &relative,
             ));
         }
 
@@ -169,7 +173,11 @@ fn parse_migration_file(project: &LaravelProject, file: &Path) -> Vec<MigrationE
                 if let Expr::AnonymousClass { members, .. } = *class {
                     let class_name = timestamp.clone();
                     entries.extend(find_up_method(
-                        members, &source, &class_name, &timestamp, &relative,
+                        members,
+                        &source,
+                        &class_name,
+                        &timestamp,
+                        &relative,
                     ));
                 }
             }
@@ -732,11 +740,10 @@ mod tests {
     }
 
     #[test]
-    fn captures_multiple_schema_calls_in_one_migration_file(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn captures_multiple_schema_calls_in_one_migration_file()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (project, root) = make_temp_project()?;
-        let migration = root
-            .join("database/migrations/2024_01_10_090000_create_blogs_table.php");
+        let migration = root.join("database/migrations/2024_01_10_090000_create_blogs_table.php");
 
         fs::write(
             &migration,
@@ -774,11 +781,10 @@ return new class extends Migration {
     }
 
     #[test]
-    fn drops_column_added_earlier_in_same_migration_file_case_insensitively(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn drops_column_added_earlier_in_same_migration_file_case_insensitively()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (project, root) = make_temp_project()?;
-        let migration = root
-            .join("database/migrations/2024_01_10_090000_create_blogs_table.php");
+        let migration = root.join("database/migrations/2024_01_10_090000_create_blogs_table.php");
 
         fs::write(
             &migration,
@@ -819,11 +825,9 @@ return new class extends Migration {
     }
 
     #[test]
-    fn drops_soft_deletes_and_timestamps_helpers(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn drops_soft_deletes_and_timestamps_helpers() -> Result<(), Box<dyn std::error::Error>> {
         let (project, root) = make_temp_project()?;
-        let migration = root
-            .join("database/migrations/2024_01_10_090000_create_blogs_table.php");
+        let migration = root.join("database/migrations/2024_01_10_090000_create_blogs_table.php");
 
         fs::write(
             &migration,

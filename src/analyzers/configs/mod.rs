@@ -4,19 +4,32 @@ mod extractor;
 use collector::collect_registered_config_files;
 use extractor::find_config_items;
 
+use crate::lsp::overrides::FileOverrides;
 use crate::php::env::load_env_map;
 use crate::project::LaravelProject;
 use crate::types::ConfigReport;
 use std::fs;
 
 pub fn analyze(project: &LaravelProject) -> Result<ConfigReport, String> {
+    analyze_with_overrides(project, &FileOverrides::default())
+}
+
+pub fn analyze_with_overrides(
+    project: &LaravelProject,
+    overrides: &FileOverrides,
+) -> Result<ConfigReport, String> {
     let env = load_env_map(&project.root)?;
     let config_files = collect_registered_config_files(project)?;
     let mut items = Vec::new();
 
     for registered in config_files {
-        let source = fs::read_to_string(&registered.file)
-            .map_err(|e| format!("failed to read {}: {e}", registered.file.display()))?;
+        let source = overrides.get_string(&registered.file).map_or_else(
+            || {
+                fs::read_to_string(&registered.file)
+                    .map_err(|e| format!("failed to read {}: {e}", registered.file.display()))
+            },
+            Ok,
+        )?;
 
         items.extend(find_config_items(
             &project.root,

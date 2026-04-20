@@ -7,6 +7,24 @@ pub struct LaravelProject {
     pub name: String,
 }
 
+pub fn from_root(root: impl Into<PathBuf>) -> Result<LaravelProject, String> {
+    let root = root.into();
+    if !looks_like_laravel_project(&root) {
+        return Err(format!(
+            "{} does not look like a Laravel project",
+            root.display()
+        ));
+    }
+
+    let name = root
+        .file_name()
+        .and_then(|part| part.to_str())
+        .unwrap_or("laravel-project")
+        .to_string();
+
+    Ok(LaravelProject { root, name })
+}
+
 pub fn resolve(project_arg: Option<&str>) -> Result<LaravelProject, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
     let workspace_root = cwd.join("laravel-example");
@@ -47,13 +65,7 @@ pub fn resolve(project_arg: Option<&str>) -> Result<LaravelProject, String> {
         }
     };
 
-    let name = root
-        .file_name()
-        .and_then(|part| part.to_str())
-        .unwrap_or("laravel-project")
-        .to_string();
-
-    Ok(LaravelProject { root, name })
+    from_root(root)
 }
 
 pub fn discover_projects() -> Result<Vec<LaravelProject>, String> {

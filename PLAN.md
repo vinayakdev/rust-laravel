@@ -231,6 +231,22 @@ Potential LSP features:
 - diagnostics for unresolved env keys/providers/packages
 - completion for route names/config keys
 
+Planned first slice:
+
+- project-level route/config index built from existing analyzer reports
+- config-key completion for `config(...)` and `Config::get(...)`
+- route-name completion for `route(...)`, `to_route(...)`, and common route helpers
+- go to definition for config keys and named routes
+- hover for:
+  - config defaults, env key, env value, and source attribution
+  - route methods, URI, action, middleware, and source attribution
+- CLI/debug harness for exercising LSP queries before adding JSON-RPC transport
+
+Design note:
+
+- reuse `src/analyzers/routes/*` and `src/analyzers/configs/*` as the source of truth
+- add a separate LSP index/query layer rather than a second parser
+
 Status: `pending`
 
 ## Debug Commands To Add
