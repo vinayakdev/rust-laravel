@@ -12,6 +12,7 @@ class LocalPackageServiceProvider
     public function boot(): void
     {
         $this->loadRoutesFrom(__DIR__.'/../routes/local-package.php');
+        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
     }
 
     private function mergeConfigFrom(string $path, string $key): void
@@ -22,5 +23,10 @@ class LocalPackageServiceProvider
     private function loadRoutesFrom(string $path): void
     {
         // Synthetic stand-in for Laravel's ServiceProvider::loadRoutesFrom.
+    }
+
+    private function loadMigrationsFrom(string $path): void
+    {
+        // Synthetic stand-in for Laravel's ServiceProvider::loadMigrationsFrom.
     }
 }

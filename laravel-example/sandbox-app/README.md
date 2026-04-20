@@ -16,5 +16,10 @@ Covered scenarios:
 - a declared package that is intentionally missing from `vendor/`
 - config definitions using `env(...)`
 - config merging via providers
+- app models with relations, casts, scopes, accessors, mutators, and soft deletes
+- conventional migrations with both named and anonymous classes
+- migrations whose filenames and class names differ
+- alter migrations that add and drop columns over time
+- package-provided migrations loaded through `loadMigrationsFrom(...)`
 
 This fixture lets us debug static analysis behavior without requiring Composer.
