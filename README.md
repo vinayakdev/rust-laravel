@@ -1,6 +1,8 @@
-# rust-php
+# rust-laravel
 
 Rust analyzers for Laravel projects, built as a CLI first and shaped for future editor/LSP use.
+
+![rust-laravel routes analyzer UI](demo1-o.jpg)
 
 ## What This Engine Does
 
@@ -20,19 +22,19 @@ It is designed for two uses:
 
 ## Quick Links
 
-| File | Purpose |
-| --- | --- |
-| [README.md](/Users/hotdogb/Work/rust-php/README.md) | Main guide and command reference |
-| [example.md](/Users/hotdogb/Work/rust-php/example.md) | Static input/output examples without running the CLI |
-| [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md) | Roadmap and completed milestones |
-| [laravel-example/README.md](/Users/hotdogb/Work/rust-php/laravel-example/README.md) | How to place Laravel apps for analysis |
+| File                                                                                | Purpose                                              |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| [README.md](/Users/hotdogb/Work/rust-php/README.md)                                 | Main guide and command reference                     |
+| [example.md](/Users/hotdogb/Work/rust-php/example.md)                               | Static input/output examples without running the CLI |
+| [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md)                                     | Roadmap and completed milestones                     |
+| [laravel-example/README.md](/Users/hotdogb/Work/rust-php/laravel-example/README.md) | How to place Laravel apps for analysis               |
 
 ## Where To Put Laravel Apps
 
 Put target Laravel projects under `laravel-example/`.
 
 ```text
-rust-php/
+rust-laravel/
   src/
   laravel-example/
     demo-app/
@@ -62,14 +64,14 @@ When you do not pass `--project`:
 
 ## One-Look Command Reference
 
-| Command | What You Get | Best For |
-| --- | --- | --- |
-| `route:list` | effective route list with method, URI, name, action, middleware, patterns, and registration summary | day-to-day route inspection |
-| `route:sources` | route-to-provider/source attribution table | debugging where routes came from |
-| `config:list` | effective config rows with key, env key, default, env value, and registration summary | debugging config state |
-| `config:sources` | config-to-provider/source attribution table | debugging merged/package config |
-| `provider:list` | provider graph with declaration file, kind, package, source, and status | debugging package/provider registration |
-| `middleware:list` | middleware aliases, groups, and route patterns | debugging route enrichment |
+| Command           | What You Get                                                                                        | Best For                                |
+| ----------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `route:list`      | effective route list with method, URI, name, action, middleware, patterns, and registration summary | day-to-day route inspection             |
+| `route:sources`   | route-to-provider/source attribution table                                                          | debugging where routes came from        |
+| `config:list`     | effective config rows with key, env key, default, env value, and registration summary               | debugging config state                  |
+| `config:sources`  | config-to-provider/source attribution table                                                         | debugging merged/package config         |
+| `provider:list`   | provider graph with declaration file, kind, package, source, and status                             | debugging package/provider registration |
+| `middleware:list` | middleware aliases, groups, and route patterns                                                      | debugging route enrichment              |
 
 All commands support:
 
@@ -102,8 +104,8 @@ Release build:
 
 ```bash
 cargo build --release
-./target/release/rust-php route:list --project sandbox-app
-./target/release/rust-php config:list --project sandbox-app
+./target/release/rust-laravel route:list --project sandbox-app
+./target/release/rust-laravel config:list --project sandbox-app
 ```
 
 ## Commands In Detail
@@ -311,13 +313,13 @@ This engine already handles more than a simple file scan:
 
 ## Current Engine Surface
 
-| Area | Current Capability |
-| --- | --- |
-| Routes | direct route files, provider-loaded route files, names, actions, middleware, patterns, source attribution |
-| Config | direct config files, provider-merged config, env keys, defaults, resolved env values, source attribution |
-| Providers | bootstrap registration, Composer-discovered providers, local package providers, missing-source visibility |
-| Middleware | aliases, groups, route patterns |
-| Output | terminal tables and JSON |
+| Area       | Current Capability                                                                                        |
+| ---------- | --------------------------------------------------------------------------------------------------------- |
+| Routes     | direct route files, provider-loaded route files, names, actions, middleware, patterns, source attribution |
+| Config     | direct config files, provider-merged config, env keys, defaults, resolved env values, source attribution  |
+| Providers  | bootstrap registration, Composer-discovered providers, local package providers, missing-source visibility |
+| Middleware | aliases, groups, route patterns                                                                           |
+| Output     | terminal tables and JSON                                                                                  |
 
 ## Missing Vendor / Missing Composer Handling
 

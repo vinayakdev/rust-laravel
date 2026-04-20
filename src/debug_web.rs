@@ -264,6 +264,24 @@ fn render_report(
                 "report": report,
             })
         }
+        "model:list" => {
+            let report = analyzers::models::analyze(project)?;
+            serde_json::json!({
+                "project": project.name,
+                "root": project.root,
+                "command": command,
+                "report": report,
+            })
+        }
+        "migration:list" => {
+            let report = analyzers::migrations::analyze(project)?;
+            serde_json::json!({
+                "project": project.name,
+                "root": project.root,
+                "command": command,
+                "report": report,
+            })
+        }
         "route:compare" => {
             let rust_report = analyzers::routes::analyze(project)?;
             let comparison = compare_routes(project, &rust_report.routes)?;
@@ -1223,6 +1241,8 @@ const APP_JS: &str = r#"const COMMANDS = [
   { id: "config:sources", label: "Config Sources" },
   { id: "provider:list", label: "Providers" },
   { id: "view:list", label: "Views & Components" },
+  { id: "model:list", label: "Models" },
+  { id: "migration:list", label: "Migrations" },
 ];
 
 const state = {
@@ -1701,6 +1721,9 @@ function renderPayload(payload) {
       return renderMiddleware(payload);
     case "view:list":
       return renderViewInventory(payload);
+    case "model:list":
+    case "migration:list":
+      return emptyState(`Renderer not implemented in legacy debug web for ${payload.command}`);
     default:
       return emptyState(`No renderer for ${payload.command}`);
   }

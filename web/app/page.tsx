@@ -1,7 +1,6 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import {
   Select,
@@ -36,6 +35,8 @@ import { MiddlewareView } from "@/components/app/views/middleware-view"
 import { ConfigView } from "@/components/app/views/config-view"
 import { ProvidersView } from "@/components/app/views/providers-view"
 import { ViewsView } from "@/components/app/views/views-view"
+import { ModelsView } from "@/components/app/views/models-view"
+import { MigrationsView } from "@/components/app/views/migrations-view"
 import type { CommandId, Payload, Project } from "@/lib/types"
 import {
   IconAlertTriangle,
@@ -78,10 +79,33 @@ const COMMANDS: CommandDef[] = [
 const GROUPS = ["Routing", "Application", "Data"]
 type LoadState = "idle" | "loading" | "error" | "done"
 
+function isCommandId(value: string | null): value is CommandId {
+  return COMMANDS.some((command) => command.id === value)
+}
+
+function initialCommand(): CommandId {
+  if (typeof window === "undefined") return "route:list"
+  const value = new URLSearchParams(window.location.search).get("command")
+  return isCommandId(value) ? value : "route:list"
+}
+
+function initialProject(): string {
+  if (typeof window === "undefined") return ""
+  return new URLSearchParams(window.location.search).get("project") ?? ""
+}
+
+function compactProjectPath(root: string): string {
+  const parts = root.split("/").filter(Boolean)
+  const markerIndex = parts.findIndex((part) => part === "laravel-example" || part === "test")
+  if (markerIndex >= 0) return parts.slice(markerIndex).join("/")
+  if (parts.length <= 2) return root
+  return parts.slice(-2).join("/")
+}
+
 export default function Page() {
   const [projects, setProjects]         = useState<Project[]>([])
-  const [selectedProject, setSelectedProject] = useState<string>("")
-  const [selectedCommand, setSelectedCommand] = useState<CommandId>("route:list")
+  const [selectedProject, setSelectedProject] = useState<string>(initialProject)
+  const [selectedCommand, setSelectedCommand] = useState<CommandId>(initialCommand)
   const [payload, setPayload]           = useState<Payload | null>(null)
   const [loadState, setLoadState]       = useState<LoadState>("idle")
   const [error, setError]               = useState<string | null>(null)
@@ -92,7 +116,12 @@ export default function Page() {
       const res  = await fetch("/api/projects")
       const data: Project[] = await res.json()
       setProjects(data)
-      if (data.length > 0) setSelectedProject((p) => p || data[0].id)
+      if (data.length > 0) {
+        setSelectedProject((current) => {
+          if (current && data.some((project) => project.id === current)) return current
+          return data[0].id
+        })
+      }
       return data
     } catch { return [] }
   }, [])
@@ -117,7 +146,7 @@ export default function Page() {
   }, [])
 
   useEffect(() => {
-    loadProjects().then((d) => { if (d.length > 0) loadReport(d[0].id, "route:list") })
+    loadProjects()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -126,8 +155,19 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProject, selectedCommand])
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !selectedProject) return
+    const params = new URLSearchParams(window.location.search)
+    params.set("project", selectedProject)
+    params.set("command", selectedCommand)
+    const query = params.toString()
+    const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname
+    window.history.replaceState(null, "", nextUrl)
+  }, [selectedProject, selectedCommand])
+
   const activeProject = projects.find((p) => p.id === selectedProject)
   const activeCommand = COMMANDS.find((c) => c.id === selectedCommand)
+  const activeProjectPath = activeProject ? compactProjectPath(activeProject.root) : ""
 
   return (
     // h-screen + overflow-hidden pins the shell to viewport
@@ -196,7 +236,7 @@ export default function Page() {
           {activeProject && (
             <div className="min-w-0">
               <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground">Active path</p>
-              <code className="mt-0.5 block truncate font-mono text-[0.65rem] text-muted-foreground">{activeProject.root}</code>
+              <code className="mt-0.5 block truncate font-mono text-[0.65rem] text-muted-foreground">{activeProjectPath}</code>
             </div>
           )}
         </SidebarFooter>
@@ -218,7 +258,7 @@ export default function Page() {
                 <Separator orientation="vertical" className="hidden h-4 sm:block" />
                 <div className="hidden min-w-0 sm:block">
                   <p className="text-[0.6rem] uppercase tracking-widest text-muted-foreground leading-none">Path</p>
-                  <code className="mt-0.5 block max-w-[260px] truncate font-mono text-[0.65rem] text-muted-foreground">{activeProject.root}</code>
+                  <code className="mt-0.5 block max-w-[320px] truncate font-mono text-[0.65rem] text-muted-foreground">{activeProjectPath}</code>
                 </div>
               </>
             )}
@@ -270,7 +310,7 @@ export default function Page() {
               </CardContent>
             </Card>
           )}
-          {loadState === "done" && payload && <ReportView payload={payload} />}
+          {loadState === "done" && payload && <ReportView key={`${payload.project}:${payload.command}`} payload={payload} />}
         </div>
       </SidebarInset>
     </SidebarProvider>
@@ -287,6 +327,8 @@ function ReportView({ payload }: { payload: Payload }) {
     case "config:sources": return <ConfigView payload={payload} sourceMode={true} />
     case "provider:list":  return <ProvidersView payload={payload} />
     case "view:list":      return <ViewsView payload={payload} />
+    case "model:list":     return <ModelsView payload={payload} />
+    case "migration:list": return <MigrationsView payload={payload} />
     default:
       return (
         <Card>

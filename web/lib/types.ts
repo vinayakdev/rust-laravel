@@ -168,17 +168,30 @@ export type RouteComparison = {
 }
 
 export type ModelEntry = {
-  class_name: string
   file: string
   line: number
-  table?: string
+  class_name: string
+  namespace: string
+  table: string
+  table_inferred: boolean
+  primary_key: string
+  key_type: string
+  incrementing: boolean
+  timestamps: boolean
+  soft_deletes: boolean
+  connection?: string
   fillable: string[]
   guarded: string[]
+  hidden: string[]
   casts: Record<string, string>
-  has_many: string[]
-  belongs_to: string[]
-  belongs_to_many: string[]
-  has_one: string[]
+  appends: string[]
+  with: string[]
+  traits: string[]
+  relations: RelationEntry[]
+  scopes: string[]
+  accessors: string[]
+  mutators: string[]
+  columns: ColumnEntry[]
 }
 
 export type ModelReport = {
@@ -186,11 +199,45 @@ export type ModelReport = {
   models: ModelEntry[]
 }
 
+export type RelationEntry = {
+  method: string
+  relation_type: string
+  related_model: string
+  related_model_file?: string
+  foreign_key?: string
+  local_key?: string
+  pivot_table?: string
+  line: number
+}
+
+export type ColumnEntry = {
+  name: string
+  column_type: string
+  nullable: boolean
+  default?: string
+  unique: boolean
+  unsigned: boolean
+  primary: boolean
+  enum_values: string[]
+  comment?: string
+  references?: string
+  on_table?: string
+}
+
+export type IndexEntry = {
+  columns: string[]
+  index_type: string
+}
+
 export type MigrationEntry = {
   file: string
-  batch?: number
-  ran?: boolean
-  operations: string[]
+  timestamp: string
+  class_name: string
+  table: string
+  operation: string
+  columns: ColumnEntry[]
+  indexes: IndexEntry[]
+  dropped_columns: string[]
 }
 
 export type MigrationReport = {
