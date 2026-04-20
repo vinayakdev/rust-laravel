@@ -119,7 +119,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<State>) -> Result<(), Str
                 serve_web_asset(&mut stream, "index.html")?;
             }
         }
-        asset_path if asset_path.starts_with("/assets/") => {
+        asset_path if asset_path.starts_with("/assets/") || asset_path.starts_with("/_next/") => {
             serve_web_asset(&mut stream, asset_path.trim_start_matches('/'))?
         }
         "/api/projects" => {
@@ -408,7 +408,7 @@ fn serve_web_asset(stream: &mut TcpStream, relative_path: &str) -> Result<(), St
         let (status, message) = if relative_path == "index.html" {
             (
                 "500 Internal Server Error",
-                "web UI assets are missing. run `npm run build` inside ./web first.",
+                "web UI assets are missing. run `pnpm build` inside ./web first.",
             )
         } else {
             ("404 Not Found", "Not found.")
@@ -422,7 +422,7 @@ fn serve_web_asset(stream: &mut TcpStream, relative_path: &str) -> Result<(), St
 }
 
 fn web_dist_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("web").join("dist")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("web").join("out")
 }
 
 fn content_type_for(path: &Path) -> &'static str {

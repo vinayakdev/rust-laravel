@@ -48,6 +48,16 @@ pub fn run() -> Result<(), String> {
             let report = analyzers::views::analyze(&project)?;
             output::print_views(&report, options.json)?;
         }
+        Command::ModelList => {
+            let project = project::resolve(options.project.as_deref())?;
+            let report = analyzers::models::analyze(&project)?;
+            output::print_models(&report, options.json)?;
+        }
+        Command::MigrationList => {
+            let project = project::resolve(options.project.as_deref())?;
+            let report = analyzers::migrations::analyze(&project)?;
+            output::print_migrations(&report, options.json)?;
+        }
         Command::DebugBrowse => {
             debug::run(options.project.as_deref())?;
         }

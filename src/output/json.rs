@@ -1,4 +1,4 @@
-use crate::types::{ConfigReport, MiddlewareReport, ProviderReport, RouteReport, ViewReport};
+use crate::types::{ConfigReport, MiddlewareReport, MigrationReport, ModelReport, ProviderReport, RouteReport, ViewReport};
 
 pub fn print_routes(report: &RouteReport) -> Result<(), String> {
     println!("{}", serde_json::to_string_pretty(report).map_err(|e| e.to_string())?);
@@ -21,6 +21,16 @@ pub fn print_middlewares(report: &MiddlewareReport) -> Result<(), String> {
 }
 
 pub fn print_views(report: &ViewReport) -> Result<(), String> {
+    println!("{}", serde_json::to_string_pretty(report).map_err(|e| e.to_string())?);
+    Ok(())
+}
+
+pub fn print_models(report: &ModelReport) -> Result<(), String> {
+    println!("{}", serde_json::to_string_pretty(report).map_err(|e| e.to_string())?);
+    Ok(())
+}
+
+pub fn print_migrations(report: &MigrationReport) -> Result<(), String> {
     println!("{}", serde_json::to_string_pretty(report).map_err(|e| e.to_string())?);
     Ok(())
 }

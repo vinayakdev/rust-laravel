@@ -1,5 +1,7 @@
 pub mod configs;
 pub mod middleware;
+pub mod migrations;
+pub mod models;
 pub mod providers;
 pub mod routes;
 pub mod views;
