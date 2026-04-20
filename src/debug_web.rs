@@ -1,8 +1,8 @@
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
@@ -110,7 +110,8 @@ fn handle_connection(mut stream: TcpStream, state: Arc<State>) -> Result<(), Str
         "/" => {
             if query.is_empty() {
                 if let Some(project_root) = state.initial_project_root.as_deref() {
-                    let location = format!("/?project={}&command=route:list", url_encode(project_root));
+                    let location =
+                        format!("/?project={}&command=route:list", url_encode(project_root));
                     write_redirect(&mut stream, &location)?;
                 } else {
                     serve_web_asset(&mut stream, "index.html")?;
@@ -124,7 +125,12 @@ fn handle_connection(mut stream: TcpStream, state: Arc<State>) -> Result<(), Str
         }
         "/api/projects" => {
             let body = projects_payload(&state.projects)?;
-            write_response(&mut stream, "200 OK", "application/json; charset=utf-8", &body)?;
+            write_response(
+                &mut stream,
+                "200 OK",
+                "application/json; charset=utf-8",
+                &body,
+            )?;
         }
         "/api/report" => {
             let params = parse_query(query);
@@ -406,7 +412,9 @@ fn write_response(
         body.len(),
         body
     );
-    stream.write_all(response.as_bytes()).map_err(|e| e.to_string())
+    stream
+        .write_all(response.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 fn split_target(target: &str) -> (&str, &str) {
@@ -417,7 +425,9 @@ fn write_redirect(stream: &mut TcpStream, location: &str) -> Result<(), String> 
     let response = format!(
         "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
     );
-    stream.write_all(response.as_bytes()).map_err(|e| e.to_string())
+    stream
+        .write_all(response.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 fn serve_web_asset(stream: &mut TcpStream, relative_path: &str) -> Result<(), String> {
@@ -440,11 +450,17 @@ fn serve_web_asset(stream: &mut TcpStream, relative_path: &str) -> Result<(), St
 }
 
 fn web_dist_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("web").join("out")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("web")
+        .join("out")
 }
 
 fn content_type_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|value| value.to_str()).unwrap_or_default() {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+    {
         "html" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "js" => "application/javascript; charset=utf-8",
@@ -529,7 +545,8 @@ fn index_html(initial_project_root: Option<&str>) -> String {
         html,
         "{}<script>window.__INITIAL_PROJECT__ = {};</script>{}",
         INDEX_HTML_HEAD,
-        serde_json::to_string(&initial_project_root.unwrap_or("")).unwrap_or_else(|_| "\"\"".to_string()),
+        serde_json::to_string(&initial_project_root.unwrap_or(""))
+            .unwrap_or_else(|_| "\"\"".to_string()),
         INDEX_HTML_TAIL
     );
     html
@@ -1071,7 +1088,10 @@ struct ComparedRoute {
     middleware: Vec<String>,
 }
 
-fn compare_routes(project: &LaravelProject, analyzer_routes: &[RouteEntry]) -> Result<RouteComparisonPayload, String> {
+fn compare_routes(
+    project: &LaravelProject,
+    analyzer_routes: &[RouteEntry],
+) -> Result<RouteComparisonPayload, String> {
     let artisan_path = project.root.join("artisan");
     if !artisan_path.is_file() {
         return Ok(RouteComparisonPayload {
@@ -1082,7 +1102,9 @@ fn compare_routes(project: &LaravelProject, analyzer_routes: &[RouteEntry]) -> R
             analyzer_only_count: analyzer_routes.len(),
             runnable: false,
             artisan_path: None,
-            note: "This project does not have an artisan file, so runtime comparison is unavailable.".to_string(),
+            note:
+                "This project does not have an artisan file, so runtime comparison is unavailable."
+                    .to_string(),
             matched: Vec::new(),
             runtime_only: analyzer_routes.iter().map(compared_from_analyzer).collect(),
             analyzer_only: Vec::new(),
@@ -1138,9 +1160,18 @@ fn compare_routes(project: &LaravelProject, analyzer_routes: &[RouteEntry]) -> R
     let runtime_keys = runtime_map.keys().cloned().collect::<BTreeSet<_>>();
     let analyzer_keys = analyzer_map.keys().cloned().collect::<BTreeSet<_>>();
 
-    let matched_keys = runtime_keys.intersection(&analyzer_keys).cloned().collect::<Vec<_>>();
-    let runtime_only_keys = runtime_keys.difference(&analyzer_keys).cloned().collect::<Vec<_>>();
-    let analyzer_only_keys = analyzer_keys.difference(&runtime_keys).cloned().collect::<Vec<_>>();
+    let matched_keys = runtime_keys
+        .intersection(&analyzer_keys)
+        .cloned()
+        .collect::<Vec<_>>();
+    let runtime_only_keys = runtime_keys
+        .difference(&analyzer_keys)
+        .cloned()
+        .collect::<Vec<_>>();
+    let analyzer_only_keys = analyzer_keys
+        .difference(&runtime_keys)
+        .cloned()
+        .collect::<Vec<_>>();
 
     Ok(RouteComparisonPayload {
         runtime_count: runtime_map.len(),
@@ -1192,7 +1223,12 @@ fn compared_from_analyzer(route: &RouteEntry) -> ComparedRoute {
         uri,
         name,
         action: route.action.clone().filter(|value| !value.is_empty()),
-        source: Some(format!("{}:{}:{}", route.file.display(), route.line, route.column)),
+        source: Some(format!(
+            "{}:{}:{}",
+            route.file.display(),
+            route.line,
+            route.column
+        )),
         middleware: if route.resolved_middleware.is_empty() {
             route.middleware.clone()
         } else {

@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use crate::types::MiddlewareReport;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Default)]
 pub(crate) struct RouteContext {

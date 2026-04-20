@@ -1,5 +1,5 @@
-use php_parser::ast::{BinaryOp, Expr, ExprId, MagicConstKind};
 use php_parser::Span;
+use php_parser::ast::{BinaryOp, Expr, ExprId, MagicConstKind};
 use std::path::{Component, Path, PathBuf};
 
 pub fn span_text(span: Span, source: &[u8]) -> String {
@@ -9,7 +9,12 @@ pub fn span_text(span: Span, source: &[u8]) -> String {
 pub fn byte_offset_to_line_col(source: &[u8], offset: usize) -> (usize, usize) {
     let before = &source[..offset.min(source.len())];
     let line = before.iter().filter(|&&b| b == b'\n').count() + 1;
-    let col = before.iter().rev().position(|&b| b == b'\n').unwrap_or(offset) + 1;
+    let col = before
+        .iter()
+        .rev()
+        .position(|&b| b == b'\n')
+        .unwrap_or(offset)
+        + 1;
     (line, col)
 }
 
@@ -43,7 +48,9 @@ pub fn expr_to_string(expr: ExprId<'_>, source: &[u8]) -> Option<String> {
         Expr::Variable { name, .. } => {
             Some(span_text(*name, source).trim_start_matches('$').to_string())
         }
-        Expr::ClassConstFetch { class, constant, .. } => {
+        Expr::ClassConstFetch {
+            class, constant, ..
+        } => {
             let class_name = expr_name(class, source)?;
             let constant_name = expr_name(constant, source)?;
             Some(format!("{class_name}::{constant_name}"))
@@ -96,7 +103,9 @@ fn expr_to_path_fragment(
                 None
             }
         }
-        Expr::Binary { left, op, right, .. } if *op == BinaryOp::Concat => {
+        Expr::Binary {
+            left, op, right, ..
+        } if *op == BinaryOp::Concat => {
             let left = expr_to_path_fragment(left, source, project_root, provider_file)?;
             let right = expr_to_path_fragment(right, source, project_root, provider_file)?;
             Some(format!("{left}{right}"))
@@ -112,10 +121,18 @@ fn expr_to_path_fragment(
                 "base_path" => Some(project_root.join(inner).display().to_string()),
                 "app_path" => Some(project_root.join("app").join(inner).display().to_string()),
                 "config_path" => Some(
-                    project_root.join("config").join(inner).display().to_string(),
+                    project_root
+                        .join("config")
+                        .join(inner)
+                        .display()
+                        .to_string(),
                 ),
                 "resource_path" => Some(
-                    project_root.join("resources").join(inner).display().to_string(),
+                    project_root
+                        .join("resources")
+                        .join(inner)
+                        .display()
+                        .to_string(),
                 ),
                 _ => None,
             }

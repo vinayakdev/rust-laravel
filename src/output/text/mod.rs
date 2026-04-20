@@ -39,7 +39,11 @@ pub(super) fn wrap_cell(text: &str, width: usize) -> Cell {
 }
 
 pub(super) fn join_or_dash(values: &[String]) -> String {
-    if values.is_empty() { "-".to_string() } else { values.join(",") }
+    if values.is_empty() {
+        "-".to_string()
+    } else {
+        values.join(",")
+    }
 }
 
 pub(super) fn terminal_width() -> usize {

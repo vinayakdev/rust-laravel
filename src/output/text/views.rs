@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
-use crate::types::{BladeComponentEntry, LivewireComponentEntry, ViewEntry, ViewReport};
 use super::{header, new_table, terminal_width, wrap_cell};
+use crate::types::{BladeComponentEntry, LivewireComponentEntry, ViewEntry, ViewReport};
 
 struct ViewWidths {
     name: usize,
@@ -29,17 +29,29 @@ pub fn render_view_report(report: &ViewReport) -> String {
     let _ = writeln!(output, "Project: {}", report.project_name);
     let _ = writeln!(output, "Views: {}", report.view_count);
     let _ = writeln!(output, "Blade components: {}", report.blade_component_count);
-    let _ = writeln!(output, "Livewire components: {}", report.livewire_component_count);
+    let _ = writeln!(
+        output,
+        "Livewire components: {}",
+        report.livewire_component_count
+    );
     let _ = writeln!(output);
 
     let _ = writeln!(output, "Views");
     let _ = writeln!(output, "{}", render_views_table(&report.views));
     let _ = writeln!(output);
     let _ = writeln!(output, "Blade Components");
-    let _ = writeln!(output, "{}", render_blade_components_table(&report.blade_components));
+    let _ = writeln!(
+        output,
+        "{}",
+        render_blade_components_table(&report.blade_components)
+    );
     let _ = writeln!(output);
     let _ = writeln!(output, "Livewire Components");
-    let _ = write!(output, "{}", render_livewire_components_table(&report.livewire_components));
+    let _ = write!(
+        output,
+        "{}",
+        render_livewire_components_table(&report.livewire_components)
+    );
     output
 }
 
@@ -63,7 +75,10 @@ fn render_views_table(views: &[ViewEntry]) -> String {
             wrap_cell(&view.name, widths.name),
             wrap_cell(&view.file.display().to_string(), widths.file),
             wrap_cell(&view.kind, widths.kind),
-            wrap_cell(&display_variables(&view.props, &view.variables), widths.vars),
+            wrap_cell(
+                &display_variables(&view.props, &view.variables),
+                widths.vars,
+            ),
             wrap_cell(
                 &format!(
                     "{}:{}:{}",
@@ -99,8 +114,14 @@ fn render_blade_components_table(components: &[BladeComponentEntry]) -> String {
         table.add_row(vec![
             wrap_cell(&component.component, widths.component),
             wrap_cell(&component.kind, widths.kind),
-            wrap_cell(component.class_name.as_deref().unwrap_or("-"), widths.class_name),
-            wrap_cell(component.view_name.as_deref().unwrap_or("-"), widths.view_name),
+            wrap_cell(
+                component.class_name.as_deref().unwrap_or("-"),
+                widths.class_name,
+            ),
+            wrap_cell(
+                component.view_name.as_deref().unwrap_or("-"),
+                widths.view_name,
+            ),
             wrap_cell(&display_list(&component.props), widths.vars),
             wrap_cell(
                 &format!(
@@ -137,8 +158,14 @@ fn render_livewire_components_table(components: &[LivewireComponentEntry]) -> St
         table.add_row(vec![
             wrap_cell(&component.component, widths.component),
             wrap_cell(&component.kind, widths.kind),
-            wrap_cell(component.class_name.as_deref().unwrap_or("-"), widths.class_name),
-            wrap_cell(component.view_name.as_deref().unwrap_or("-"), widths.view_name),
+            wrap_cell(
+                component.class_name.as_deref().unwrap_or("-"),
+                widths.class_name,
+            ),
+            wrap_cell(
+                component.view_name.as_deref().unwrap_or("-"),
+                widths.view_name,
+            ),
             wrap_cell(&display_list(&component.state), widths.vars),
             wrap_cell(
                 &format!(
@@ -158,22 +185,61 @@ fn render_livewire_components_table(components: &[LivewireComponentEntry]) -> St
 fn view_widths() -> ViewWidths {
     let t = terminal_width();
     if t < 110 {
-        ViewWidths { name: 18, file: 18, kind: 14, vars: 18, source: 18 }
+        ViewWidths {
+            name: 18,
+            file: 18,
+            kind: 14,
+            vars: 18,
+            source: 18,
+        }
     } else if t < 150 {
-        ViewWidths { name: 24, file: 24, kind: 18, vars: 24, source: 24 }
+        ViewWidths {
+            name: 24,
+            file: 24,
+            kind: 18,
+            vars: 24,
+            source: 24,
+        }
     } else {
-        ViewWidths { name: 30, file: 34, kind: 20, vars: 32, source: 30 }
+        ViewWidths {
+            name: 30,
+            file: 34,
+            kind: 20,
+            vars: 32,
+            source: 30,
+        }
     }
 }
 
 fn component_widths() -> ComponentWidths {
     let t = terminal_width();
     if t < 110 {
-        ComponentWidths { component: 18, kind: 14, class_name: 16, view_name: 16, vars: 18, source: 18 }
+        ComponentWidths {
+            component: 18,
+            kind: 14,
+            class_name: 16,
+            view_name: 16,
+            vars: 18,
+            source: 18,
+        }
     } else if t < 150 {
-        ComponentWidths { component: 24, kind: 18, class_name: 20, view_name: 20, vars: 22, source: 22 }
+        ComponentWidths {
+            component: 24,
+            kind: 18,
+            class_name: 20,
+            view_name: 20,
+            vars: 22,
+            source: 22,
+        }
     } else {
-        ComponentWidths { component: 28, kind: 20, class_name: 24, view_name: 24, vars: 28, source: 26 }
+        ComponentWidths {
+            component: 28,
+            kind: 20,
+            class_name: 24,
+            view_name: 24,
+            vars: 28,
+            source: 26,
+        }
     }
 }
 

@@ -33,11 +33,7 @@ pub fn collect_psr4_mappings(project_root: &Path) -> Result<Vec<Psr4Mapping>, St
                             .get("name")
                             .and_then(Value::as_str)
                             .map(ToString::to_string);
-                        mappings.extend(psr4_from_composer(
-                            &package_path,
-                            &composer,
-                            package_name,
-                        ));
+                        mappings.extend(psr4_from_composer(&package_path, &composer, package_name));
                     }
                 }
             }
@@ -125,10 +121,9 @@ pub fn package_name_for_source(path: &Option<PathBuf>, mappings: &[Psr4Mapping])
 }
 
 pub fn read_json(path: &Path) -> Result<Value, String> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    serde_json::from_str(&text)
-        .map_err(|e| format!("failed to parse {}: {e}", path.display()))
+    let text =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    serde_json::from_str(&text).map_err(|e| format!("failed to parse {}: {e}", path.display()))
 }
 
 pub fn laravel_providers(composer: &Value) -> Option<Vec<String>> {

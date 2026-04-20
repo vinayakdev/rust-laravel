@@ -7,7 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::analyzers::providers;
-use crate::php::ast::{byte_offset_to_line_col, expr_name, expr_to_path, expr_to_string, expr_to_string_list, span_text, strip_root};
+use crate::php::ast::{
+    byte_offset_to_line_col, expr_name, expr_to_path, expr_to_string, expr_to_string_list,
+    span_text, strip_root,
+};
 use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
 use crate::types::{ColumnEntry, IndexEntry, MigrationEntry, MigrationReport};
@@ -64,8 +67,12 @@ fn discover_provider_migration_files(project: &LaravelProject) -> Result<Vec<Pat
     let mut seen_providers = BTreeSet::new();
 
     for provider in provider_report.providers {
-        let Some(relative_source) = provider.source_file.as_ref() else { continue };
-        if !provider.source_available { continue }
+        let Some(relative_source) = provider.source_file.as_ref() else {
+            continue;
+        };
+        if !provider.source_available {
+            continue;
+        }
         if !seen_providers.insert((provider.provider_class.clone(), relative_source.clone())) {
             continue;
         }
@@ -97,7 +104,9 @@ fn extract_migration_dirs_from_provider(
 
     let mut dirs = Vec::new();
     walk_stmts(program.statements, true, &mut |expr| {
-        let Expr::MethodCall { method, args, .. } = expr else { return };
+        let Expr::MethodCall { method, args, .. } = expr else {
+            return;
+        };
         if expr_name(method, source).as_deref() != Some("loadMigrationsFrom") {
             return;
         }
@@ -111,7 +120,9 @@ fn extract_migration_dirs_from_provider(
 }
 
 fn scan_migrations_dir(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     let mut batch: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
@@ -140,18 +151,25 @@ fn parse_migration_file(project: &LaravelProject, file: &Path) -> Option<Migrati
         // Named class: class CreateXxx extends Migration { ... }
         if let Stmt::Class { name, members, .. } = stmt {
             let class_name = span_text(name.span, &source);
-            if let Some(entry) = find_up_method(members, &source, &class_name, &timestamp, &relative) {
+            if let Some(entry) =
+                find_up_method(members, &source, &class_name, &timestamp, &relative)
+            {
                 return Some(entry);
             }
         }
 
         // Anonymous class: return new class extends Migration { ... }
         // Parsed as Stmt::Return { expr: Expr::New { class: Expr::AnonymousClass { .. } } }
-        if let Stmt::Return { expr: Some(expr), .. } = stmt {
+        if let Stmt::Return {
+            expr: Some(expr), ..
+        } = stmt
+        {
             if let Expr::New { class, .. } = *expr {
                 if let Expr::AnonymousClass { members, .. } = *class {
                     let class_name = timestamp.clone();
-                    if let Some(entry) = find_up_method(members, &source, &class_name, &timestamp, &relative) {
+                    if let Some(entry) =
+                        find_up_method(members, &source, &class_name, &timestamp, &relative)
+                    {
                         return Some(entry);
                     }
                 }
@@ -169,13 +187,20 @@ fn find_up_method(
     relative: &Path,
 ) -> Option<MigrationEntry> {
     for member in members.iter().copied() {
-        let ClassMember::Method { name: method_name, body, .. } = member else { continue };
+        let ClassMember::Method {
+            name: method_name,
+            body,
+            ..
+        } = member
+        else {
+            continue;
+        };
         if span_text(method_name.span, source) != "up" {
             continue;
         }
         return Some(
-            extract_schema_call(body, source, class_name, timestamp, relative)
-                .unwrap_or_else(|| MigrationEntry {
+            extract_schema_call(body, source, class_name, timestamp, relative).unwrap_or_else(
+                || MigrationEntry {
                     file: relative.to_path_buf(),
                     timestamp: timestamp.to_string(),
                     class_name: class_name.to_string(),
@@ -184,7 +209,8 @@ fn find_up_method(
                     columns: Vec::new(),
                     indexes: Vec::new(),
                     dropped_columns: Vec::new(),
-                }),
+                },
+            ),
         );
     }
     None
@@ -200,12 +226,15 @@ fn extract_schema_call(
     for stmt in stmts {
         match stmt {
             Stmt::Expression { expr, .. } => {
-                if let Some(entry) = try_schema_expr(*expr, source, class_name, timestamp, relative) {
+                if let Some(entry) = try_schema_expr(*expr, source, class_name, timestamp, relative)
+                {
                     return Some(entry);
                 }
             }
             Stmt::Block { statements, .. } => {
-                if let Some(entry) = extract_schema_call(statements, source, class_name, timestamp, relative) {
+                if let Some(entry) =
+                    extract_schema_call(statements, source, class_name, timestamp, relative)
+                {
                     return Some(entry);
                 }
             }
@@ -222,7 +251,15 @@ fn try_schema_expr(
     timestamp: &str,
     relative: &Path,
 ) -> Option<MigrationEntry> {
-    let Expr::StaticCall { class, method, args, .. } = expr else { return None };
+    let Expr::StaticCall {
+        class,
+        method,
+        args,
+        ..
+    } = expr
+    else {
+        return None;
+    };
     let class_text = span_text(class.span(), source);
     if class_text != "Schema" && class_text != "\\Schema" {
         return None;
@@ -248,7 +285,9 @@ fn try_schema_expr(
     let mut dropped: Vec<String> = Vec::new();
 
     for stmt in closure_body.iter() {
-        let Stmt::Expression { expr, .. } = stmt else { continue };
+        let Stmt::Expression { expr, .. } = stmt else {
+            continue;
+        };
         process_table_call(*expr, source, &mut columns, &mut indexes, &mut dropped);
     }
 
@@ -291,7 +330,10 @@ fn process_table_call(
         "index" => {
             if let Some(cols) = first_args.first().map(|a| expr_to_string_list(*a, source)) {
                 if !cols.is_empty() {
-                    indexes.push(IndexEntry { columns: cols, index_type: "index".to_string() });
+                    indexes.push(IndexEntry {
+                        columns: cols,
+                        index_type: "index".to_string(),
+                    });
                 }
             }
             return;
@@ -300,7 +342,10 @@ fn process_table_call(
             if let Some(arg) = first_args.first() {
                 let cols = expr_to_string_list(*arg, source);
                 if !cols.is_empty() {
-                    indexes.push(IndexEntry { columns: cols, index_type: "unique".to_string() });
+                    indexes.push(IndexEntry {
+                        columns: cols,
+                        index_type: "unique".to_string(),
+                    });
                     return;
                 }
             }
@@ -309,7 +354,10 @@ fn process_table_call(
             if let Some(arg) = first_args.first() {
                 let cols = expr_to_string_list(*arg, source);
                 if !cols.is_empty() {
-                    indexes.push(IndexEntry { columns: cols, index_type: "primary".to_string() });
+                    indexes.push(IndexEntry {
+                        columns: cols,
+                        index_type: "primary".to_string(),
+                    });
                     return;
                 }
             }
@@ -318,10 +366,14 @@ fn process_table_call(
             // Standalone ->foreign('col')->references('id')->on('users')
             // Parse the FK chain
             if let Some(col) = first_args.first().and_then(|a| expr_to_string(*a, source)) {
-                let references = chain.iter().find(|(m, _)| m == "references")
+                let references = chain
+                    .iter()
+                    .find(|(m, _)| m == "references")
                     .and_then(|(_, a)| a.first())
                     .and_then(|a| expr_to_string(*a, source));
-                let on_table = chain.iter().find(|(m, _)| m == "on")
+                let on_table = chain
+                    .iter()
+                    .find(|(m, _)| m == "on")
                     .and_then(|(_, a)| a.first())
                     .and_then(|a| expr_to_string(*a, source));
                 // Update the existing column if present
@@ -338,15 +390,27 @@ fn process_table_call(
                 name: "created_at".to_string(),
                 column_type: "timestamp".to_string(),
                 nullable: true,
-                default: None, unique: false, unsigned: false, primary: false,
-                enum_values: Vec::new(), comment: None, references: None, on_table: None,
+                default: None,
+                unique: false,
+                unsigned: false,
+                primary: false,
+                enum_values: Vec::new(),
+                comment: None,
+                references: None,
+                on_table: None,
             });
             columns.push(ColumnEntry {
                 name: "updated_at".to_string(),
                 column_type: "timestamp".to_string(),
                 nullable: true,
-                default: None, unique: false, unsigned: false, primary: false,
-                enum_values: Vec::new(), comment: None, references: None, on_table: None,
+                default: None,
+                unique: false,
+                unsigned: false,
+                primary: false,
+                enum_values: Vec::new(),
+                comment: None,
+                references: None,
+                on_table: None,
             });
             let _ = nullable;
             return;
@@ -356,8 +420,14 @@ fn process_table_call(
                 name: "deleted_at".to_string(),
                 column_type: "timestamp".to_string(),
                 nullable: true,
-                default: None, unique: false, unsigned: false, primary: false,
-                enum_values: Vec::new(), comment: None, references: None, on_table: None,
+                default: None,
+                unique: false,
+                unsigned: false,
+                primary: false,
+                enum_values: Vec::new(),
+                comment: None,
+                references: None,
+                on_table: None,
             });
             return;
         }
@@ -366,29 +436,49 @@ fn process_table_call(
                 name: "remember_token".to_string(),
                 column_type: "string".to_string(),
                 nullable: true,
-                default: None, unique: false, unsigned: false, primary: false,
-                enum_values: Vec::new(), comment: None, references: None, on_table: None,
+                default: None,
+                unique: false,
+                unsigned: false,
+                primary: false,
+                enum_values: Vec::new(),
+                comment: None,
+                references: None,
+                on_table: None,
             });
             return;
         }
         "morphs" | "nullableMorphs" | "uuidMorphs" | "nullableUuidMorphs" => {
             let nullable = first_method.contains("nullable");
             let uuid = first_method.contains("uuid") || first_method.contains("Uuid");
-            let col_name = first_args.first().and_then(|a| expr_to_string(*a, source))
+            let col_name = first_args
+                .first()
+                .and_then(|a| expr_to_string(*a, source))
                 .unwrap_or_else(|| "morphable".to_string());
             columns.push(ColumnEntry {
                 name: format!("{col_name}_type"),
                 column_type: "string".to_string(),
                 nullable,
-                default: None, unique: false, unsigned: false, primary: false,
-                enum_values: Vec::new(), comment: None, references: None, on_table: None,
+                default: None,
+                unique: false,
+                unsigned: false,
+                primary: false,
+                enum_values: Vec::new(),
+                comment: None,
+                references: None,
+                on_table: None,
             });
             columns.push(ColumnEntry {
                 name: format!("{col_name}_id"),
                 column_type: if uuid { "uuid" } else { "unsignedBigInteger" }.to_string(),
                 nullable,
-                default: None, unique: false, unsigned: !uuid, primary: false,
-                enum_values: Vec::new(), comment: None, references: None, on_table: None,
+                default: None,
+                unique: false,
+                unsigned: !uuid,
+                primary: false,
+                enum_values: Vec::new(),
+                comment: None,
+                references: None,
+                on_table: None,
             });
             return;
         }
@@ -434,8 +524,11 @@ fn process_table_call(
             let name = col_name.unwrap_or_default();
             ("uuid".to_string(), name, false, false)
         }
-        "unsignedBigInteger" | "unsignedInteger" | "unsignedSmallInteger"
-        | "unsignedTinyInteger" | "unsignedMediumInteger" => {
+        "unsignedBigInteger"
+        | "unsignedInteger"
+        | "unsignedSmallInteger"
+        | "unsignedTinyInteger"
+        | "unsignedMediumInteger" => {
             let name = col_name.unwrap_or_default();
             (first_method.clone(), name, true, false)
         }
@@ -480,7 +573,10 @@ fn process_table_call(
             "primary" => entry.primary = true,
             "default" => {
                 entry.default = mod_args.first().map(|a| {
-                    span_text(a.span(), source).trim_matches('\'').trim_matches('"').to_string()
+                    span_text(a.span(), source)
+                        .trim_matches('\'')
+                        .trim_matches('"')
+                        .to_string()
                 });
             }
             "comment" => {
@@ -512,7 +608,12 @@ fn flatten_method_chain<'a>(
     out: &mut Vec<(String, Vec<php_parser::ast::ExprId<'a>>)>,
 ) -> bool {
     match expr {
-        Expr::MethodCall { target, method, args, .. } => {
+        Expr::MethodCall {
+            target,
+            method,
+            args,
+            ..
+        } => {
             let method_name = span_text(method.span(), source);
             let is_root = flatten_method_chain(*target, source, out);
             if is_root {
@@ -571,10 +672,7 @@ fn column_type_str(method: &str) -> String {
 /// the current column state.
 pub fn resolve_columns_for_table(table: &str, migrations: &[MigrationEntry]) -> Vec<ColumnEntry> {
     let mut columns: Vec<ColumnEntry> = Vec::new();
-    let relevant: Vec<&MigrationEntry> = migrations
-        .iter()
-        .filter(|m| m.table == table)
-        .collect();
+    let relevant: Vec<&MigrationEntry> = migrations.iter().filter(|m| m.table == table).collect();
 
     for migration in &relevant {
         if migration.operation == "create" {
@@ -597,4 +695,3 @@ pub fn resolve_columns_for_table(table: &str, migrations: &[MigrationEntry]) -> 
 fn _byte_offset_hint(source: &[u8], offset: usize) -> (usize, usize) {
     byte_offset_to_line_col(source, offset)
 }
-

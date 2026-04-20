@@ -4,13 +4,15 @@ mod context;
 mod parser;
 
 use collector::collect_registered_route_files;
-use context::{build_middleware_index, RouteContext};
+use context::{RouteContext, build_middleware_index};
 use parser::collect_routes_from_source;
 
 use crate::analyzers::middleware;
 use crate::project::LaravelProject;
 use crate::types::RouteReport;
+use std::collections::BTreeSet;
 use std::fs;
+use std::path::PathBuf;
 
 pub fn analyze(project: &LaravelProject) -> Result<RouteReport, String> {
     let route_files = collect_registered_route_files(project)?;
@@ -19,8 +21,8 @@ pub fn analyze(project: &LaravelProject) -> Result<RouteReport, String> {
 
     for registered in &route_files {
         let file = &registered.file;
-        let source = fs::read(file)
-            .map_err(|e| format!("failed to read {}: {e}", file.display()))?;
+        let source =
+            fs::read(file).map_err(|e| format!("failed to read {}: {e}", file.display()))?;
         collect_routes_from_source(
             &source,
             &project.root,
@@ -46,4 +48,19 @@ pub fn analyze(project: &LaravelProject) -> Result<RouteReport, String> {
         route_count: routes.len(),
         routes,
     })
+}
+
+pub(crate) fn collect_registered_route_paths(
+    project: &LaravelProject,
+) -> Result<Vec<PathBuf>, String> {
+    let mut seen = BTreeSet::new();
+    let mut files = Vec::new();
+
+    for registered in collect_registered_route_files(project)? {
+        if seen.insert(registered.file.clone()) {
+            files.push(registered.file);
+        }
+    }
+
+    Ok(files)
 }

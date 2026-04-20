@@ -8,8 +8,8 @@ use std::path::Path;
 
 use crate::php::ast::{byte_offset_to_line_col, span_text, strip_root};
 use crate::php::psr4::{
-    collect_psr4_mappings, laravel_providers, package_name_for_source, read_json,
-    resolve_class_file, Psr4Mapping,
+    Psr4Mapping, collect_psr4_mappings, laravel_providers, package_name_for_source, read_json,
+    resolve_class_file,
 };
 use crate::project::LaravelProject;
 use crate::types::{ProviderEntry, ProviderReport};
@@ -19,6 +19,7 @@ pub fn analyze(project: &LaravelProject) -> Result<ProviderReport, String> {
     let mut providers = Vec::new();
 
     providers.extend(read_bootstrap_providers(project, &mappings)?);
+    providers.extend(read_config_app_providers(project, &mappings)?);
     providers.extend(read_root_composer_providers(project, &mappings)?);
     providers.extend(read_local_package_providers(project, &mappings)?);
 
@@ -52,11 +53,28 @@ fn read_bootstrap_providers(
     if !path.is_file() {
         return Ok(Vec::new());
     }
-    let source = fs::read_to_string(&path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let source =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     Ok(extract_class_references(&source)
         .into_iter()
         .map(|r| build_provider_entry(project, &path, "bootstrap", None, r, mappings))
+        .collect())
+}
+
+fn read_config_app_providers(
+    project: &LaravelProject,
+    mappings: &[Psr4Mapping],
+) -> Result<Vec<ProviderEntry>, String> {
+    let path = project.root.join("config/app.php");
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+
+    let source =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    Ok(extract_class_references(&source)
+        .into_iter()
+        .map(|r| build_provider_entry(project, &path, "config-app", None, r, mappings))
         .collect())
 }
 
@@ -76,7 +94,11 @@ fn read_root_composer_providers(
                 &path,
                 "composer-discovered",
                 None,
-                ClassReference { class, line, column },
+                ClassReference {
+                    class,
+                    line,
+                    column,
+                },
                 mappings,
             ));
         }
@@ -112,14 +134,17 @@ fn read_local_package_providers(
 
                     if let Some(classes) = laravel_providers(&composer) {
                         for class in classes {
-                            let (line, column) =
-                                find_json_string_position(&composer_path, &class)?;
+                            let (line, column) = find_json_string_position(&composer_path, &class)?;
                             providers.push(build_provider_entry(
                                 project,
                                 &composer_path,
                                 "local-package-composer",
                                 package_name.clone(),
-                                ClassReference { class, line, column },
+                                ClassReference {
+                                    class,
+                                    line,
+                                    column,
+                                },
                                 mappings,
                             ));
                         }
@@ -179,7 +204,9 @@ fn collect_class_const_fetches(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::Return { expr: Some(expr), .. } => {
+            Stmt::Return {
+                expr: Some(expr), ..
+            } => {
                 collect_from_expr(*expr, source, imports, out);
             }
             Stmt::Expression { expr, .. } => {
@@ -202,7 +229,11 @@ fn collect_from_expr(
                 collect_from_expr(item.value, source, imports, out);
             }
         }
-        Expr::ClassConstFetch { class, constant, span } => {
+        Expr::ClassConstFetch {
+            class,
+            constant,
+            span,
+        } => {
             let constant_text = span_text(constant.span(), source);
             if constant_text.eq_ignore_ascii_case("class") {
                 let raw = span_text(class.span(), source)
@@ -214,7 +245,11 @@ fn collect_from_expr(
                     imports.get(&raw).cloned().unwrap_or(raw)
                 };
                 let (line, column) = byte_offset_to_line_col(source, span.start);
-                out.push(ClassReference { class: resolved, line, column });
+                out.push(ClassReference {
+                    class: resolved,
+                    line,
+                    column,
+                });
             }
         }
         _ => {}
@@ -230,10 +265,14 @@ fn build_provider_entry(
     mappings: &[Psr4Mapping],
 ) -> ProviderEntry {
     let source_file = resolve_class_file(&reference.class, mappings);
-    let package_name =
-        package_name.or_else(|| package_name_for_source(&source_file, mappings));
+    let package_name = package_name.or_else(|| package_name_for_source(&source_file, mappings));
     let source_available = source_file.is_some();
-    let status = if source_available { "static_exact" } else { "source_missing" }.to_string();
+    let status = if source_available {
+        "static_exact"
+    } else {
+        "source_missing"
+    }
+    .to_string();
 
     ProviderEntry {
         provider_class: reference.class,
@@ -242,19 +281,17 @@ fn build_provider_entry(
         registration_kind: registration_kind.to_string(),
         declared_in: strip_root(&project.root, declared_in),
         package_name,
-        source_file: source_file
-            .as_ref()
-            .map(|p| strip_root(&project.root, p)),
+        source_file: source_file.as_ref().map(|p| strip_root(&project.root, p)),
         source_available,
         status,
     }
 }
 
 fn find_json_string_position(path: &Path, needle: &str) -> Result<(usize, usize), String> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    let quoted = serde_json::to_string(needle)
-        .map_err(|e| format!("failed to encode JSON string: {e}"))?;
+    let text =
+        fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let quoted =
+        serde_json::to_string(needle).map_err(|e| format!("failed to encode JSON string: {e}"))?;
     let index = text
         .find(&quoted)
         .ok_or_else(|| format!("failed to locate {needle} in {}", path.display()))?;
@@ -277,6 +314,28 @@ return [
         let refs = extract_class_references(src);
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].class, "App\\Modules\\Blog\\BlogServiceProvider");
+    }
+
+    #[test]
+    fn extracts_provider_classes_from_config_app_style_array() {
+        let src = r#"<?php
+use App\Providers\RouteServiceProvider;
+
+return [
+    'providers' => [
+        RouteServiceProvider::class,
+        App\Providers\EventServiceProvider::class,
+    ],
+];"#;
+        let refs = extract_class_references(src);
+        let classes: Vec<String> = refs.into_iter().map(|r| r.class).collect();
+        assert_eq!(
+            classes,
+            vec![
+                "App\\Providers\\RouteServiceProvider".to_string(),
+                "App\\Providers\\EventServiceProvider".to_string(),
+            ]
+        );
     }
 
     #[test]

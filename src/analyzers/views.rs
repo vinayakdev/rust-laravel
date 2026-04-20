@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::analyzers::providers;
+use crate::analyzers::routes;
 use crate::php::ast::{expr_name, expr_to_path, expr_to_string, expr_to_string_list, strip_root};
 use crate::php::psr4::{collect_psr4_mappings, resolve_class_file, resolve_namespace_dir};
 use crate::php::walk::walk_stmts;
@@ -25,7 +26,8 @@ pub fn analyze(project: &LaravelProject) -> Result<ViewReport, String> {
     let mut blade_components = collect_default_blade_components(project, &mappings)?;
     let mut livewire_components = collect_conventional_livewire_components(project, &mappings)?;
 
-    let registrations = collect_provider_registrations(project, &provider_report.providers, &mappings)?;
+    let registrations =
+        collect_provider_registrations(project, &provider_report.providers, &mappings)?;
 
     views.extend(registrations.views);
     blade_components.extend(registrations.blade_components);
@@ -127,7 +129,11 @@ fn collect_default_blade_components(
                 kind: "blade-anonymous-auto".to_string(),
                 class_name: None,
                 class_file: None,
-                view_name: Some(blade_view_name(&project.root.join("resources/views"), &file, None)),
+                view_name: Some(blade_view_name(
+                    &project.root.join("resources/views"),
+                    &file,
+                    None,
+                )),
                 view_file: Some(strip_root(&project.root, &file)),
                 props: parse_blade_props(&file),
                 source: ViewSource {
@@ -149,7 +155,10 @@ fn collect_conventional_livewire_components(
 ) -> Result<Vec<LivewireComponentEntry>, String> {
     let mut entries = Vec::new();
 
-    for root in [project.root.join("app/Http/Livewire"), project.root.join("app/Livewire")] {
+    for root in [
+        project.root.join("app/Http/Livewire"),
+        project.root.join("app/Livewire"),
+    ] {
         if !root.is_dir() {
             continue;
         }
@@ -158,7 +167,8 @@ fn collect_conventional_livewire_components(
             let component = derive_component_alias(&root, &file, None);
             let class_name = class_name_for_path(&project.root, &file, mappings);
             let view_name = Some(format!("livewire.{component}"));
-            let view_file = conventional_view_file(project, view_name.as_deref().unwrap_or_default());
+            let view_file =
+                conventional_view_file(project, view_name.as_deref().unwrap_or_default());
             entries.push(LivewireComponentEntry {
                 component,
                 kind: "livewire-class-auto".to_string(),
@@ -197,7 +207,10 @@ fn collect_provider_registrations(
         if !provider.source_available {
             continue;
         }
-        if !seen_sources.insert((provider.provider_class.clone(), relative_source_file.clone())) {
+        if !seen_sources.insert((
+            provider.provider_class.clone(),
+            relative_source_file.clone(),
+        )) {
             continue;
         }
 
@@ -217,7 +230,11 @@ fn collect_provider_registrations(
         livewire_components.extend(extracted.livewire_components);
     }
 
-    Ok(RegistrationSets { views, blade_components, livewire_components })
+    Ok(RegistrationSets {
+        views,
+        blade_components,
+        livewire_components,
+    })
 }
 
 fn extract_provider_view_data(
@@ -233,7 +250,11 @@ fn extract_provider_view_data(
     let mut parser = Parser::new(lexer, &arena);
     let program = parser.parse_program();
     if !program.errors.is_empty() {
-        return RegistrationSets { views: Vec::new(), blade_components: Vec::new(), livewire_components: Vec::new() };
+        return RegistrationSets {
+            views: Vec::new(),
+            blade_components: Vec::new(),
+            livewire_components: Vec::new(),
+        };
     }
     let imports = build_import_map(program.statements, source);
 
@@ -257,7 +278,11 @@ fn extract_provider_view_data(
         );
     });
 
-    RegistrationSets { views, blade_components, livewire_components }
+    RegistrationSets {
+        views,
+        blade_components,
+        livewire_components,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -282,7 +307,9 @@ fn visit_provider_expr(
             match method_name.as_str() {
                 "loadViewsFrom" if args.len() >= 2 => {
                     if let (Some(path), Some(namespace)) = (
-                        args.first().and_then(|a| expr_to_path(a.value, source, &project.root, provider_file)),
+                        args.first().and_then(|a| {
+                            expr_to_path(a.value, source, &project.root, provider_file)
+                        }),
                         args.get(1).and_then(|a| expr_to_string(a.value, source)),
                     ) {
                         for file in collect_blade_files(&path) {
@@ -301,25 +328,42 @@ fn visit_provider_expr(
                         if components_dir.is_dir() {
                             for file in collect_blade_files(&components_dir) {
                                 blade_components.push(BladeComponentEntry {
-                                    component: derive_component_alias(&components_dir, &file, Some(&namespace)),
-                                kind: "blade-anonymous-package".to_string(),
-                                class_name: None,
-                                class_file: None,
-                                view_name: Some(blade_view_name(&path, &file, Some(&namespace))),
-                                view_file: Some(strip_root(&project.root, &file)),
-                                props: parse_blade_props(&file),
-                                source: source_ref.clone(),
-                            });
-                        }
+                                    component: derive_component_alias(
+                                        &components_dir,
+                                        &file,
+                                        Some(&namespace),
+                                    ),
+                                    kind: "blade-anonymous-package".to_string(),
+                                    class_name: None,
+                                    class_file: None,
+                                    view_name: Some(blade_view_name(
+                                        &path,
+                                        &file,
+                                        Some(&namespace),
+                                    )),
+                                    view_file: Some(strip_root(&project.root, &file)),
+                                    props: parse_blade_props(&file),
+                                    source: source_ref.clone(),
+                                });
+                            }
                         }
                     }
                 }
                 "loadViewComponentsAs" if args.len() >= 2 => {
-                    if let Some(prefix) = args.first().and_then(|a| expr_to_string(a.value, source)) {
-                        for class_name in args.get(1).map(|a| expr_to_string_list(a.value, source)).unwrap_or_default() {
+                    if let Some(prefix) = args.first().and_then(|a| expr_to_string(a.value, source))
+                    {
+                        for class_name in args
+                            .get(1)
+                            .map(|a| expr_to_string_list(a.value, source))
+                            .unwrap_or_default()
+                        {
                             blade_components.push(build_blade_component_from_class(
                                 project,
-                                &format!("{}-{}", prefix, kebab_case(last_class_segment(&class_name))),
+                                &format!(
+                                    "{}-{}",
+                                    prefix,
+                                    kebab_case(last_class_segment(&class_name))
+                                ),
                                 "blade-class-prefix",
                                 Some(class_name),
                                 &source_ref,
@@ -331,7 +375,12 @@ fn visit_provider_expr(
                 _ => {}
             }
         }
-        Expr::StaticCall { class, method, args, .. } => {
+        Expr::StaticCall {
+            class,
+            method,
+            args,
+            ..
+        } => {
             let class_name = expr_name(class, source).unwrap_or_default();
             let method_name = expr_name(method, source).unwrap_or_default();
             let source_ref = source_ref(expr, source, provider, declared_in);
@@ -340,7 +389,8 @@ fn visit_provider_expr(
                 ("Blade", "component") if args.len() >= 2 => {
                     if let (Some(alias), Some(class_name)) = (
                         args.first().and_then(|a| expr_to_string(a.value, source)),
-                        args.get(1).and_then(|a| expr_to_class_name(a.value, source, imports)),
+                        args.get(1)
+                            .and_then(|a| expr_to_class_name(a.value, source, imports)),
                     ) {
                         blade_components.push(build_blade_component_from_class(
                             project,
@@ -359,7 +409,8 @@ fn visit_provider_expr(
                     ) {
                         if let Some(dir) = resolve_namespace_dir(&class_namespace, mappings) {
                             for file in collect_php_files(&dir) {
-                                let class_name = class_name_for_path(&project.root, &file, mappings);
+                                let class_name =
+                                    class_name_for_path(&project.root, &file, mappings);
                                 blade_components.push(build_blade_component_from_class(
                                     project,
                                     &derive_component_alias(&dir, &file, Some(&prefix)),
@@ -373,8 +424,9 @@ fn visit_provider_expr(
                     }
                 }
                 ("Blade", "anonymousComponentPath") if !args.is_empty() => {
-                    if let Some(path) =
-                        args.first().and_then(|a| expr_to_path(a.value, source, &project.root, provider_file))
+                    if let Some(path) = args
+                        .first()
+                        .and_then(|a| expr_to_path(a.value, source, &project.root, provider_file))
                     {
                         let prefix = args.get(1).and_then(|a| expr_to_string(a.value, source));
                         for file in collect_blade_files(&path) {
@@ -394,7 +446,8 @@ fn visit_provider_expr(
                 ("Livewire", "component") if args.len() >= 2 => {
                     if let (Some(alias), Some(class_name)) = (
                         args.first().and_then(|a| expr_to_string(a.value, source)),
-                        args.get(1).and_then(|a| expr_to_class_name(a.value, source, imports)),
+                        args.get(1)
+                            .and_then(|a| expr_to_class_name(a.value, source, imports)),
                     ) {
                         livewire_components.push(build_livewire_component_from_class(
                             project,
@@ -413,7 +466,10 @@ fn visit_provider_expr(
     }
 }
 
-fn build_import_map(stmts: &[php_parser::ast::StmtId<'_>], source: &[u8]) -> HashMap<String, String> {
+fn build_import_map(
+    stmts: &[php_parser::ast::StmtId<'_>],
+    source: &[u8],
+) -> HashMap<String, String> {
     let mut imports = HashMap::new();
     for stmt in stmts {
         let Stmt::Use { uses, kind, .. } = stmt else {
@@ -447,14 +503,19 @@ fn expr_to_class_name(
     source: &[u8],
     imports: &HashMap<String, String>,
 ) -> Option<String> {
-    let Expr::ClassConstFetch { class, constant, .. } = expr else {
+    let Expr::ClassConstFetch {
+        class, constant, ..
+    } = expr
+    else {
         return expr_to_string(expr, source);
     };
     let constant_name = expr_name(constant, source)?;
     if constant_name != "class" {
         return None;
     }
-    let raw = expr_name(class, source)?.trim_start_matches('\\').to_string();
+    let raw = expr_name(class, source)?
+        .trim_start_matches('\\')
+        .to_string();
     Some(if raw.contains('\\') {
         raw
     } else {
@@ -470,8 +531,14 @@ fn source_ref(
 ) -> ViewSource {
     ViewSource {
         declared_in: declared_in.to_path_buf(),
-        line: expr.span().line_info(source).map_or(provider.line, |i| i.line),
-        column: expr.span().line_info(source).map_or(provider.column, |i| i.column),
+        line: expr
+            .span()
+            .line_info(source)
+            .map_or(provider.line, |i| i.line),
+        column: expr
+            .span()
+            .line_info(source)
+            .map_or(provider.column, |i| i.column),
         provider_class: Some(provider.provider_class.clone()),
     }
 }
@@ -547,21 +614,40 @@ fn build_livewire_component_from_class(
     }
 }
 
-fn collect_view_usages(project: &LaravelProject) -> Result<HashMap<String, Vec<ViewUsage>>, String> {
+fn collect_view_usages(
+    project: &LaravelProject,
+) -> Result<HashMap<String, Vec<ViewUsage>>, String> {
     let mut usage_map: HashMap<String, Vec<ViewUsage>> = HashMap::new();
 
-    for root in [project.root.join("app"), project.root.join("routes"), project.root.join("packages")] {
-        if !root.is_dir() {
-            continue;
-        }
-        for file in collect_php_files(&root) {
-            for (view_name, usage) in extract_view_usages_from_php(project, &file)? {
-                usage_map.entry(view_name).or_default().push(usage);
-            }
+    for root in [project.root.join("app"), project.root.join("packages")] {
+        collect_view_usages_from_root(project, &root, &mut usage_map)?;
+    }
+
+    for file in routes::collect_registered_route_paths(project)? {
+        for (view_name, usage) in extract_view_usages_from_php(project, &file)? {
+            usage_map.entry(view_name).or_default().push(usage);
         }
     }
 
     Ok(usage_map)
+}
+
+fn collect_view_usages_from_root(
+    project: &LaravelProject,
+    root: &Path,
+    usage_map: &mut HashMap<String, Vec<ViewUsage>>,
+) -> Result<(), String> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+
+    for file in collect_php_files(root) {
+        for (view_name, usage) in extract_view_usages_from_php(project, &file)? {
+            usage_map.entry(view_name).or_default().push(usage);
+        }
+    }
+
+    Ok(())
 }
 
 fn extract_view_usages_from_php(
@@ -591,7 +677,9 @@ fn collect_view_usages_from_stmts(
 ) {
     for stmt in stmts {
         match stmt {
-            Stmt::Return { expr: Some(expr), .. } => {
+            Stmt::Return {
+                expr: Some(expr), ..
+            } => {
                 if let Some((name, variables)) = extract_view_call(*expr, source) {
                     out.push((
                         name,
@@ -616,10 +704,14 @@ fn collect_view_usages_from_stmts(
                 }
             }
             Stmt::Block { statements, .. }
-            | Stmt::Declare { body: statements, .. } => {
+            | Stmt::Declare {
+                body: statements, ..
+            } => {
                 collect_view_usages_from_stmts(statements, source, project, file, out);
             }
-            Stmt::Namespace { body: Some(body), .. } => {
+            Stmt::Namespace {
+                body: Some(body), ..
+            } => {
                 collect_view_usages_from_stmts(body, source, project, file, out);
             }
             Stmt::Class { members, .. }
@@ -632,7 +724,11 @@ fn collect_view_usages_from_stmts(
                     }
                 }
             }
-            Stmt::If { then_block, else_block, .. } => {
+            Stmt::If {
+                then_block,
+                else_block,
+                ..
+            } => {
                 collect_view_usages_from_stmts(then_block, source, project, file, out);
                 if let Some(else_block) = else_block {
                     collect_view_usages_from_stmts(else_block, source, project, file, out);
@@ -650,11 +746,7 @@ fn collect_view_usages_from_stmts(
     }
 }
 
-fn usage_source(
-    project: &LaravelProject,
-    file: &Path,
-    line_info: Option<LineInfo>,
-) -> ViewSource {
+fn usage_source(project: &LaravelProject, file: &Path, line_info: Option<LineInfo>) -> ViewSource {
     ViewSource {
         declared_in: strip_root(&project.root, file),
         line: line_info.map_or(1, |info| info.line),
@@ -669,7 +761,10 @@ fn extract_view_call(expr: ExprId<'_>, source: &[u8]) -> Option<(String, Vec<Vie
             let func_name = expr_name(func, source)?;
             if func_name == "view" || func_name == "\\view" {
                 let view_name = args.first().and_then(|a| expr_to_string(a.value, source))?;
-                let variables = args.get(1).map(|arg| extract_passed_variables(arg.value, source)).unwrap_or_default();
+                let variables = args
+                    .get(1)
+                    .map(|arg| extract_passed_variables(arg.value, source))
+                    .unwrap_or_default();
                 Some((view_name, variables))
             } else if func_name == "response" || func_name == "\\response" {
                 None
@@ -677,12 +772,20 @@ fn extract_view_call(expr: ExprId<'_>, source: &[u8]) -> Option<(String, Vec<Vie
                 None
             }
         }
-        Expr::MethodCall { target, method, args, .. } => {
+        Expr::MethodCall {
+            target,
+            method,
+            args,
+            ..
+        } => {
             let method_name = expr_name(method, source)?;
             if method_name == "view" {
                 if matches!(target, Expr::Call { .. }) {
                     let view_name = args.first().and_then(|a| expr_to_string(a.value, source))?;
-                    let variables = args.get(1).map(|arg| extract_passed_variables(arg.value, source)).unwrap_or_default();
+                    let variables = args
+                        .get(1)
+                        .map(|arg| extract_passed_variables(arg.value, source))
+                        .unwrap_or_default();
                     return Some((view_name, variables));
                 }
             }
@@ -693,7 +796,13 @@ fn extract_view_call(expr: ExprId<'_>, source: &[u8]) -> Option<(String, Vec<Vie
 }
 
 fn extract_route_view_call(expr: ExprId<'_>, source: &[u8]) -> Option<(String, Vec<ViewVariable>)> {
-    let Expr::StaticCall { class, method, args, .. } = expr else {
+    let Expr::StaticCall {
+        class,
+        method,
+        args,
+        ..
+    } = expr
+    else {
         return None;
     };
     if expr_name(class, source).as_deref() != Some("Route") {
@@ -703,7 +812,10 @@ fn extract_route_view_call(expr: ExprId<'_>, source: &[u8]) -> Option<(String, V
         return None;
     }
     let view_name = args.get(1).and_then(|a| expr_to_string(a.value, source))?;
-    let variables = args.get(2).map(|arg| extract_passed_variables(arg.value, source)).unwrap_or_default();
+    let variables = args
+        .get(2)
+        .map(|arg| extract_passed_variables(arg.value, source))
+        .unwrap_or_default();
     Some((view_name, variables))
 }
 
@@ -712,9 +824,17 @@ fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable
         Expr::Array { items, .. } => items
             .iter()
             .filter_map(|item| {
-                let key = item.key.and_then(|key| expr_to_string(key, source)).or_else(|| {
-                    item.key.map(|key| crate::php::ast::span_text(key.span(), source).trim_matches('\'').trim_matches('"').to_string())
-                })?;
+                let key = item
+                    .key
+                    .and_then(|key| expr_to_string(key, source))
+                    .or_else(|| {
+                        item.key.map(|key| {
+                            crate::php::ast::span_text(key.span(), source)
+                                .trim_matches('\'')
+                                .trim_matches('"')
+                                .to_string()
+                        })
+                    })?;
                 Some(ViewVariable {
                     name: key,
                     default_value: expr_literal_default(item.value, source),
@@ -727,7 +847,10 @@ fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable
                 return args
                     .iter()
                     .filter_map(|arg| expr_to_string(arg.value, source))
-                    .map(|name| ViewVariable { name, default_value: None })
+                    .map(|name| ViewVariable {
+                        name,
+                        default_value: None,
+                    })
                     .collect();
             }
             if func_name == "array_merge" || func_name == "\\array_merge" {
@@ -745,7 +868,9 @@ fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable
 }
 
 fn expr_literal_default(expr: ExprId<'_>, source: &[u8]) -> Option<String> {
-    let raw = crate::php::ast::span_text(expr.span(), source).trim().to_string();
+    let raw = crate::php::ast::span_text(expr.span(), source)
+        .trim()
+        .to_string();
     if raw.is_empty() || raw.starts_with('$') {
         return None;
     }
@@ -811,7 +936,10 @@ fn parse_public_properties(source: &str) -> Vec<ViewVariable> {
     let mut props = Vec::new();
     for line in source.lines() {
         let trimmed = line.trim();
-        if !trimmed.starts_with("public ") || trimmed.contains(" function ") || trimmed.starts_with("public function") {
+        if !trimmed.starts_with("public ")
+            || trimmed.contains(" function ")
+            || trimmed.starts_with("public function")
+        {
             continue;
         }
         if let Some(dollar) = trimmed.find('$') {
@@ -827,7 +955,10 @@ fn parse_public_properties(source: &str) -> Vec<ViewVariable> {
                 .split_once('=')
                 .map(|(_, value)| value.trim().trim_end_matches(';').trim().to_string())
                 .filter(|value| !value.is_empty());
-            props.push(ViewVariable { name, default_value });
+            props.push(ViewVariable {
+                name,
+                default_value,
+            });
         }
     }
     props
@@ -843,7 +974,10 @@ fn parse_constructor_promoted_properties(source: &str) -> Vec<ViewVariable> {
     let mut props = Vec::new();
     for param in split_top_level(body, ',') {
         let trimmed = param.trim();
-        if !(trimmed.contains("public ") || trimmed.starts_with("public") || trimmed.contains("public readonly")) {
+        if !(trimmed.contains("public ")
+            || trimmed.starts_with("public")
+            || trimmed.contains("public readonly"))
+        {
             continue;
         }
         if let Some(dollar) = trimmed.find('$') {
@@ -859,7 +993,10 @@ fn parse_constructor_promoted_properties(source: &str) -> Vec<ViewVariable> {
                 .split_once('=')
                 .map(|(_, value)| value.trim().to_string())
                 .filter(|value| !value.is_empty());
-            props.push(ViewVariable { name, default_value });
+            props.push(ViewVariable {
+                name,
+                default_value,
+            });
         }
     }
     props
@@ -995,7 +1132,11 @@ fn trim_quotes(value: &str) -> &str {
     value
         .strip_prefix('"')
         .and_then(|rest| rest.strip_suffix('"'))
-        .or_else(|| value.strip_prefix('\'').and_then(|rest| rest.strip_suffix('\'')))
+        .or_else(|| {
+            value
+                .strip_prefix('\'')
+                .and_then(|rest| rest.strip_suffix('\''))
+        })
         .unwrap_or(value)
 }
 
@@ -1032,7 +1173,10 @@ fn resolve_render_view_name(
                 continue;
             }
             for stmt in body {
-                if let Stmt::Return { expr: Some(inner), .. } = stmt {
+                if let Stmt::Return {
+                    expr: Some(inner), ..
+                } = stmt
+                {
                     found = extract_view_name(*inner, &source);
                     break;
                 }
@@ -1047,9 +1191,15 @@ fn resolve_render_view_name(
         let relative = strip_root(&project.root, &file);
         let path = relative.to_string_lossy();
         if let Some(rest) = path.strip_prefix("app/Livewire/") {
-            Some(format!("livewire.{}", path_to_dot(rest).trim_end_matches(".php")))
+            Some(format!(
+                "livewire.{}",
+                path_to_dot(rest).trim_end_matches(".php")
+            ))
         } else if let Some(rest) = path.strip_prefix("app/Http/Livewire/") {
-            Some(format!("livewire.{}", path_to_dot(rest).trim_end_matches(".php")))
+            Some(format!(
+                "livewire.{}",
+                path_to_dot(rest).trim_end_matches(".php")
+            ))
         } else {
             None
         }
@@ -1147,7 +1297,15 @@ fn derive_component_alias(root: &Path, file: &Path, prefix: Option<&str>) -> Str
 }
 
 fn derive_class_component_view_name(root: &Path, file: &Path) -> String {
-    format!("components.{}", path_to_dot(file.strip_prefix(root).unwrap_or(file).to_string_lossy().trim_end_matches(".php")))
+    format!(
+        "components.{}",
+        path_to_dot(
+            file.strip_prefix(root)
+                .unwrap_or(file)
+                .to_string_lossy()
+                .trim_end_matches(".php")
+        )
+    )
 }
 
 fn path_to_dot(path: &str) -> String {
@@ -1197,11 +1355,28 @@ fn class_name_for_path(
     for mapping in mappings {
         if file.starts_with(&mapping.base_dir) {
             let relative = file.strip_prefix(&mapping.base_dir).ok()?;
-            let stem = relative.to_string_lossy().trim_end_matches(".php").replace('/', "\\");
-            return Some(format!("{}{}", mapping.prefix.trim_end_matches('\\'), if stem.is_empty() { "".to_string() } else { format!("\\{stem}") }));
+            let stem = relative
+                .to_string_lossy()
+                .trim_end_matches(".php")
+                .replace('/', "\\");
+            return Some(format!(
+                "{}{}",
+                mapping.prefix.trim_end_matches('\\'),
+                if stem.is_empty() {
+                    "".to_string()
+                } else {
+                    format!("\\{stem}")
+                }
+            ));
         }
     }
-    Some(strip_root(project_root, file).to_string_lossy().replace('/', "\\").trim_end_matches(".php").to_string())
+    Some(
+        strip_root(project_root, file)
+            .to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches(".php")
+            .to_string(),
+    )
 }
 
 fn dedup_views(views: &mut Vec<ViewEntry>) {
@@ -1211,10 +1386,24 @@ fn dedup_views(views: &mut Vec<ViewEntry>) {
 
 fn dedup_blade_components(components: &mut Vec<BladeComponentEntry>) {
     let mut seen = BTreeSet::new();
-    components.retain(|entry| seen.insert((entry.component.clone(), entry.kind.clone(), entry.class_name.clone(), entry.view_file.clone())));
+    components.retain(|entry| {
+        seen.insert((
+            entry.component.clone(),
+            entry.kind.clone(),
+            entry.class_name.clone(),
+            entry.view_file.clone(),
+        ))
+    });
 }
 
 fn dedup_livewire_components(components: &mut Vec<LivewireComponentEntry>) {
     let mut seen = BTreeSet::new();
-    components.retain(|entry| seen.insert((entry.component.clone(), entry.kind.clone(), entry.class_name.clone(), entry.view_name.clone())));
+    components.retain(|entry| {
+        seen.insert((
+            entry.component.clone(),
+            entry.kind.clone(),
+            entry.class_name.clone(),
+            entry.view_name.clone(),
+        ))
+    });
 }

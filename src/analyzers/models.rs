@@ -7,8 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::analyzers::migrations;
-use crate::php::ast::{byte_offset_to_line_col, expr_to_string, expr_to_string_list, span_text, strip_root};
-use crate::php::psr4::{collect_psr4_mappings, resolve_class_file, Psr4Mapping};
+use crate::php::ast::{
+    byte_offset_to_line_col, expr_to_string, expr_to_string_list, span_text, strip_root,
+};
+use crate::php::psr4::{Psr4Mapping, collect_psr4_mappings, resolve_class_file};
 use crate::project::LaravelProject;
 use crate::types::{ColumnEntry, ModelEntry, ModelReport, RelationEntry};
 
@@ -23,7 +25,8 @@ pub fn analyze(project: &LaravelProject) -> Result<ModelReport, String> {
         .collect();
 
     for model in &mut models {
-        model.columns = migrations::resolve_columns_for_table(&model.table, &migration_report.migrations);
+        model.columns =
+            migrations::resolve_columns_for_table(&model.table, &migration_report.migrations);
     }
 
     models.sort_by(|a, b| a.class_name.cmp(&b.class_name));
@@ -63,7 +66,9 @@ fn collect_model_files(mappings: &[Psr4Mapping]) -> Vec<PathBuf> {
 }
 
 fn collect_php_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -92,7 +97,9 @@ fn parse_model_file(
         match stmt {
             Stmt::Namespace { name, .. } => {
                 if let Some(n) = name {
-                    namespace = n.parts.iter()
+                    namespace = n
+                        .parts
+                        .iter()
                         .map(|t| span_text(t.span, &source))
                         .collect::<String>()
                         .trim_start_matches('\\')
@@ -100,9 +107,14 @@ fn parse_model_file(
                 }
             }
             Stmt::Use { uses, kind, .. } => {
-                if *kind != UseKind::Normal { continue; }
+                if *kind != UseKind::Normal {
+                    continue;
+                }
                 for item in *uses {
-                    let fqn = item.name.parts.iter()
+                    let fqn = item
+                        .name
+                        .parts
+                        .iter()
                         .map(|t| span_text(t.span, &source))
                         .collect::<String>()
                         .trim_start_matches('\\')
@@ -115,7 +127,13 @@ fn parse_model_file(
                     imports.insert(key, fqn);
                 }
             }
-            Stmt::Class { name, extends, members, span, .. } => {
+            Stmt::Class {
+                name,
+                extends,
+                members,
+                span,
+                ..
+            } => {
                 let class_name = span_text(name.span, &source);
 
                 if !looks_like_model(extends, &source, &imports) {
@@ -153,7 +171,9 @@ fn looks_like_model(
     let Some(e) = extends else { return false };
 
     // NsSeparator tokens are included in parts, so collect directly (no extra join)
-    let raw = e.parts.iter()
+    let raw = e
+        .parts
+        .iter()
         .map(|t| span_text(t.span, source))
         .collect::<String>()
         .trim_start_matches('\\')
@@ -207,26 +227,32 @@ fn build_model_entry(
 
     for member in members.iter() {
         match member {
-            ClassMember::Property { entries, modifiers, .. } => {
+            ClassMember::Property {
+                entries, modifiers, ..
+            } => {
                 // Only look at non-static properties
-                let is_static = modifiers.iter().any(|t| {
-                    span_text(t.span, source) == "static"
-                });
-                if is_static { continue; }
+                let is_static = modifiers
+                    .iter()
+                    .any(|t| span_text(t.span, source) == "static");
+                if is_static {
+                    continue;
+                }
 
                 for entry in entries.iter() {
                     let prop_name = span_text(entry.name.span, source)
                         .trim_start_matches('$')
                         .to_string();
-                    let Some(default) = entry.default else { continue };
+                    let Some(default) = entry.default else {
+                        continue;
+                    };
 
                     match prop_name.as_str() {
                         "table" => {
                             table = expr_to_string(default, source);
                         }
                         "primaryKey" => {
-                            primary_key = expr_to_string(default, source)
-                                .unwrap_or_else(|| "id".to_string());
+                            primary_key =
+                                expr_to_string(default, source).unwrap_or_else(|| "id".to_string());
                         }
                         "keyType" => {
                             key_type = expr_to_string(default, source)
@@ -265,13 +291,22 @@ fn build_model_entry(
                     }
                 }
             }
-            ClassMember::TraitUse { traits: used_traits, .. } => {
+            ClassMember::TraitUse {
+                traits: used_traits,
+                ..
+            } => {
                 for t in used_traits.iter() {
-                    let trait_name = t.parts.iter()
+                    let trait_name = t
+                        .parts
+                        .iter()
                         .map(|tok| span_text(tok.span, source))
                         .collect::<Vec<_>>()
                         .join("\\");
-                    let short = trait_name.rsplit('\\').next().unwrap_or(&trait_name).to_string();
+                    let short = trait_name
+                        .rsplit('\\')
+                        .next()
+                        .unwrap_or(&trait_name)
+                        .to_string();
                     traits.push(short);
                 }
             }
@@ -280,7 +315,12 @@ fn build_model_entry(
 
                 // Scopes: scopeXxx → "xxx"
                 if let Some(scope) = method_name.strip_prefix("scope") {
-                    if scope.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    if scope
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false)
+                    {
                         let snake = camel_to_snake(scope);
                         scopes.push(snake);
                         continue;
@@ -288,30 +328,41 @@ fn build_model_entry(
                 }
 
                 // Accessors (old style): getXxxAttribute → "xxx"
-                if let Some(inner) = method_name.strip_prefix("get").and_then(|s| s.strip_suffix("Attribute")) {
-                    if inner.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                if let Some(inner) = method_name
+                    .strip_prefix("get")
+                    .and_then(|s| s.strip_suffix("Attribute"))
+                {
+                    if inner
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false)
+                    {
                         accessors.push(camel_to_snake(inner));
                         continue;
                     }
                 }
 
                 // Mutators (old style): setXxxAttribute → "xxx"
-                if let Some(inner) = method_name.strip_prefix("set").and_then(|s| s.strip_suffix("Attribute")) {
-                    if inner.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                if let Some(inner) = method_name
+                    .strip_prefix("set")
+                    .and_then(|s| s.strip_suffix("Attribute"))
+                {
+                    if inner
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false)
+                    {
                         mutators.push(camel_to_snake(inner));
                         continue;
                     }
                 }
 
                 // Relations: detect by return expression
-                if let Some(rel) = extract_relation(
-                    &method_name,
-                    body,
-                    source,
-                    imports,
-                    mappings,
-                    &project.root,
-                ) {
+                if let Some(rel) =
+                    extract_relation(&method_name, body, source, imports, mappings, &project.root)
+                {
                     relations.push(rel);
                 }
             }
@@ -373,10 +424,19 @@ fn extract_relation(
     project_root: &Path,
 ) -> Option<RelationEntry> {
     const RELATION_METHODS: &[&str] = &[
-        "hasOne", "hasMany", "belongsTo", "belongsToMany",
-        "hasManyThrough", "hasOneThrough",
-        "morphTo", "morphOne", "morphMany", "morphToMany", "morphedByMany",
-        "hasOneOfMany", "hasManyOfMany",
+        "hasOne",
+        "hasMany",
+        "belongsTo",
+        "belongsToMany",
+        "hasManyThrough",
+        "hasOneThrough",
+        "morphTo",
+        "morphOne",
+        "morphMany",
+        "morphToMany",
+        "morphedByMany",
+        "hasOneOfMany",
+        "hasManyOfMany",
     ];
 
     // Walk the method body for a $this->relationMethod(...) or return $this->relationMethod(...)
@@ -384,8 +444,19 @@ fn extract_relation(
 
     for stmt in body {
         match stmt {
-            Stmt::Return { expr: Some(expr), .. } | Stmt::Expression { expr, .. } => {
-                if let Some(rel) = try_extract_relation_call(*expr, source, imports, mappings, project_root, method_name, RELATION_METHODS) {
+            Stmt::Return {
+                expr: Some(expr), ..
+            }
+            | Stmt::Expression { expr, .. } => {
+                if let Some(rel) = try_extract_relation_call(
+                    *expr,
+                    source,
+                    imports,
+                    mappings,
+                    project_root,
+                    method_name,
+                    RELATION_METHODS,
+                ) {
                     found = Some(rel);
                     break;
                 }
@@ -411,17 +482,39 @@ fn try_extract_relation_call(
 
             if !relation_methods.contains(&called.as_str()) {
                 // Could be chained like $this->hasMany(...)->withDefault() — peel one level
-                if let Expr::MethodCall { target, method: inner_m, args: inner_args, .. } = expr {
+                if let Expr::MethodCall {
+                    target,
+                    method: inner_m,
+                    args: inner_args,
+                    ..
+                } = expr
+                {
                     let inner = span_text(inner_m.span(), source);
                     if relation_methods.contains(&inner.as_str()) {
-                        return build_relation_entry(method_name, &inner, inner_args, source, imports, mappings, project_root);
+                        return build_relation_entry(
+                            method_name,
+                            &inner,
+                            inner_args,
+                            source,
+                            imports,
+                            mappings,
+                            project_root,
+                        );
                     }
                     let _ = target;
                 }
                 return None;
             }
 
-            build_relation_entry(method_name, &called, args, source, imports, mappings, project_root)
+            build_relation_entry(
+                method_name,
+                &called,
+                args,
+                source,
+                imports,
+                mappings,
+                project_root,
+            )
         }
         _ => None,
     }
@@ -437,7 +530,9 @@ fn build_relation_entry(
     project_root: &Path,
 ) -> Option<RelationEntry> {
     // First arg is related model class (ClassConstFetch or string)
-    let related_raw = args.first().and_then(|a| resolve_class_name(a.value, source, imports))?;
+    let related_raw = args
+        .first()
+        .and_then(|a| resolve_class_name(a.value, source, imports))?;
 
     let related_model_file = resolve_class_file(&related_raw, mappings)
         .map(|p| p.strip_prefix(project_root).unwrap_or(&p).to_path_buf());
@@ -452,8 +547,10 @@ fn build_relation_entry(
     };
 
     let (foreign_key, local_key) = if relation_type == "belongsToMany" {
-        (args.get(2).and_then(|a| expr_to_string(a.value, source)),
-         args.get(3).and_then(|a| expr_to_string(a.value, source)))
+        (
+            args.get(2).and_then(|a| expr_to_string(a.value, source)),
+            args.get(3).and_then(|a| expr_to_string(a.value, source)),
+        )
     } else {
         (foreign_key, local_key)
     };
@@ -476,7 +573,9 @@ fn resolve_class_name(
     imports: &HashMap<String, String>,
 ) -> Option<String> {
     match expr {
-        Expr::ClassConstFetch { class, constant, .. } => {
+        Expr::ClassConstFetch {
+            class, constant, ..
+        } => {
             let const_name = span_text(constant.span(), source);
             if const_name.to_lowercase() != "class" {
                 return None;
@@ -495,11 +594,18 @@ fn resolve_class_name(
     }
 }
 
-fn extract_string_map(expr: php_parser::ast::ExprId<'_>, source: &[u8]) -> BTreeMap<String, String> {
+fn extract_string_map(
+    expr: php_parser::ast::ExprId<'_>,
+    source: &[u8],
+) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
-    let Expr::Array { items, .. } = expr else { return map };
+    let Expr::Array { items, .. } = expr else {
+        return map;
+    };
     for item in items.iter() {
-        let Some(key) = item.key.and_then(|k| expr_to_string(k, source)) else { continue };
+        let Some(key) = item.key.and_then(|k| expr_to_string(k, source)) else {
+            continue;
+        };
         let val = span_text(item.value.span(), source)
             .trim_matches('\'')
             .trim_matches('"')
@@ -527,13 +633,19 @@ fn camel_to_snake(s: &str) -> String {
 }
 
 fn pluralize(word: &str) -> String {
-    if word.ends_with("ss") || word.ends_with("x") || word.ends_with("z")
-        || word.ends_with("ch") || word.ends_with("sh")
+    if word.ends_with("ss")
+        || word.ends_with("x")
+        || word.ends_with("z")
+        || word.ends_with("ch")
+        || word.ends_with("sh")
     {
         format!("{word}es")
     } else if word.ends_with('y')
         && !matches!(word.len(), 0)
-        && !matches!(word.as_bytes().get(word.len().wrapping_sub(2)), Some(b'a' | b'e' | b'i' | b'o' | b'u'))
+        && !matches!(
+            word.as_bytes().get(word.len().wrapping_sub(2)),
+            Some(b'a' | b'e' | b'i' | b'o' | b'u')
+        )
     {
         format!("{}ies", &word[..word.len() - 1])
     } else if word.ends_with('s') {

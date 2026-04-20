@@ -10,7 +10,7 @@ use crate::analyzers::providers;
 use crate::php::ast::{expr_name, expr_to_path, expr_to_string, strip_root};
 use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
-use crate::types::{ConfigSource};
+use crate::types::ConfigSource;
 
 #[derive(Clone)]
 pub(crate) struct RegisteredConfigFile {
@@ -99,7 +99,10 @@ fn discover_provider_merged_configs(
         if !provider.source_available {
             continue;
         }
-        if !seen_sources.insert((provider.provider_class.clone(), relative_source_file.clone())) {
+        if !seen_sources.insert((
+            provider.provider_class.clone(),
+            relative_source_file.clone(),
+        )) {
             continue;
         }
 
@@ -136,7 +139,13 @@ fn extract_merged_configs(
     let mut files = Vec::new();
     walk_stmts(program.statements, true, &mut |expr| {
         visit_expr(
-            expr, source, project, provider_class, declared_in, provider_file, &mut files,
+            expr,
+            source,
+            project,
+            provider_class,
+            declared_in,
+            provider_file,
+            &mut files,
         );
     });
     files
@@ -151,19 +160,29 @@ fn visit_expr(
     provider_file: &Path,
     files: &mut Vec<MergedConfigFile>,
 ) {
-    let Expr::MethodCall { method, args, .. } = expr else { return };
-    let Some(method_name) = expr_name(method, source) else { return };
+    let Expr::MethodCall { method, args, .. } = expr else {
+        return;
+    };
+    let Some(method_name) = expr_name(method, source) else {
+        return;
+    };
     if method_name != "mergeConfigFrom" {
         return;
     }
 
-    let Some(path_expr) = args.first().map(|a| a.value) else { return };
-    let Some(namespace_expr) = args.get(1).map(|a| a.value) else { return };
+    let Some(path_expr) = args.first().map(|a| a.value) else {
+        return;
+    };
+    let Some(namespace_expr) = args.get(1).map(|a| a.value) else {
+        return;
+    };
 
     let Some(config_file) = expr_to_path(path_expr, source, &project.root, provider_file) else {
         return;
     };
-    let Some(namespace) = expr_to_string(namespace_expr, source) else { return };
+    let Some(namespace) = expr_to_string(namespace_expr, source) else {
+        return;
+    };
 
     let line_info = path_expr.span().line_info(source);
     files.push(MergedConfigFile {

@@ -193,9 +193,7 @@ fn render_report(project: &LaravelProject, command: DebugCommand) -> Result<Stri
             let report = analyzers::configs::analyze(project)?;
             Ok(match command {
                 DebugCommand::ConfigList => text::configs::render_config_table(&report),
-                DebugCommand::ConfigSources => {
-                    text::configs::render_config_source_table(&report)
-                }
+                DebugCommand::ConfigSources => text::configs::render_config_source_table(&report),
                 _ => unreachable!(),
             })
         }
@@ -272,7 +270,15 @@ fn draw(stdout: &mut io::Stdout, app: &App) -> Result<(), String> {
 
     execute!(stdout, MoveTo(0, 0), Clear(ClearType::All)).map_err(|e| e.to_string())?;
 
-    draw_box(stdout, 0, 0, nav_width, project_height, " Projects ", app.focus == FocusPane::Projects)?;
+    draw_box(
+        stdout,
+        0,
+        0,
+        nav_width,
+        project_height,
+        " Projects ",
+        app.focus == FocusPane::Projects,
+    )?;
     draw_box(
         stdout,
         0,
@@ -308,7 +314,13 @@ fn draw_projects(
 ) -> Result<(), String> {
     let visible_rows = height.saturating_sub(2) as usize;
     let start = list_window(app.selected_project, app.projects.len(), visible_rows);
-    for (row, project) in app.projects.iter().enumerate().skip(start).take(visible_rows) {
+    for (row, project) in app
+        .projects
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible_rows)
+    {
         let y = 1 + (row - start) as u16;
         let selected = row == app.selected_project;
         let text = format!("{} [{}]", project.name, display_path(&project.root));
@@ -437,8 +449,12 @@ fn draw_box(
     } else {
         title.to_string()
     };
-    execute!(stdout, MoveTo(x + 2, y), Print(truncate(&title_text, width as usize - 4)))
-        .map_err(|e| e.to_string())
+    execute!(
+        stdout,
+        MoveTo(x + 2, y),
+        Print(truncate(&title_text, width as usize - 4))
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn draw_line(

@@ -21,11 +21,18 @@ where
 {
     match stmt {
         Stmt::Expression { expr, .. } => f(expr),
+        Stmt::Return {
+            expr: Some(expr), ..
+        } => f(*expr),
         Stmt::Block { statements, .. }
-        | Stmt::Declare { body: statements, .. } => {
+        | Stmt::Declare {
+            body: statements, ..
+        } => {
             walk_stmts(statements, include_class_methods, f);
         }
-        Stmt::Namespace { body: Some(body), .. } => {
+        Stmt::Namespace {
+            body: Some(body), ..
+        } => {
             walk_stmts(body, include_class_methods, f);
         }
         Stmt::Class { members, .. }
@@ -40,7 +47,11 @@ where
                 }
             }
         }
-        Stmt::If { then_block, else_block, .. } => {
+        Stmt::If {
+            then_block,
+            else_block,
+            ..
+        } => {
             walk_stmts(then_block, include_class_methods, f);
             if let Some(else_block) = else_block {
                 walk_stmts(else_block, include_class_methods, f);

@@ -29,10 +29,7 @@ pub(crate) fn find_config_items(
                 format!("{namespace}.{}.{}", stack.join("."), parsed.key)
             };
 
-            let env_value = parsed
-                .env_key
-                .as_ref()
-                .and_then(|k| env.get(k).cloned());
+            let env_value = parsed.env_key.as_ref().and_then(|k| env.get(k).cloned());
 
             items.push(ConfigItem {
                 file: strip_root(root, file),
@@ -82,8 +79,14 @@ fn parse_config_assignment(line: &str) -> Option<ParsedConfigLine> {
             escaped = false;
             continue;
         }
-        if ch == '\\' { escaped = true; continue; }
-        if ch == quote { rest_start = Some(index + 2); break; }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == quote {
+            rest_start = Some(index + 2);
+            break;
+        }
         key.push(ch);
     }
 
@@ -98,7 +101,13 @@ fn parse_config_assignment(line: &str) -> Option<ParsedConfigLine> {
         .map(|(k, d)| (Some(k), d))
         .unwrap_or_else(|| (None, parse_literal_value(value)));
 
-    Some(ParsedConfigLine { key, column: leading + 1, opens_array, env_key, default_value })
+    Some(ParsedConfigLine {
+        key,
+        column: leading + 1,
+        opens_array,
+        env_key,
+        default_value,
+    })
 }
 
 fn parse_env_call(value: &str) -> Option<(String, Option<String>)> {
@@ -120,22 +129,39 @@ fn extract_call_args(text: &str) -> Option<Vec<String>> {
     for ch in text.chars() {
         if in_single {
             current.push(ch);
-            if escape { escape = false; }
-            else if ch == '\\' { escape = true; }
-            else if ch == '\'' { in_single = false; }
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
             continue;
         }
         if in_double {
             current.push(ch);
-            if escape { escape = false; }
-            else if ch == '\\' { escape = true; }
-            else if ch == '"' { in_double = false; }
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
             continue;
         }
         match ch {
-            '\'' => { in_single = true; current.push(ch); }
-            '"' => { in_double = true; current.push(ch); }
-            '(' => { depth += 1; current.push(ch); }
+            '\'' => {
+                in_single = true;
+                current.push(ch);
+            }
+            '"' => {
+                in_double = true;
+                current.push(ch);
+            }
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
             ')' => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
@@ -156,26 +182,43 @@ fn extract_call_args(text: &str) -> Option<Vec<String>> {
 
 fn parse_literal_value(value: &str) -> Option<String> {
     let value = value.trim();
-    if value.is_empty() { return None; }
-    if let Some(s) = parse_quoted_string(value) { return Some(s); }
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(s) = parse_quoted_string(value) {
+        return Some(s);
+    }
     if matches!(value, "true" | "false" | "null") || value.parse::<i64>().is_ok() {
         return Some(value.to_string());
     }
-    if value.starts_with('[') { return Some("[...]".to_string()); }
+    if value.starts_with('[') {
+        return Some("[...]".to_string());
+    }
     None
 }
 
 fn parse_quoted_string(value: &str) -> Option<String> {
     let mut chars = value.chars();
     let quote = chars.next()?;
-    if quote != '\'' && quote != '"' { return None; }
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
 
     let mut output = String::new();
     let mut escaped = false;
     for ch in value[1..].chars() {
-        if escaped { output.push(ch); escaped = false; continue; }
-        if ch == '\\' { escaped = true; continue; }
-        if ch == quote { return Some(output); }
+        if escaped {
+            output.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == quote {
+            return Some(output);
+        }
         output.push(ch);
     }
     None
@@ -183,6 +226,8 @@ fn parse_quoted_string(value: &str) -> Option<String> {
 
 fn pop_many(stack: &mut Vec<String>, count: usize) {
     for _ in 0..count {
-        if stack.pop().is_none() { break; }
+        if stack.pop().is_none() {
+            break;
+        }
     }
 }

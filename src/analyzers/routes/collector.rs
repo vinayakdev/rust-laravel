@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::analyzers::providers;
+use crate::analyzers::routes::chain::{ChainOp, flatten_route_chain};
 use crate::php::ast::{expr_name, expr_to_path, strip_root};
 use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
@@ -21,8 +22,7 @@ pub(crate) struct RegisteredRouteFile {
 pub(crate) fn collect_registered_route_files(
     project: &LaravelProject,
 ) -> Result<Vec<RegisteredRouteFile>, String> {
-    let routes_dir = project.root.join("routes");
-    let direct_files = collect_php_files(&routes_dir);
+    let direct_files = collect_direct_route_files(project)?;
     let discovered = discover_provider_route_files(project)?;
     let mut by_file: BTreeMap<PathBuf, Vec<RouteRegistration>> = BTreeMap::new();
 
@@ -59,7 +59,10 @@ pub(crate) fn collect_registered_route_files(
             continue;
         }
         for registration in registrations {
-            all_files.push(RegisteredRouteFile { file: file.clone(), registration });
+            all_files.push(RegisteredRouteFile {
+                file: file.clone(),
+                registration,
+            });
         }
     }
 
@@ -71,6 +74,67 @@ pub(crate) fn collect_registered_route_files(
     });
 
     Ok(all_files)
+}
+
+fn has_explicit_route_registrations(project: &LaravelProject) -> Result<bool, String> {
+    let bootstrap_app = project.root.join("bootstrap/app.php");
+    if bootstrap_app.is_file()
+        && !discover_bootstrap_route_files(project, &bootstrap_app)?.is_empty()
+    {
+        return Ok(true);
+    }
+
+    Ok(!discover_provider_route_files(project)?.is_empty())
+}
+
+fn collect_direct_route_files(project: &LaravelProject) -> Result<Vec<PathBuf>, String> {
+    let bootstrap_app = project.root.join("bootstrap/app.php");
+    if bootstrap_app.is_file() {
+        let bootstrap_files = discover_bootstrap_route_files(project, &bootstrap_app)?;
+        if !bootstrap_files.is_empty() {
+            return Ok(bootstrap_files
+                .into_iter()
+                .map(|registered| registered.file)
+                .collect());
+        }
+    }
+
+    if has_explicit_route_registrations(project)? {
+        return Ok(Vec::new());
+    }
+
+    let routes_dir = project.root.join("routes");
+    Ok(collect_php_files(&routes_dir))
+}
+
+fn discover_bootstrap_route_files(
+    project: &LaravelProject,
+    bootstrap_file: &Path,
+) -> Result<Vec<RegisteredRouteFile>, String> {
+    let source = fs::read(bootstrap_file)
+        .map_err(|e| format!("failed to read {}: {e}", bootstrap_file.display()))?;
+    let arena = Bump::new();
+    let lexer = Lexer::new(&source);
+    let mut parser = Parser::new(lexer, &arena);
+    let program = parser.parse_program();
+    if !program.errors.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+    walk_stmts(program.statements, false, &mut |expr| {
+        visit_bootstrap_expr(expr, &source, project, bootstrap_file, &mut files);
+    });
+
+    files.sort_by(|l, r| {
+        l.file
+            .cmp(&r.file)
+            .then(l.registration.line.cmp(&r.registration.line))
+            .then(l.registration.column.cmp(&r.registration.column))
+    });
+    files.dedup_by(|l, r| l.file == r.file && l.registration.line == r.registration.line);
+
+    Ok(files)
 }
 
 fn discover_provider_route_files(
@@ -87,7 +151,10 @@ fn discover_provider_route_files(
         if !provider.source_available {
             continue;
         }
-        if !seen_sources.insert((provider.provider_class.clone(), relative_source_file.clone())) {
+        if !seen_sources.insert((
+            provider.provider_class.clone(),
+            relative_source_file.clone(),
+        )) {
             continue;
         }
 
@@ -95,7 +162,12 @@ fn discover_provider_route_files(
         let source = fs::read(&source_file)
             .map_err(|e| format!("failed to read {}: {e}", source_file.display()))?;
 
-        files.extend(extract_provider_route_files(project, &provider, &source_file, &source));
+        files.extend(extract_provider_route_files(
+            project,
+            &provider,
+            &source_file,
+            &source,
+        ));
     }
 
     Ok(files)
@@ -157,14 +229,31 @@ fn visit_provider_expr(
                         });
                     }
                 }
-            } else {
-                // Recurse into closure/arrow-function args so loadRoutesFrom
-                // calls inside callbacks (e.g. callAfterResolving) are found.
-                for arg in *args {
-                    visit_provider_expr(
-                        arg.value, source, project, provider, provider_file, files,
-                    );
+            } else if method_name == "group" {
+                if let Some(route_file) =
+                    extract_grouped_route_file(expr, source, project, provider_file)
+                {
+                    let line_info = expr.span().line_info(source);
+                    files.push(RegisteredRouteFile {
+                        file: route_file,
+                        registration: RouteRegistration {
+                            kind: "provider-route-group".to_string(),
+                            declared_in: provider
+                                .source_file
+                                .clone()
+                                .unwrap_or_else(|| strip_root(&project.root, provider_file)),
+                            line: line_info.map_or(provider.line, |i| i.line),
+                            column: line_info.map_or(provider.column, |i| i.column),
+                            provider_class: Some(provider.provider_class.clone()),
+                        },
+                    });
                 }
+            }
+
+            // Recurse into closure/arrow-function args so provider route
+            // registrations nested inside callbacks are found.
+            for arg in *args {
+                visit_provider_expr(arg.value, source, project, provider, provider_file, files);
             }
         }
         Expr::Closure { body, .. } => {
@@ -179,6 +268,122 @@ fn visit_provider_expr(
         }
         _ => {}
     }
+}
+
+fn visit_bootstrap_expr(
+    expr: ExprId<'_>,
+    source: &[u8],
+    project: &LaravelProject,
+    bootstrap_file: &Path,
+    files: &mut Vec<RegisteredRouteFile>,
+) {
+    match expr {
+        Expr::MethodCall {
+            target,
+            method,
+            args,
+            ..
+        } => {
+            let method_name = expr_name(method, source).unwrap_or_default();
+            if method_name == "withRouting" {
+                files.extend(extract_bootstrap_routing_args(
+                    args,
+                    source,
+                    project,
+                    bootstrap_file,
+                ));
+            }
+
+            visit_bootstrap_expr(*target, source, project, bootstrap_file, files);
+            for arg in *args {
+                visit_bootstrap_expr(arg.value, source, project, bootstrap_file, files);
+            }
+        }
+        Expr::Closure { body, .. } => {
+            walk_stmts(body, false, &mut |inner| {
+                visit_bootstrap_expr(inner, source, project, bootstrap_file, files);
+            });
+        }
+        Expr::ArrowFunction { expr: inner, .. } => {
+            visit_bootstrap_expr(*inner, source, project, bootstrap_file, files);
+        }
+        _ => {}
+    }
+}
+
+fn extract_bootstrap_routing_args(
+    args: &[php_parser::ast::Arg<'_>],
+    source: &[u8],
+    project: &LaravelProject,
+    bootstrap_file: &Path,
+) -> Vec<RegisteredRouteFile> {
+    let mut files = Vec::new();
+
+    for arg in args {
+        let Some(name) = arg.name else { continue };
+        let name = crate::php::ast::span_text(name.span, source);
+        if !matches!(name.as_str(), "web" | "api") {
+            continue;
+        }
+
+        let line_info = arg.span.line_info(source);
+        for route_file in expr_to_path_list(arg.value, source, &project.root, bootstrap_file) {
+            files.push(RegisteredRouteFile {
+                file: route_file,
+                registration: RouteRegistration {
+                    kind: "bootstrap-withRouting".to_string(),
+                    declared_in: strip_root(&project.root, bootstrap_file),
+                    line: line_info.map_or(1, |i| i.line),
+                    column: line_info.map_or(1, |i| i.column),
+                    provider_class: None,
+                },
+            });
+        }
+    }
+
+    files
+}
+
+fn expr_to_path_list(
+    expr: ExprId<'_>,
+    source: &[u8],
+    project_root: &Path,
+    current_file: &Path,
+) -> Vec<PathBuf> {
+    match expr {
+        Expr::Array { items, .. } => items
+            .iter()
+            .filter_map(|item| expr_to_path(item.value, source, project_root, current_file))
+            .collect(),
+        _ => expr_to_path(expr, source, project_root, current_file)
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn extract_grouped_route_file(
+    expr: ExprId<'_>,
+    source: &[u8],
+    project: &LaravelProject,
+    provider_file: &Path,
+) -> Option<PathBuf> {
+    let chain = flatten_route_chain(expr)?;
+    let last = chain.last()?;
+    let ChainOp::MethodCall { args, .. } = last else {
+        return None;
+    };
+    let path_expr = args.first()?.value;
+    let path = expr_to_path(path_expr, source, &project.root, provider_file)?;
+    if !path.is_file() {
+        return None;
+    }
+
+    let has_route_root = chain.iter().any(|op| match op {
+        ChainOp::StaticCall { class, .. } => expr_name(*class, source).as_deref() == Some("Route"),
+        ChainOp::MethodCall { .. } => false,
+    });
+
+    has_route_root.then_some(path)
 }
 
 fn default_route_registration(project_root: &Path, file: &Path) -> RouteRegistration {
@@ -207,3 +412,114 @@ fn collect_php_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_with_routing_web_files_from_bootstrap_app() {
+        let project_root = PathBuf::from("/tmp/example");
+        let bootstrap_file = project_root.join("bootstrap/app.php");
+        let source = br#"<?php
+use Illuminate\Foundation\Application;
+
+return Application::configure(basePath: dirname(__DIR__))
+    ->withRouting(
+        web: [
+            __DIR__.'/../routes/web.php',
+//            __DIR__.'/../routes/old_web.php',
+        ],
+        api: __DIR__.'/../routes/api.php',
+        commands: __DIR__.'/../routes/console.php',
+        health: '/up',
+    )
+    ->create();
+"#;
+
+        let arena = Bump::new();
+        let lexer = Lexer::new(source);
+        let mut parser = Parser::new(lexer, &arena);
+        let program = parser.parse_program();
+        assert!(program.errors.is_empty());
+
+        let project = LaravelProject {
+            root: project_root.clone(),
+            name: "example".to_string(),
+        };
+        let mut files = Vec::new();
+        walk_stmts(program.statements, false, &mut |expr| {
+            visit_bootstrap_expr(expr, source, &project, &bootstrap_file, &mut files);
+        });
+
+        let discovered: Vec<PathBuf> = files
+            .into_iter()
+            .map(|registered| registered.file)
+            .collect();
+        assert_eq!(
+            discovered,
+            vec![
+                project_root.join("routes/web.php"),
+                project_root.join("routes/api.php"),
+            ]
+        );
+    }
+
+    #[test]
+    fn extracts_old_style_grouped_route_files_from_provider() {
+        let project_root = PathBuf::from("/tmp/example");
+        let provider_file = project_root.join("app/Providers/RouteServiceProvider.php");
+        let provider = ProviderEntry {
+            provider_class: "App\\Providers\\RouteServiceProvider".to_string(),
+            line: 1,
+            column: 1,
+            registration_kind: "config-app".to_string(),
+            declared_in: PathBuf::from("config/app.php"),
+            package_name: None,
+            source_file: Some(PathBuf::from("app/Providers/RouteServiceProvider.php")),
+            source_available: true,
+            status: "static_exact".to_string(),
+        };
+
+        let source = br#"<?php
+namespace App\Providers;
+
+class RouteServiceProvider
+{
+    public function boot(): void
+    {
+        $this->routes(function () {
+            Route::middleware('web')->group(base_path('routes/web.php'));
+            Route::prefix('api')->middleware('api')->group(base_path('routes/api.php'));
+        });
+    }
+}
+"#;
+
+        let web_path = project_root.join("routes/web.php");
+        let api_path = project_root.join("routes/api.php");
+        let parent = web_path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::write(&web_path, "<?php\n").unwrap();
+        std::fs::write(&api_path, "<?php\n").unwrap();
+
+        let files = extract_provider_route_files(
+            &LaravelProject {
+                root: project_root.clone(),
+                name: "example".to_string(),
+            },
+            &provider,
+            &provider_file,
+            source,
+        );
+
+        let discovered: Vec<PathBuf> = files
+            .into_iter()
+            .map(|registered| registered.file)
+            .collect();
+        assert_eq!(discovered, vec![web_path, api_path]);
+
+        let _ = std::fs::remove_file(project_root.join("routes/web.php"));
+        let _ = std::fs::remove_file(project_root.join("routes/api.php"));
+        let _ = std::fs::remove_dir_all(project_root.join("routes"));
+    }
+}

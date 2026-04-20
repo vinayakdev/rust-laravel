@@ -1,7 +1,7 @@
 use std::fmt::Write as _;
 
+use super::{header, join_or_dash, new_table, terminal_width, wrap_cell};
 use crate::types::{MigrationReport, ModelReport};
-use super::{header, new_table, terminal_width, wrap_cell, join_or_dash};
 
 pub fn print_model_report(report: &ModelReport) {
     println!("{}", render_model_report(report));
@@ -112,7 +112,11 @@ fn render_migrations_table(report: &MigrationReport) -> String {
     ]);
 
     for m in &report.migrations {
-        let table_display = if m.table.is_empty() { "-".to_string() } else { m.table.clone() };
+        let table_display = if m.table.is_empty() {
+            "-".to_string()
+        } else {
+            m.table.clone()
+        };
         table.add_row(vec![
             wrap_cell(&m.timestamp, ts),
             wrap_cell(&table_display, tb),

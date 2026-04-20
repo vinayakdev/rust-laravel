@@ -1,18 +1,33 @@
 use comfy_table::{Cell, Color, Row};
 use std::fmt::Write as _;
 
-use crate::types::{RouteEntry, RouteRegistration};
 use super::{header, join_or_dash, location_cell, new_table, terminal_width, wrap_cell};
+use crate::types::{RouteEntry, RouteRegistration};
 
-struct RouteWidths { uri: usize, name: usize, action: usize, middleware: usize, patterns: usize, registration: usize }
-struct RouteSourceWidths { route: usize, uri: usize, provider: usize, declared_at: usize, kind: usize }
+struct RouteWidths {
+    uri: usize,
+    name: usize,
+    action: usize,
+    middleware: usize,
+    patterns: usize,
+    registration: usize,
+}
+struct RouteSourceWidths {
+    route: usize,
+    uri: usize,
+    provider: usize,
+    declared_at: usize,
+    kind: usize,
+}
 
 pub fn print_route_table(routes: &[RouteEntry]) {
     println!("{}", render_route_table(routes));
 }
 
 pub fn render_route_table(routes: &[RouteEntry]) -> String {
-    if routes.is_empty() { return "No routes found.".to_string(); }
+    if routes.is_empty() {
+        return "No routes found.".to_string();
+    }
 
     let mut output = String::new();
     let widths = route_widths();
@@ -28,8 +43,14 @@ pub fn render_route_table(routes: &[RouteEntry]) -> String {
             }
             let _ = writeln!(output, "{}", file.display());
             table.set_header(vec![
-                header("Line:Col"), header("Method"), header("Uri"), header("Name"),
-                header("Action"), header("Middleware"), header("Patterns"), header("Registered Via"),
+                header("Line:Col"),
+                header("Method"),
+                header("Uri"),
+                header("Name"),
+                header("Action"),
+                header("Middleware"),
+                header("Patterns"),
+                header("Registered Via"),
             ]);
             current_file = Some(file);
         }
@@ -41,7 +62,10 @@ pub fn render_route_table(routes: &[RouteEntry]) -> String {
             wrap_cell(route.action.as_deref().unwrap_or("-"), widths.action),
             wrap_cell(&display_middleware(route), widths.middleware),
             wrap_cell(&display_patterns(route), widths.patterns),
-            wrap_cell(&registration_summary(&route.registration), widths.registration),
+            wrap_cell(
+                &registration_summary(&route.registration),
+                widths.registration,
+            ),
         ]));
     }
     let _ = write!(output, "{table}");
@@ -53,24 +77,38 @@ pub fn print_route_source_table(routes: &[RouteEntry]) {
 }
 
 pub fn render_route_source_table(routes: &[RouteEntry]) -> String {
-    if routes.is_empty() { return "No routes found.".to_string(); }
+    if routes.is_empty() {
+        return "No routes found.".to_string();
+    }
 
     let mut output = String::new();
     let widths = route_source_widths();
     let mut table = new_table();
     table.set_header(vec![
-        header("Route"), header("Method"), header("Uri"),
-        header("Provider"), header("Declared At"), header("Kind"),
+        header("Route"),
+        header("Method"),
+        header("Uri"),
+        header("Provider"),
+        header("Declared At"),
+        header("Kind"),
     ]);
 
     for route in routes {
         table.add_row(Row::from(vec![
-            wrap_cell(&format!("{}:{}:{}", route.file.display(), route.line, route.column), widths.route),
+            wrap_cell(
+                &format!("{}:{}:{}", route.file.display(), route.line, route.column),
+                widths.route,
+            ),
             Cell::new(route.methods.join("|")),
             wrap_cell(&route.uri, widths.uri),
             provider_cell(&route.registration, widths.provider),
             wrap_cell(
-                &format!("{}:{}:{}", route.registration.declared_in.display(), route.registration.line, route.registration.column),
+                &format!(
+                    "{}:{}:{}",
+                    route.registration.declared_in.display(),
+                    route.registration.line,
+                    route.registration.column
+                ),
                 widths.declared_at,
             ),
             kind_cell(&route.registration, widths.kind),
@@ -81,18 +119,34 @@ pub fn render_route_source_table(routes: &[RouteEntry]) -> String {
 }
 
 fn display_middleware(route: &RouteEntry) -> String {
-    let values = if route.resolved_middleware.is_empty() { &route.middleware } else { &route.resolved_middleware };
+    let values = if route.resolved_middleware.is_empty() {
+        &route.middleware
+    } else {
+        &route.resolved_middleware
+    };
     join_or_dash(values)
 }
 
 fn display_patterns(route: &RouteEntry) -> String {
-    if route.parameter_patterns.is_empty() { return "-".to_string(); }
-    route.parameter_patterns.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(",")
+    if route.parameter_patterns.is_empty() {
+        return "-".to_string();
+    }
+    route
+        .parameter_patterns
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn registration_summary(reg: &RouteRegistration) -> String {
     match &reg.provider_class {
-        Some(p) => format!("{p} @ {}:{}:{}", reg.declared_in.display(), reg.line, reg.column),
+        Some(p) => format!(
+            "{p} @ {}:{}:{}",
+            reg.declared_in.display(),
+            reg.line,
+            reg.column
+        ),
         None => reg.kind.clone(),
     }
 }
@@ -100,24 +154,79 @@ fn registration_summary(reg: &RouteRegistration) -> String {
 fn provider_cell(reg: &RouteRegistration, width: usize) -> Cell {
     let text = reg.provider_class.as_deref().unwrap_or("-");
     let cell = wrap_cell(text, width);
-    if reg.provider_class.is_some() { cell.fg(Color::Cyan) } else { cell.fg(Color::DarkGrey) }
+    if reg.provider_class.is_some() {
+        cell.fg(Color::Cyan)
+    } else {
+        cell.fg(Color::DarkGrey)
+    }
 }
 
 fn kind_cell(reg: &RouteRegistration, width: usize) -> Cell {
     let cell = wrap_cell(&reg.kind, width);
-    if reg.provider_class.is_some() { cell.fg(Color::Green) } else { cell.fg(Color::DarkGrey) }
+    if reg.provider_class.is_some() {
+        cell.fg(Color::Green)
+    } else {
+        cell.fg(Color::DarkGrey)
+    }
 }
 
 fn route_widths() -> RouteWidths {
     let t = terminal_width();
-    if t < 110 { RouteWidths { uri: 18, name: 16, action: 20, middleware: 14, patterns: 16, registration: 18 } }
-    else if t < 150 { RouteWidths { uri: 24, name: 20, action: 28, middleware: 18, patterns: 18, registration: 24 } }
-    else { RouteWidths { uri: 34, name: 26, action: 42, middleware: 24, patterns: 22, registration: 32 } }
+    if t < 110 {
+        RouteWidths {
+            uri: 18,
+            name: 16,
+            action: 20,
+            middleware: 14,
+            patterns: 16,
+            registration: 18,
+        }
+    } else if t < 150 {
+        RouteWidths {
+            uri: 24,
+            name: 20,
+            action: 28,
+            middleware: 18,
+            patterns: 18,
+            registration: 24,
+        }
+    } else {
+        RouteWidths {
+            uri: 34,
+            name: 26,
+            action: 42,
+            middleware: 24,
+            patterns: 22,
+            registration: 32,
+        }
+    }
 }
 
 fn route_source_widths() -> RouteSourceWidths {
     let t = terminal_width();
-    if t < 110 { RouteSourceWidths { route: 18, uri: 18, provider: 18, declared_at: 18, kind: 14 } }
-    else if t < 150 { RouteSourceWidths { route: 28, uri: 24, provider: 24, declared_at: 24, kind: 18 } }
-    else { RouteSourceWidths { route: 38, uri: 30, provider: 30, declared_at: 34, kind: 20 } }
+    if t < 110 {
+        RouteSourceWidths {
+            route: 18,
+            uri: 18,
+            provider: 18,
+            declared_at: 18,
+            kind: 14,
+        }
+    } else if t < 150 {
+        RouteSourceWidths {
+            route: 28,
+            uri: 24,
+            provider: 24,
+            declared_at: 24,
+            kind: 18,
+        }
+    } else {
+        RouteSourceWidths {
+            route: 38,
+            uri: 30,
+            provider: 30,
+            declared_at: 34,
+            kind: 20,
+        }
+    }
 }

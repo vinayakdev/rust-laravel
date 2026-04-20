@@ -1,11 +1,11 @@
 use php_parser::ast::{Arg, Expr, ExprId};
 use std::path::Path;
 
+use super::context::{
+    MiddlewareIndex, RouteContext, collect_parameter_patterns, resolve_middleware,
+};
 use crate::php::ast::{expr_name, expr_to_string, expr_to_string_list, strip_root};
 use crate::types::{RouteEntry, RouteRegistration};
-use super::context::{
-    collect_parameter_patterns, resolve_middleware, MiddlewareIndex, RouteContext,
-};
 
 #[derive(Clone, Copy)]
 pub(crate) enum ChainOp<'ast> {
@@ -21,30 +21,57 @@ pub(crate) enum ChainOp<'ast> {
 }
 
 pub(crate) struct RouteSignature {
+    pub(crate) creator: String,
     pub(crate) methods: Vec<String>,
     pub(crate) uri_arg_index: usize,
     pub(crate) action_arg_index: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct ResourceRouteSpec {
+    pub(crate) suffix: String,
+    pub(crate) methods: Vec<String>,
+    pub(crate) action: String,
+    pub(crate) name_suffix: String,
 }
 
 pub(crate) fn flatten_route_chain(expr: ExprId<'_>) -> Option<Vec<ChainOp<'_>>> {
     let mut ops = Vec::new();
     fn visit<'a>(expr: ExprId<'a>, ops: &mut Vec<ChainOp<'a>>) -> bool {
         match expr {
-            Expr::MethodCall { target, method, args, .. } => {
+            Expr::MethodCall {
+                target,
+                method,
+                args,
+                ..
+            } => {
                 if !visit(target, ops) {
                     return false;
                 }
                 ops.push(ChainOp::MethodCall { method, args });
                 true
             }
-            Expr::StaticCall { class, method, args, .. } => {
-                ops.push(ChainOp::StaticCall { class, method, args });
+            Expr::StaticCall {
+                class,
+                method,
+                args,
+                ..
+            } => {
+                ops.push(ChainOp::StaticCall {
+                    class,
+                    method,
+                    args,
+                });
                 true
             }
             _ => false,
         }
     }
-    if visit(expr, &mut ops) { Some(ops) } else { None }
+    if visit(expr, &mut ops) {
+        Some(ops)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn route_signature(
@@ -54,6 +81,7 @@ pub(crate) fn route_signature(
 ) -> Option<RouteSignature> {
     let simple = |name: &str| {
         Some(RouteSignature {
+            creator: name.to_ascii_lowercase(),
             methods: vec![name.to_string()],
             uri_arg_index: 0,
             action_arg_index: 1,
@@ -67,6 +95,24 @@ pub(crate) fn route_signature(
         "delete" => simple("DELETE"),
         "options" => simple("OPTIONS"),
         "any" => simple("ANY"),
+        "view" => Some(RouteSignature {
+            creator: "view".to_string(),
+            methods: vec!["GET".to_string()],
+            uri_arg_index: 0,
+            action_arg_index: 1,
+        }),
+        "redirect" | "permanentRedirect" => Some(RouteSignature {
+            creator: method_name.to_string(),
+            methods: vec!["GET".to_string()],
+            uri_arg_index: 0,
+            action_arg_index: 1,
+        }),
+        "fallback" => Some(RouteSignature {
+            creator: "fallback".to_string(),
+            methods: vec!["ANY".to_string()],
+            uri_arg_index: usize::MAX,
+            action_arg_index: 0,
+        }),
         "match" => args
             .first()
             .map(|a| {
@@ -77,6 +123,7 @@ pub(crate) fn route_signature(
             })
             .filter(|m| !m.is_empty())
             .map(|methods| RouteSignature {
+                creator: "match".to_string(),
                 methods,
                 uri_arg_index: 1,
                 action_arg_index: 2,
@@ -121,7 +168,10 @@ pub(crate) fn apply_modifier(
             }
         }
         "controller" => {
-            if let Some(value) = args.first().and_then(|a| expr_to_controller(a.value, source)) {
+            if let Some(value) = args
+                .first()
+                .and_then(|a| expr_to_controller(a.value, source))
+            {
                 context.controller = Some(value);
             }
         }
@@ -141,13 +191,18 @@ pub(crate) fn build_route_entry(
     middleware_index: &MiddlewareIndex,
 ) -> RouteEntry {
     let (line, column) = route_position(source, args, line);
-    let raw_uri = args
-        .get(signature.uri_arg_index)
-        .and_then(|a| expr_to_string(a.value, source))
-        .unwrap_or_else(|| "/".to_string());
-    let action = args
-        .get(signature.action_arg_index)
-        .and_then(|a| expr_to_action(a.value, context.controller.as_deref(), source));
+    let raw_uri = if signature.uri_arg_index == usize::MAX {
+        "{fallbackPlaceholder}".to_string()
+    } else {
+        args.get(signature.uri_arg_index)
+            .and_then(|a| expr_to_string(a.value, source))
+            .unwrap_or_else(|| "/".to_string())
+    };
+    let action = build_special_action(&signature, args, context.controller.as_deref(), source)
+        .or_else(|| {
+            args.get(signature.action_arg_index)
+                .and_then(|a| expr_to_action(a.value, context.controller.as_deref(), source))
+        });
 
     let uri = join_uri(&context.uri_prefix, &raw_uri);
     let resolved_middleware = resolve_middleware(&context.middleware, middleware_index);
@@ -166,6 +221,137 @@ pub(crate) fn build_route_entry(
         parameter_patterns,
         registration: registration.clone(),
     }
+}
+
+fn build_special_action(
+    signature: &RouteSignature,
+    args: &[Arg<'_>],
+    controller: Option<&str>,
+    source: &[u8],
+) -> Option<String> {
+    match signature.creator.as_str() {
+        "view" => args
+            .get(signature.action_arg_index)
+            .and_then(|a| expr_to_string(a.value, source))
+            .map(|view| format!("view:{view}")),
+        "redirect" => args
+            .get(signature.action_arg_index)
+            .and_then(|a| expr_to_string(a.value, source))
+            .map(|target| format!("redirect:{target}")),
+        "permanentRedirect" => args
+            .get(signature.action_arg_index)
+            .and_then(|a| expr_to_string(a.value, source))
+            .map(|target| format!("redirect-permanent:{target}")),
+        "fallback" => args
+            .get(signature.action_arg_index)
+            .and_then(|a| expr_to_action(a.value, controller, source)),
+        _ => None,
+    }
+}
+
+pub(crate) fn resource_routes(
+    resource: &str,
+    controller: &str,
+    api: bool,
+    singleton: bool,
+) -> Vec<ResourceRouteSpec> {
+    let base = resource.trim_matches('/').to_string();
+    let name_base = base.replace('/', ".");
+    let resource_key = base
+        .rsplit('/')
+        .next()
+        .unwrap_or(base.as_str())
+        .trim_end_matches('s')
+        .to_string();
+
+    let mut routes = Vec::new();
+
+    if !singleton {
+        routes.push(ResourceRouteSpec {
+            suffix: "".to_string(),
+            methods: vec!["GET".to_string()],
+            action: format!("{controller}@index"),
+            name_suffix: format!("{name_base}.index"),
+        });
+    }
+
+    if !api {
+        routes.push(ResourceRouteSpec {
+            suffix: "/create".to_string(),
+            methods: vec!["GET".to_string()],
+            action: format!("{controller}@create"),
+            name_suffix: format!("{name_base}.create"),
+        });
+    }
+
+    routes.push(ResourceRouteSpec {
+        suffix: "".to_string(),
+        methods: vec!["POST".to_string()],
+        action: format!("{controller}@store"),
+        name_suffix: format!("{name_base}.store"),
+    });
+
+    if singleton {
+        routes.push(ResourceRouteSpec {
+            suffix: "".to_string(),
+            methods: vec!["GET".to_string()],
+            action: format!("{controller}@show"),
+            name_suffix: format!("{name_base}.show"),
+        });
+        if !api {
+            routes.push(ResourceRouteSpec {
+                suffix: "/edit".to_string(),
+                methods: vec!["GET".to_string()],
+                action: format!("{controller}@edit"),
+                name_suffix: format!("{name_base}.edit"),
+            });
+        }
+        routes.push(ResourceRouteSpec {
+            suffix: "".to_string(),
+            methods: vec!["PUT".to_string(), "PATCH".to_string()],
+            action: format!("{controller}@update"),
+            name_suffix: format!("{name_base}.update"),
+        });
+        routes.push(ResourceRouteSpec {
+            suffix: "".to_string(),
+            methods: vec!["DELETE".to_string()],
+            action: format!("{controller}@destroy"),
+            name_suffix: format!("{name_base}.destroy"),
+        });
+        return routes;
+    }
+
+    let member = format!("/{{{resource_key}}}");
+    routes.push(ResourceRouteSpec {
+        suffix: member.clone(),
+        methods: vec!["GET".to_string()],
+        action: format!("{controller}@show"),
+        name_suffix: format!("{name_base}.show"),
+    });
+
+    if !api {
+        routes.push(ResourceRouteSpec {
+            suffix: format!("{member}/edit"),
+            methods: vec!["GET".to_string()],
+            action: format!("{controller}@edit"),
+            name_suffix: format!("{name_base}.edit"),
+        });
+    }
+
+    routes.push(ResourceRouteSpec {
+        suffix: member.clone(),
+        methods: vec!["PUT".to_string(), "PATCH".to_string()],
+        action: format!("{controller}@update"),
+        name_suffix: format!("{name_base}.update"),
+    });
+    routes.push(ResourceRouteSpec {
+        suffix: member,
+        methods: vec!["DELETE".to_string()],
+        action: format!("{controller}@destroy"),
+        name_suffix: format!("{name_base}.destroy"),
+    });
+
+    routes
 }
 
 pub(crate) fn route_line(expr: ExprId<'_>, source: &[u8], line_offset: usize) -> usize {
@@ -187,7 +373,9 @@ fn chunk_relative_line(expr: ExprId<'_>, source: &[u8]) -> usize {
 
 fn expr_to_controller(expr: ExprId<'_>, source: &[u8]) -> Option<String> {
     match expr {
-        Expr::ClassConstFetch { class, constant, .. } => {
+        Expr::ClassConstFetch {
+            class, constant, ..
+        } => {
             let class_name = expr_name(class, source)?;
             let constant_name = expr_name(constant, source)?;
             if constant_name == "class" {

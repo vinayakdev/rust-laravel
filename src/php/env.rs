@@ -43,11 +43,7 @@ fn resolve_env_pairs(raw: &BTreeMap<String, String>) -> BTreeMap<String, String>
     resolved
 }
 
-fn resolve_env_value(
-    key: &str,
-    raw: &BTreeMap<String, String>,
-    stack: &mut Vec<String>,
-) -> String {
+fn resolve_env_value(key: &str, raw: &BTreeMap<String, String>, stack: &mut Vec<String>) -> String {
     if stack.iter().any(|item| item == key) {
         return raw.get(key).cloned().unwrap_or_default();
     }
@@ -92,10 +88,6 @@ fn strip_quotes(value: &str) -> &str {
     value
         .strip_prefix('"')
         .and_then(|v| v.strip_suffix('"'))
-        .or_else(|| {
-            value
-                .strip_prefix('\'')
-                .and_then(|v| v.strip_suffix('\''))
-        })
+        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
         .unwrap_or(value)
 }

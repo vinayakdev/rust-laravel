@@ -10,7 +10,9 @@ use crate::analyzers::providers;
 use crate::php::ast::{expr_name, expr_to_string, expr_to_string_list};
 use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
-use crate::types::{MiddlewareAlias, MiddlewareGroup, MiddlewareReport, MiddlewareSource, RoutePattern};
+use crate::types::{
+    MiddlewareAlias, MiddlewareGroup, MiddlewareReport, MiddlewareSource, RoutePattern,
+};
 
 pub fn analyze(project: &LaravelProject) -> Result<MiddlewareReport, String> {
     let provider_report = providers::analyze(project)?;
@@ -26,7 +28,10 @@ pub fn analyze(project: &LaravelProject) -> Result<MiddlewareReport, String> {
         if !provider.source_available {
             continue;
         }
-        if !seen_sources.insert((provider.provider_class.clone(), relative_source_file.clone())) {
+        if !seen_sources.insert((
+            provider.provider_class.clone(),
+            relative_source_file.clone(),
+        )) {
             continue;
         }
 
@@ -34,11 +39,7 @@ pub fn analyze(project: &LaravelProject) -> Result<MiddlewareReport, String> {
         let source = fs::read(&source_file)
             .map_err(|e| format!("failed to read {}: {e}", source_file.display()))?;
 
-        let result = extract_middleware(
-            &provider.provider_class,
-            relative_source_file,
-            &source,
-        );
+        let result = extract_middleware(&provider.provider_class, relative_source_file, &source);
         aliases.extend(result.aliases);
         groups.extend(result.groups);
         patterns.extend(result.patterns);
@@ -66,11 +67,7 @@ struct ExtractionResult {
     patterns: Vec<RoutePattern>,
 }
 
-fn extract_middleware(
-    provider_class: &str,
-    declared_in: &Path,
-    source: &[u8],
-) -> ExtractionResult {
+fn extract_middleware(provider_class: &str, declared_in: &Path, source: &[u8]) -> ExtractionResult {
     let arena = Bump::new();
     let lexer = Lexer::new(source);
     let mut parser = Parser::new(lexer, &arena);
@@ -98,7 +95,13 @@ fn visit_expr(
     declared_in: &Path,
     result: &mut ExtractionResult,
 ) {
-    let Expr::StaticCall { class, method, args, .. } = expr else {
+    let Expr::StaticCall {
+        class,
+        method,
+        args,
+        ..
+    } = expr
+    else {
         return;
     };
 
@@ -123,7 +126,11 @@ fn visit_expr(
                 args.first().and_then(|a| expr_to_string(a.value, source)),
                 args.get(1).and_then(|a| expr_to_string(a.value, source)),
             ) {
-                result.aliases.push(MiddlewareAlias { name, target, source: source_ref });
+                result.aliases.push(MiddlewareAlias {
+                    name,
+                    target,
+                    source: source_ref,
+                });
             }
         }
         "middlewareGroup" if args.len() >= 2 => {
@@ -132,7 +139,11 @@ fn visit_expr(
                     .get(1)
                     .map(|a| expr_to_string_list(a.value, source))
                     .unwrap_or_default();
-                result.groups.push(MiddlewareGroup { name, members, source: source_ref });
+                result.groups.push(MiddlewareGroup {
+                    name,
+                    members,
+                    source: source_ref,
+                });
             }
         }
         "pattern" if args.len() >= 2 => {
@@ -140,7 +151,11 @@ fn visit_expr(
                 args.first().and_then(|a| expr_to_string(a.value, source)),
                 args.get(1).and_then(|a| expr_to_string(a.value, source)),
             ) {
-                result.patterns.push(RoutePattern { parameter, pattern, source: source_ref });
+                result.patterns.push(RoutePattern {
+                    parameter,
+                    pattern,
+                    source: source_ref,
+                });
             }
         }
         _ => {}
