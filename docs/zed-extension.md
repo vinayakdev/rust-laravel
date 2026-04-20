@@ -63,9 +63,12 @@ Example binary paths:
 Working in the first slice:
 
 - config key completion in common `config(...)` and `Config::...(...)` calls
+- env key completion in `env(...)` calls
 - route name completion in common `route(...)` helpers
+- Laravel helper snippet completion in PHP and Blade, with context-aware insertion
 - go to definition for config keys and named routes
-- hover for config defaults/env values and route details
+- go to definition for env keys in `.env` / `.env.example`
+- hover for config defaults/env values, env keys, and route details
 
 Current limitations:
 

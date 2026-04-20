@@ -5,7 +5,7 @@ use collector::collect_registered_config_files;
 use extractor::find_config_items;
 
 use crate::lsp::overrides::FileOverrides;
-use crate::php::env::load_env_map;
+use crate::php::env::load_env_map_with;
 use crate::project::LaravelProject;
 use crate::types::ConfigReport;
 use std::fs;
@@ -18,7 +18,7 @@ pub fn analyze_with_overrides(
     project: &LaravelProject,
     overrides: &FileOverrides,
 ) -> Result<ConfigReport, String> {
-    let env = load_env_map(&project.root)?;
+    let env = load_env_map_with(&project.root, |path| overrides.get_string(path))?;
     let config_files = collect_registered_config_files(project)?;
     let mut items = Vec::new();
 

@@ -2,19 +2,94 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-// Loads .env or .env.example from the project root. Returns an empty map if
-// neither file exists rather than erroring — missing env is normal in CI.
-pub fn load_env_map(project_root: &Path) -> Result<BTreeMap<String, String>, String> {
+use crate::php::ast::strip_root;
+use crate::types::EnvItem;
+
+pub fn load_env_map_with<F>(
+    project_root: &Path,
+    mut override_loader: F,
+) -> Result<BTreeMap<String, String>, String>
+where
+    F: FnMut(&Path) -> Option<String>,
+{
     for name in [".env", ".env.example"] {
         let path = project_root.join(name);
-        if path.is_file() {
-            let text = fs::read_to_string(&path)
-                .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        if let Some(text) = load_env_text(&path, &mut override_loader)? {
             let raw = parse_env_pairs(&text);
             return Ok(resolve_env_pairs(&raw));
         }
     }
+
     Ok(BTreeMap::new())
+}
+
+pub fn load_env_entries_with<F>(
+    project_root: &Path,
+    mut override_loader: F,
+) -> Result<Vec<EnvItem>, String>
+where
+    F: FnMut(&Path) -> Option<String>,
+{
+    let mut entries = Vec::new();
+
+    for name in [".env", ".env.example"] {
+        let path = project_root.join(name);
+        let Some(text) = load_env_text(&path, &mut override_loader)? else {
+            continue;
+        };
+
+        let raw = parse_env_pairs(&text);
+        let resolved = resolve_env_pairs(&raw);
+
+        for (index, raw_line) in text.lines().enumerate() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let Some((key, _)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            if key.is_empty() {
+                continue;
+            }
+
+            entries.push(EnvItem {
+                file: strip_root(project_root, &path),
+                line: index + 1,
+                column: raw_line.find(key).map(|value| value + 1).unwrap_or(1),
+                key: key.to_string(),
+                value: resolved.get(key).cloned().unwrap_or_default(),
+            });
+        }
+    }
+
+    entries.sort_by(|l, r| {
+        l.key.cmp(&r.key)
+            .then(l.file.cmp(&r.file))
+            .then(l.line.cmp(&r.line))
+            .then(l.column.cmp(&r.column))
+    });
+
+    Ok(entries)
+}
+
+fn load_env_text<F>(path: &Path, override_loader: &mut F) -> Result<Option<String>, String>
+where
+    F: FnMut(&Path) -> Option<String>,
+{
+    if let Some(text) = override_loader(path) {
+        return Ok(Some(text));
+    }
+
+    if path.is_file() {
+        return fs::read_to_string(path)
+            .map(Some)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()));
+    }
+
+    Ok(None)
 }
 
 fn parse_env_pairs(text: &str) -> BTreeMap<String, String> {
@@ -90,4 +165,49 @@ fn strip_quotes(value: &str) -> &str {
         .and_then(|v| v.strip_suffix('"'))
         .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
         .unwrap_or(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_env_entries_with, load_env_map_with};
+    use std::path::Path;
+
+    #[test]
+    fn prefers_dot_env_over_example_and_resolves_placeholders() {
+        let root = Path::new("/tmp/project");
+        let env = load_env_map_with(root, |path| match path.file_name().and_then(|name| name.to_str()) {
+            Some(".env") => Some("APP_NAME=Demo\nAPP_URL=https://${APP_NAME}.test".to_string()),
+            Some(".env.example") => Some("APP_NAME=Example".to_string()),
+            _ => None,
+        })
+        .expect("env map");
+
+        assert_eq!(env.get("APP_NAME").map(String::as_str), Some("Demo"));
+        assert_eq!(
+            env.get("APP_URL").map(String::as_str),
+            Some("https://Demo.test")
+        );
+    }
+
+    #[test]
+    fn loads_entries_from_both_env_files() {
+        let root = Path::new("/tmp/project");
+        let entries = load_env_entries_with(root, |path| match path.file_name().and_then(|name| name.to_str()) {
+            Some(".env") => Some("APP_NAME=Demo\n# comment\nAPP_ENV=local".to_string()),
+            Some(".env.example") => Some("APP_NAME=Example\nQUEUE_CONNECTION=sync".to_string()),
+            _ => None,
+        })
+        .expect("env entries");
+
+        let keys = entries.into_iter().map(|item| item.key).collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            vec![
+                "APP_ENV".to_string(),
+                "APP_NAME".to_string(),
+                "APP_NAME".to_string(),
+                "QUEUE_CONNECTION".to_string()
+            ]
+        );
+    }
 }

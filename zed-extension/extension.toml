@@ -8,5 +8,5 @@ repository = "https://github.com/hotdogb/rust-php"
 
 [language_servers.rust-php-lsp]
 name = "rust-php-lsp"
-languages = ["PHP"]
-language_ids = { PHP = "php" }
+languages = ["PHP", "Blade"]
+language_ids = { PHP = "php", Blade = "blade" }

@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::analyzers::{configs, routes};
+use crate::php::env::load_env_entries_with;
 use crate::project::LaravelProject;
-use crate::types::{ConfigItem, ConfigReport, RouteEntry, RouteReport};
+use crate::types::{ConfigItem, ConfigReport, EnvItem, RouteEntry, RouteReport};
 
 use super::overrides::FileOverrides;
 
@@ -11,8 +12,10 @@ pub struct ProjectIndex {
     pub project_root: PathBuf,
     config_report: ConfigReport,
     route_report: RouteReport,
+    env_items: Vec<EnvItem>,
     config_by_key: BTreeMap<String, Vec<usize>>,
     route_by_name: BTreeMap<String, Vec<usize>>,
+    env_by_key: BTreeMap<String, Vec<usize>>,
 }
 
 impl ProjectIndex {
@@ -22,8 +25,10 @@ impl ProjectIndex {
     ) -> Result<Self, String> {
         let config_report = configs::analyze_with_overrides(project, overrides)?;
         let route_report = routes::analyze_with_overrides(project, overrides)?;
+        let env_items = load_env_entries_with(&project.root, |path| overrides.get_string(path))?;
         let mut config_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut route_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut env_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
 
         for (index, item) in config_report.items.iter().enumerate() {
             config_by_key
@@ -38,12 +43,18 @@ impl ProjectIndex {
             }
         }
 
+        for (index, item) in env_items.iter().enumerate() {
+            env_by_key.entry(item.key.clone()).or_default().push(index);
+        }
+
         Ok(Self {
             project_root: project.root.clone(),
             config_report,
             route_report,
+            env_items,
             config_by_key,
             route_by_name,
+            env_by_key,
         })
     }
 
@@ -71,6 +82,14 @@ impl ProjectIndex {
             .collect()
     }
 
+    pub fn env_matches<'a>(&'a self, prefix: &str) -> Vec<&'a EnvItem> {
+        self.env_by_key
+            .iter()
+            .filter(|(key, _)| key.starts_with(prefix))
+            .flat_map(|(_, indices)| indices.iter().map(|index| &self.env_items[*index]))
+            .collect()
+    }
+
     pub fn config_definitions<'a>(&'a self, key: &str) -> Vec<&'a ConfigItem> {
         self.config_by_key
             .get(key)
@@ -92,6 +111,14 @@ impl ProjectIndex {
                     .iter()
                     .map(|index| &self.route_report.routes[*index])
             })
+            .collect()
+    }
+
+    pub fn env_definitions<'a>(&'a self, key: &str) -> Vec<&'a EnvItem> {
+        self.env_by_key
+            .get(key)
+            .into_iter()
+            .flat_map(|indices| indices.iter().map(|index| &self.env_items[*index]))
             .collect()
     }
 }

@@ -60,6 +60,15 @@ pub struct ConfigItem {
     pub source: ConfigSource,
 }
 
+#[derive(Debug, Serialize)]
+pub struct EnvItem {
+    pub file: PathBuf,
+    pub line: usize,
+    pub column: usize,
+    pub key: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigSource {
     pub kind: String,

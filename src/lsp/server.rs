@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::context::detect_symbol_context;
+use super::context::{detect_helper_context, detect_symbol_context};
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
 use super::query;
@@ -146,24 +146,29 @@ fn initialize(state: &mut ServerState, params: Value) {
 }
 
 fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
-    let Some((source, line, character)) = source_and_position(state, params) else {
+    let Some((uri, source, line, character)) = source_and_position(state, params) else {
         return json!({ "isIncomplete": false, "items": [] });
     };
     let Some(index) = &state.index else {
         return json!({ "isIncomplete": false, "items": [] });
     };
-    let Some(context) = detect_symbol_context(source, line, character) else {
-        return json!({ "isIncomplete": false, "items": [] });
+
+    let items = if let Some(context) = detect_symbol_context(source, line, character) {
+        query::complete(index, &context, line)
+    } else if let Some(context) = detect_helper_context(uri, source, line, character) {
+        query::helper_snippets(&context, line)
+    } else {
+        Vec::new()
     };
 
     json!({
         "isIncomplete": false,
-        "items": query::complete(index, &context, line),
+        "items": items,
     })
 }
 
 fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
-    let Some((source, line, character)) = source_and_position(state, params) else {
+    let Some((_, source, line, character)) = source_and_position(state, params) else {
         return Value::Null;
     };
     let Some(index) = &state.index else {
@@ -182,7 +187,7 @@ fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
 }
 
 fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
-    let Some((source, line, character)) = source_and_position(state, params) else {
+    let Some((_, source, line, character)) = source_and_position(state, params) else {
         return Value::Null;
     };
     let Some(index) = &state.index else {
@@ -198,7 +203,7 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
 fn source_and_position<'a>(
     state: &'a ServerState,
     params: Option<&'a Value>,
-) -> Option<(&'a str, usize, usize)> {
+) -> Option<(&'a str, &'a str, usize, usize)> {
     let params = params?;
     let uri = params
         .pointer("/textDocument/uri")
@@ -211,7 +216,7 @@ fn source_and_position<'a>(
     state
         .documents
         .get(uri)
-        .map(|text| (text.as_str(), line, character))
+        .map(|text| (uri, text.as_str(), line, character))
 }
 
 fn initialize_result() -> Value {
@@ -224,7 +229,7 @@ fn initialize_result() -> Value {
             },
             "completionProvider": {
                 "resolveProvider": false,
-                "triggerCharacters": ["'", "\"", "."]
+                "triggerCharacters": ["'", "\"", ".", "("]
             },
             "definitionProvider": true,
             "hoverProvider": true
