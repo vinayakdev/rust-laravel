@@ -22,7 +22,7 @@ pub fn analyze(project: &LaravelProject) -> Result<MigrationReport, String> {
 
     let mut migrations = files
         .into_iter()
-        .filter_map(|file| parse_migration_file(project, &file))
+        .flat_map(|file| parse_migration_file(project, &file))
         .collect::<Vec<_>>();
 
     migrations.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
@@ -132,8 +132,10 @@ fn scan_migrations_dir(dir: &Path, out: &mut Vec<PathBuf>) {
     out.extend(batch);
 }
 
-fn parse_migration_file(project: &LaravelProject, file: &Path) -> Option<MigrationEntry> {
-    let source = fs::read(file).ok()?;
+fn parse_migration_file(project: &LaravelProject, file: &Path) -> Vec<MigrationEntry> {
+    let Ok(source) = fs::read(file) else {
+        return Vec::new();
+    };
     let arena = Bump::new();
     let lexer = Lexer::new(&source);
     let mut parser = Parser::new(lexer, &arena);
@@ -146,16 +148,15 @@ fn parse_migration_file(project: &LaravelProject, file: &Path) -> Option<Migrati
         .unwrap_or_default();
 
     let relative = strip_root(&project.root, file);
+    let mut entries = Vec::new();
 
     for stmt in program.statements.iter() {
         // Named class: class CreateXxx extends Migration { ... }
         if let Stmt::Class { name, members, .. } = stmt {
             let class_name = span_text(name.span, &source);
-            if let Some(entry) =
-                find_up_method(members, &source, &class_name, &timestamp, &relative)
-            {
-                return Some(entry);
-            }
+            entries.extend(find_up_method(
+                members, &source, &class_name, &timestamp, &relative,
+            ));
         }
 
         // Anonymous class: return new class extends Migration { ... }
@@ -167,16 +168,14 @@ fn parse_migration_file(project: &LaravelProject, file: &Path) -> Option<Migrati
             if let Expr::New { class, .. } = *expr {
                 if let Expr::AnonymousClass { members, .. } = *class {
                     let class_name = timestamp.clone();
-                    if let Some(entry) =
-                        find_up_method(members, &source, &class_name, &timestamp, &relative)
-                    {
-                        return Some(entry);
-                    }
+                    entries.extend(find_up_method(
+                        members, &source, &class_name, &timestamp, &relative,
+                    ));
                 }
             }
         }
     }
-    None
+    entries
 }
 
 fn find_up_method(
@@ -185,7 +184,7 @@ fn find_up_method(
     class_name: &str,
     timestamp: &str,
     relative: &Path,
-) -> Option<MigrationEntry> {
+) -> Vec<MigrationEntry> {
     for member in members.iter().copied() {
         let ClassMember::Method {
             name: method_name,
@@ -198,50 +197,49 @@ fn find_up_method(
         if span_text(method_name.span, source) != "up" {
             continue;
         }
-        return Some(
-            extract_schema_call(body, source, class_name, timestamp, relative).unwrap_or_else(
-                || MigrationEntry {
-                    file: relative.to_path_buf(),
-                    timestamp: timestamp.to_string(),
-                    class_name: class_name.to_string(),
-                    table: String::new(),
-                    operation: "unknown".to_string(),
-                    columns: Vec::new(),
-                    indexes: Vec::new(),
-                    dropped_columns: Vec::new(),
-                },
-            ),
-        );
+        let entries = extract_schema_calls(body, source, class_name, timestamp, relative);
+        if entries.is_empty() {
+            return vec![MigrationEntry {
+                file: relative.to_path_buf(),
+                timestamp: timestamp.to_string(),
+                class_name: class_name.to_string(),
+                table: String::new(),
+                operation: "unknown".to_string(),
+                columns: Vec::new(),
+                indexes: Vec::new(),
+                dropped_columns: Vec::new(),
+            }];
+        }
+        return entries;
     }
-    None
+    Vec::new()
 }
 
-fn extract_schema_call(
+fn extract_schema_calls(
     stmts: &[php_parser::ast::StmtId<'_>],
     source: &[u8],
     class_name: &str,
     timestamp: &str,
     relative: &Path,
-) -> Option<MigrationEntry> {
+) -> Vec<MigrationEntry> {
+    let mut entries = Vec::new();
     for stmt in stmts {
         match stmt {
             Stmt::Expression { expr, .. } => {
                 if let Some(entry) = try_schema_expr(*expr, source, class_name, timestamp, relative)
                 {
-                    return Some(entry);
+                    entries.push(entry);
                 }
             }
             Stmt::Block { statements, .. } => {
-                if let Some(entry) =
-                    extract_schema_call(statements, source, class_name, timestamp, relative)
-                {
-                    return Some(entry);
-                }
+                entries.extend(extract_schema_calls(
+                    statements, source, class_name, timestamp, relative,
+                ));
             }
             _ => {}
         }
     }
-    None
+    entries
 }
 
 fn try_schema_expr(
@@ -265,7 +263,8 @@ fn try_schema_expr(
         return None;
     }
     let method_text = span_text(method.span(), source);
-    let operation = match method_text.as_str() {
+    let method_lc = method_text.to_ascii_lowercase();
+    let operation = match method_lc.as_str() {
         "create" => "create",
         "table" => "alter",
         _ => return None,
@@ -319,12 +318,22 @@ fn process_table_call(
     }
 
     let (first_method, first_args) = &chain[0];
+    let first_method_lc = first_method.to_ascii_lowercase();
 
-    match first_method.as_str() {
-        "dropColumn" | "removeColumn" => {
+    match first_method_lc.as_str() {
+        "dropcolumn" | "removecolumn" => {
             for arg in first_args {
                 dropped.extend(expr_to_string_list(*arg, source));
             }
+            return;
+        }
+        "dropsoftdeletes" | "dropsoftdeletestz" => {
+            dropped.push("deleted_at".to_string());
+            return;
+        }
+        "droptimestamps" | "droptimestampstz" => {
+            dropped.push("created_at".to_string());
+            dropped.push("updated_at".to_string());
             return;
         }
         "index" => {
@@ -368,12 +377,12 @@ fn process_table_call(
             if let Some(col) = first_args.first().and_then(|a| expr_to_string(*a, source)) {
                 let references = chain
                     .iter()
-                    .find(|(m, _)| m == "references")
+                    .find(|(m, _)| m.eq_ignore_ascii_case("references"))
                     .and_then(|(_, a)| a.first())
                     .and_then(|a| expr_to_string(*a, source));
                 let on_table = chain
                     .iter()
-                    .find(|(m, _)| m == "on")
+                    .find(|(m, _)| m.eq_ignore_ascii_case("on"))
                     .and_then(|(_, a)| a.first())
                     .and_then(|a| expr_to_string(*a, source));
                 // Update the existing column if present
@@ -384,8 +393,8 @@ fn process_table_call(
             }
             return;
         }
-        "timestamps" | "nullableTimestamps" => {
-            let nullable = first_method == "nullableTimestamps";
+        "timestamps" | "nullabletimestamps" => {
+            let nullable = first_method_lc == "nullabletimestamps";
             columns.push(ColumnEntry {
                 name: "created_at".to_string(),
                 column_type: "timestamp".to_string(),
@@ -415,7 +424,7 @@ fn process_table_call(
             let _ = nullable;
             return;
         }
-        "softDeletes" | "softDeletesTz" => {
+        "softdeletes" | "softdeletestz" => {
             columns.push(ColumnEntry {
                 name: "deleted_at".to_string(),
                 column_type: "timestamp".to_string(),
@@ -431,7 +440,7 @@ fn process_table_call(
             });
             return;
         }
-        "rememberToken" => {
+        "remembertoken" => {
             columns.push(ColumnEntry {
                 name: "remember_token".to_string(),
                 column_type: "string".to_string(),
@@ -447,9 +456,9 @@ fn process_table_call(
             });
             return;
         }
-        "morphs" | "nullableMorphs" | "uuidMorphs" | "nullableUuidMorphs" => {
-            let nullable = first_method.contains("nullable");
-            let uuid = first_method.contains("uuid") || first_method.contains("Uuid");
+        "morphs" | "nullablemorphs" | "uuidmorphs" | "nullableuuidmorphs" => {
+            let nullable = first_method_lc.contains("nullable");
+            let uuid = first_method_lc.contains("uuid");
             let col_name = first_args
                 .first()
                 .and_then(|a| expr_to_string(*a, source))
@@ -488,9 +497,9 @@ fn process_table_call(
     // Regular column definition
     let col_name = first_args.first().and_then(|a| expr_to_string(*a, source));
 
-    let (col_type, col_name, auto_unsigned, auto_primary) = match first_method.as_str() {
+    let (col_type, col_name, auto_unsigned, auto_primary) = match first_method_lc.as_str() {
         "id" => ("bigIncrements".to_string(), "id".to_string(), true, true),
-        "bigIncrements" => {
+        "bigincrements" => {
             let name = col_name.unwrap_or_else(|| "id".to_string());
             ("bigIncrements".to_string(), name, true, true)
         }
@@ -498,43 +507,43 @@ fn process_table_call(
             let name = col_name.unwrap_or_else(|| "id".to_string());
             ("increments".to_string(), name, true, true)
         }
-        "smallIncrements" => (
+        "smallincrements" => (
             "smallIncrements".to_string(),
             col_name.unwrap_or_else(|| "id".to_string()),
             true,
             true,
         ),
-        "tinyIncrements" => (
+        "tinyincrements" => (
             "tinyIncrements".to_string(),
             col_name.unwrap_or_else(|| "id".to_string()),
             true,
             true,
         ),
-        "mediumIncrements" => (
+        "mediumincrements" => (
             "mediumIncrements".to_string(),
             col_name.unwrap_or_else(|| "id".to_string()),
             true,
             true,
         ),
-        "foreignId" => {
+        "foreignid" => {
             let name = col_name.unwrap_or_default();
             ("unsignedBigInteger".to_string(), name, true, false)
         }
-        "foreignUuid" => {
+        "foreignuuid" => {
             let name = col_name.unwrap_or_default();
             ("uuid".to_string(), name, false, false)
         }
-        "unsignedBigInteger"
-        | "unsignedInteger"
-        | "unsignedSmallInteger"
-        | "unsignedTinyInteger"
-        | "unsignedMediumInteger" => {
+        "unsignedbiginteger"
+        | "unsignedinteger"
+        | "unsignedsmallinteger"
+        | "unsignedtinyinteger"
+        | "unsignedmediuminteger" => {
             let name = col_name.unwrap_or_default();
             (first_method.clone(), name, true, false)
         }
         _ => {
             let Some(name) = col_name else { return };
-            let ct = column_type_str(first_method);
+            let ct = column_type_str(&first_method_lc);
             (ct, name, false, false)
         }
     };
@@ -558,7 +567,7 @@ fn process_table_call(
     };
 
     // For enum/set, second arg is the values array
-    if (first_method == "enum" || first_method == "set") && first_args.len() >= 2 {
+    if (first_method_lc == "enum" || first_method_lc == "set") && first_args.len() >= 2 {
         entry.enum_values = expr_to_string_list(first_args[1], source);
     }
 
@@ -566,7 +575,7 @@ fn process_table_call(
     let mut fk_references: Option<String> = None;
     let mut fk_on_table: Option<String> = None;
     for (modifier, mod_args) in chain.iter().skip(1) {
-        match modifier.as_str() {
+        match modifier.to_ascii_lowercase().as_str() {
             "nullable" => entry.nullable = true,
             "unsigned" => entry.unsigned = true,
             "unique" => entry.unique = true,
@@ -631,35 +640,35 @@ fn flatten_method_chain<'a>(
 
 fn column_type_str(method: &str) -> String {
     match method {
-        "bigInteger" => "bigInteger",
+        "biginteger" => "bigInteger",
         "binary" => "binary",
         "boolean" | "bool" => "boolean",
         "char" => "char",
         "date" => "date",
-        "dateTime" | "datetime" => "dateTime",
-        "dateTimeTz" => "dateTimeTz",
+        "datetime" => "dateTime",
+        "datetimetz" => "dateTimeTz",
         "decimal" => "decimal",
         "double" => "double",
         "enum" => "enum",
         "float" => "float",
         "integer" | "int" => "integer",
-        "ipAddress" => "ipAddress",
+        "ipaddress" => "ipAddress",
         "json" => "json",
         "jsonb" => "jsonb",
-        "longText" => "longText",
-        "macAddress" => "macAddress",
-        "mediumInteger" => "mediumInteger",
-        "mediumText" => "mediumText",
+        "longtext" => "longText",
+        "macaddress" => "macAddress",
+        "mediuminteger" => "mediumInteger",
+        "mediumtext" => "mediumText",
         "set" => "set",
-        "smallInteger" => "smallInteger",
+        "smallinteger" => "smallInteger",
         "string" | "varchar" => "string",
         "text" => "text",
         "time" => "time",
-        "timeTz" => "timeTz",
+        "timetz" => "timeTz",
         "timestamp" => "timestamp",
-        "timestampTz" => "timestampTz",
-        "tinyInteger" => "tinyInteger",
-        "tinyText" => "tinyText",
+        "timestamptz" => "timestampTz",
+        "tinyinteger" => "tinyInteger",
+        "tinytext" => "tinyText",
         "uuid" => "uuid",
         "ulid" => "ulid",
         "year" => "year",
@@ -694,4 +703,161 @@ pub fn resolve_columns_for_table(table: &str, migrations: &[MigrationEntry]) -> 
 #[allow(dead_code)]
 fn _byte_offset_hint(source: &[u8], offset: usize) -> (usize, usize) {
     byte_offset_to_line_col(source, offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_project() -> Result<(LaravelProject, PathBuf), Box<dyn std::error::Error>> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_nanos()
+            .to_string();
+        let root = std::env::temp_dir().join(format!("rust_php_migrations_{unique}"));
+
+        fs::create_dir_all(root.join("config"))?;
+        fs::create_dir_all(root.join("routes"))?;
+        fs::create_dir_all(root.join("database/migrations"))?;
+        fs::write(root.join("composer.json"), r#"{"autoload":{"psr-4":{}}}"#)?;
+
+        Ok((
+            LaravelProject {
+                root: root.clone(),
+                name: "temp-project".to_string(),
+            },
+            root,
+        ))
+    }
+
+    #[test]
+    fn captures_multiple_schema_calls_in_one_migration_file(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (project, root) = make_temp_project()?;
+        let migration = root
+            .join("database/migrations/2024_01_10_090000_create_blogs_table.php");
+
+        fs::write(
+            &migration,
+            r#"<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('blogs', static function (Blueprint $table) {
+            $table->id();
+            $table->string('title')->nullable();
+        });
+
+        Schema::table('blogs', static function (Blueprint $table) {
+            $table->string('name')->nullable();
+        });
+    }
+};
+"#,
+        )?;
+
+        let report = analyze(&project).map_err(std::io::Error::other)?;
+        let columns = resolve_columns_for_table("blogs", &report.migrations);
+        let column_names = columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(report.migrations.len(), 2);
+        assert_eq!(column_names, vec!["id", "title", "name"]);
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn drops_column_added_earlier_in_same_migration_file_case_insensitively(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (project, root) = make_temp_project()?;
+        let migration = root
+            .join("database/migrations/2024_01_10_090000_create_blogs_table.php");
+
+        fs::write(
+            &migration,
+            r#"<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('blogs', static function (Blueprint $table) {
+            $table->id();
+        });
+
+        Schema::table('blogs', static function (Blueprint $table) {
+            $table->string('name')->nullable();
+        });
+
+        Schema::table('blogs', static function (Blueprint $table) {
+            $table->dropcolumn('name');
+        });
+    }
+};
+"#,
+        )?;
+
+        let report = analyze(&project).map_err(std::io::Error::other)?;
+        let columns = resolve_columns_for_table("blogs", &report.migrations);
+        let column_names = columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(report.migrations.len(), 3);
+        assert_eq!(column_names, vec!["id"]);
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn drops_soft_deletes_and_timestamps_helpers(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (project, root) = make_temp_project()?;
+        let migration = root
+            .join("database/migrations/2024_01_10_090000_create_blogs_table.php");
+
+        fs::write(
+            &migration,
+            r#"<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('blogs', static function (Blueprint $table) {
+            $table->id();
+            $table->softDeletes();
+            $table->timestamps();
+        });
+
+        Schema::table('blogs', static function (Blueprint $table) {
+            $table->dropSoftDeletes();
+            $table->dropTimestamps();
+        });
+    }
+};
+"#,
+        )?;
+
+        let report = analyze(&project).map_err(std::io::Error::other)?;
+        let columns = resolve_columns_for_table("blogs", &report.migrations);
+        let column_names = columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
+
+        assert_eq!(column_names, vec!["id"]);
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 }
