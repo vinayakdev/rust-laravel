@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -86,35 +87,19 @@ impl ProjectIndex {
     }
 
     pub fn config_matches<'a>(&'a self, prefix: &str) -> Vec<&'a ConfigItem> {
-        self.config_by_key
-            .iter()
-            .filter(|(key, _)| key.starts_with(prefix))
-            .flat_map(|(_, indices)| {
-                indices
-                    .iter()
-                    .map(|index| &self.config_report.items[*index])
-            })
-            .collect()
+        ranked_index_matches(self.config_by_key.iter(), prefix, |index| {
+            &self.config_report.items[index]
+        })
     }
 
     pub fn route_matches<'a>(&'a self, prefix: &str) -> Vec<&'a RouteEntry> {
-        self.route_by_name
-            .iter()
-            .filter(|(key, _)| key.starts_with(prefix))
-            .flat_map(|(_, indices)| {
-                indices
-                    .iter()
-                    .map(|index| &self.route_report.routes[*index])
-            })
-            .collect()
+        ranked_index_matches(self.route_by_name.iter(), prefix, |index| {
+            &self.route_report.routes[index]
+        })
     }
 
     pub fn env_matches<'a>(&'a self, prefix: &str) -> Vec<&'a EnvItem> {
-        self.env_by_key
-            .iter()
-            .filter(|(key, _)| key.starts_with(prefix))
-            .flat_map(|(_, indices)| indices.iter().map(|index| &self.env_items[*index]))
-            .collect()
+        ranked_index_matches(self.env_by_key.iter(), prefix, |index| &self.env_items[index])
     }
 
     pub fn config_definitions<'a>(&'a self, key: &str) -> Vec<&'a ConfigItem> {
@@ -150,20 +135,25 @@ impl ProjectIndex {
     }
 
     pub fn controller_matches<'a>(&'a self, prefix: &str) -> Vec<&'a ControllerEntry> {
-        self.controller_report
+        let mut matches = self
+            .controller_report
             .controllers
             .iter()
-            .filter(|controller| {
-                controller.class_name.starts_with(prefix)
-                    || controller.fqn.starts_with(prefix)
-                    || controller
-                        .fqn
-                        .rsplit('\\')
-                        .next()
-                        .unwrap_or(controller.fqn.as_str())
-                        .starts_with(prefix)
+            .filter_map(|controller| {
+                let short_name = controller
+                    .fqn
+                    .rsplit('\\')
+                    .next()
+                    .unwrap_or(controller.fqn.as_str());
+                let score = fuzzy_score(&controller.class_name, prefix)
+                    .max(fuzzy_score(&controller.fqn, prefix))
+                    .max(fuzzy_score(short_name, prefix))?;
+                Some((score, controller.class_name.len(), controller.class_name.as_str(), controller))
             })
-            .collect()
+            .collect::<Vec<_>>();
+
+        matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, *label));
+        matches.into_iter().map(|(_, _, _, controller)| controller).collect()
     }
 
     pub fn controller_definitions<'a>(&'a self, controller: &str) -> Vec<&'a ControllerEntry> {
@@ -175,17 +165,24 @@ impl ProjectIndex {
         controller: &str,
         prefix: &str,
     ) -> Vec<(&'a ControllerEntry, &'a ControllerMethodEntry)> {
-        controller_candidates(&self.controller_report, controller)
+        let mut matches = controller_candidates(&self.controller_report, controller)
             .into_iter()
             .flat_map(|controller| {
                 controller
                     .methods
                     .iter()
-                    .filter(move |method| {
-                        method.accessible_from_route && method.name.starts_with(prefix)
+                    .filter(move |method| method.accessible_from_route)
+                    .filter_map(move |method| {
+                        let score = fuzzy_score(&method.name, prefix)?;
+                        Some((score, method.name.len(), method.name.as_str(), controller, method))
                     })
-                    .map(move |method| (controller, method))
             })
+            .collect::<Vec<_>>();
+
+        matches.sort_by_key(|(score, len, label, _, _)| (Reverse(*score), *len, *label));
+        matches
+            .into_iter()
+            .map(|(_, _, _, controller, method)| (controller, method))
             .collect()
     }
 
@@ -207,15 +204,9 @@ impl ProjectIndex {
     }
 
     pub fn view_matches<'a>(&'a self, prefix: &str) -> Vec<&'a ViewEntry> {
-        self.view_by_name
-            .iter()
-            .filter(|(key, _)| key.starts_with(prefix))
-            .flat_map(|(_, indices)| {
-                indices
-                    .iter()
-                    .map(|index| &self.view_report.views[*index])
-            })
-            .collect()
+        ranked_index_matches(self.view_by_name.iter(), prefix, |index| {
+            &self.view_report.views[index]
+        })
     }
 
     pub fn view_definitions<'a>(&'a self, name: &str) -> Vec<&'a ViewEntry> {
@@ -269,4 +260,88 @@ fn controller_candidates<'a>(
         .iter()
         .filter(|entry| entry.fqn.ends_with(&format!("\\{normalized}")))
         .collect()
+}
+
+fn ranked_index_matches<'a, T, F>(
+    entries: impl Iterator<Item = (&'a String, &'a Vec<usize>)>,
+    query: &str,
+    resolve: F,
+) -> Vec<&'a T>
+where
+    F: Fn(usize) -> &'a T,
+{
+    let mut matches = entries
+        .filter_map(|(key, indices)| {
+            let score = fuzzy_score(key, query)?;
+            Some((score, key.len(), key.as_str(), indices))
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, *label));
+
+    matches
+        .into_iter()
+        .flat_map(|(_, _, _, indices)| indices.iter().copied())
+        .map(resolve)
+        .collect()
+}
+
+pub(crate) fn fuzzy_score(candidate: &str, query: &str) -> Option<u32> {
+    if query.is_empty() {
+        return Some(1);
+    }
+
+    if candidate == query {
+        return Some(10_000);
+    }
+
+    if candidate.starts_with(query) {
+        return Some(9_000u32.saturating_sub(candidate.len() as u32));
+    }
+
+    if candidate.contains(query) {
+        return Some(7_000u32.saturating_sub(candidate.len() as u32));
+    }
+
+    let candidate_chars = candidate.chars().collect::<Vec<_>>();
+    let query_chars = query.chars().collect::<Vec<_>>();
+    let mut query_index = 0usize;
+    let mut score = 0u32;
+    let mut last_match = None::<usize>;
+
+    for (index, ch) in candidate_chars.iter().enumerate() {
+        if query_index >= query_chars.len() {
+            break;
+        }
+
+        if !ch.eq_ignore_ascii_case(&query_chars[query_index]) {
+            continue;
+        }
+
+        score += 10;
+
+        if index == 0 {
+            score += 20;
+        } else {
+            let previous = candidate_chars[index - 1];
+            if matches!(previous, '.' | '_' | '-' | '\\' | '/' | ':' | '@') {
+                score += 18;
+            }
+        }
+
+        if let Some(previous_match) = last_match {
+            if index == previous_match + 1 {
+                score += 14;
+            }
+        }
+
+        last_match = Some(index);
+        query_index += 1;
+    }
+
+    if query_index != query_chars.len() {
+        return None;
+    }
+
+    Some(score.saturating_sub(candidate.len() as u32))
 }

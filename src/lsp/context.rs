@@ -186,10 +186,7 @@ fn detect_route_action_string_context(source: &str, cursor: usize) -> Option<Rou
     let inner_start = quote_start + quote_char.len_utf8();
     let inner_end = quote_end;
 
-    if cursor < inner_start
-        || cursor > inner_end
-        || (cursor == inner_end && inner_start != inner_end)
-    {
+    if cursor < inner_start || cursor > inner_end {
         return None;
     }
 
@@ -552,6 +549,34 @@ mod tests {
     }
 
     #[test]
+    fn detects_array_controller_method_context_at_end_of_token_with_route_chain() {
+        let source = "Route::get('/', [VirtualOfficeController::class, 'index'])->name('index');";
+        let character = source.find("index']").unwrap() + "index".len();
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("route action context");
+
+        assert_eq!(context.kind, RouteActionKind::ControllerMethodArray);
+        assert_eq!(context.controller.as_deref(), Some("VirtualOfficeController"));
+        assert_eq!(context.full_text, "index");
+        assert_eq!(context.prefix, "index");
+    }
+
+    #[test]
+    fn detects_empty_array_controller_method_context_with_route_chain() {
+        let source = "Route::get('/', [VirtualOfficeController::class, ''])->name('index');";
+        let character = source.find("''").unwrap() + 1;
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("route action context");
+
+        assert_eq!(context.kind, RouteActionKind::ControllerMethodArray);
+        assert_eq!(context.controller.as_deref(), Some("VirtualOfficeController"));
+        assert_eq!(context.full_text, "");
+        assert_eq!(context.prefix, "");
+    }
+
+    #[test]
     fn detects_legacy_controller_method_context() {
         let source = "Route::get('/', 'WebsiteController@ho');";
         let character = source.find("ho").unwrap() + 1;
@@ -563,6 +588,20 @@ mod tests {
         assert_eq!(context.controller.as_deref(), Some("WebsiteController"));
         assert_eq!(context.prefix, "h");
         assert_eq!(context.full_text, "ho");
+    }
+
+    #[test]
+    fn detects_legacy_controller_method_context_at_end_of_token() {
+        let source = "Route::get('/', 'WebsiteController@index');";
+        let character = source.find("index").unwrap() + "index".len();
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("legacy route action context");
+
+        assert_eq!(context.kind, RouteActionKind::LegacyMethodString);
+        assert_eq!(context.controller.as_deref(), Some("WebsiteController"));
+        assert_eq!(context.prefix, "index");
+        assert_eq!(context.full_text, "index");
     }
 
     #[test]

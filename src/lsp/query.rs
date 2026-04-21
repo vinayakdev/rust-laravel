@@ -1,9 +1,11 @@
+use std::cmp::Reverse;
 use serde_json::{Value, json};
 use std::path::Path;
 
 use super::context::{
     HelperContext, HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
 };
+use super::index::fuzzy_score;
 use super::index::ProjectIndex;
 use crate::types::{ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry, ViewEntry};
 
@@ -33,9 +35,8 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
 }
 
 pub fn helper_snippets(context: &HelperContext, line: usize) -> Vec<Value> {
-    helper_specs()
-        .iter()
-        .filter(|helper| helper.name.starts_with(&context.prefix))
+    ranked_helper_specs(&context.prefix)
+        .into_iter()
         .map(|helper| helper_completion(helper, context, line))
         .collect()
 }
@@ -861,6 +862,22 @@ fn helper_specs() -> &'static [HelperSpec] {
     ]
 }
 
+fn ranked_helper_specs(query: &str) -> Vec<&'static HelperSpec> {
+    let mut matches = helper_specs()
+        .iter()
+        .filter_map(|helper| {
+            let score = fuzzy_score(helper.name, query)?;
+            Some((score, helper.name.len(), helper.name, helper))
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, *label));
+    matches
+        .into_iter()
+        .map(|(_, _, _, helper)| helper)
+        .collect()
+}
+
 fn location_link(
     project_root: &std::path::Path,
     relative_file: &std::path::Path,
@@ -912,14 +929,16 @@ mod tests {
 
     use serde_json::json;
 
-    use crate::lsp::context::{detect_route_action_context, detect_symbol_context};
+    use crate::lsp::context::{
+        HelperContext, HelperStyle, detect_route_action_context, detect_symbol_context,
+    };
     use crate::lsp::index::ProjectIndex;
     use crate::lsp::overrides::FileOverrides;
     use crate::project;
 
     use super::{
-        complete_route_actions, definitions, hover, route_action_code_actions, route_action_definitions,
-        route_diagnostics,
+        complete_route_actions, definitions, helper_snippets, hover, route_action_code_actions,
+        route_action_definitions, route_diagnostics,
     };
 
     fn sandbox_project() -> project::LaravelProject {
@@ -1056,6 +1075,39 @@ Route::get('/dashboard', function () {
         assert!(labels.contains(&"publish"));
         assert!(!labels.contains(&"sustainability"));
         assert!(!labels.contains(&"docs"));
+    }
+
+    #[test]
+    fn completes_route_callable_controller_methods_while_editing_existing_method() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "Route::get('/', [WebsiteController::class, 'hom'])->name('home');";
+        let character = source.find("hom']").unwrap() + "hom".len();
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("route action context");
+
+        let items = complete_route_actions(&index, &context, 0);
+        let home = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("home"))
+            .expect("home completion should exist");
+
+        assert_eq!(
+            home.pointer("/textEdit/newText").and_then(|value| value.as_str()),
+            Some("home")
+        );
+        assert_eq!(
+            home.pointer("/textEdit/range/start/character")
+                .and_then(|value| value.as_u64()),
+            Some(source.find("hom").unwrap() as u64)
+        );
+        assert_eq!(
+            home.pointer("/textEdit/range/end/character")
+                .and_then(|value| value.as_u64()),
+            Some((source.find("hom").unwrap() + "hom".len()) as u64)
+        );
     }
 
     #[test]
@@ -1264,5 +1316,23 @@ Route::get('/dashboard', function () {
                     .ends_with(target_suffix)
             );
         }
+    }
+
+    #[test]
+    fn helper_snippets_follow_the_shared_fuzzy_search_standard() {
+        let context = HelperContext {
+            prefix: "set".to_string(),
+            start_character: 0,
+            end_character: 3,
+            style: HelperStyle::Php,
+        };
+
+        let items = helper_snippets(&context, 0);
+        let labels = items
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"asset"));
     }
 }
