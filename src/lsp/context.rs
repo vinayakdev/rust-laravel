@@ -112,6 +112,10 @@ fn detect_kind(before: &str) -> Option<SymbolKind> {
         return Some(SymbolKind::View);
     }
 
+    if compact.contains("Route::view(") && route_argument_index(before) >= 1 {
+        return Some(SymbolKind::View);
+    }
+
     None
 }
 

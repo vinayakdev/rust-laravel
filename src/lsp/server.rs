@@ -244,10 +244,10 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
     };
 
     if let Some(context) = detect_symbol_context(source, line, character) {
-        return query::hover(index, &context).unwrap_or(Value::Null);
+        return query::hover(index, &context, line).unwrap_or(Value::Null);
     }
     if let Some(context) = detect_route_action_context(uri, source, line, character) {
-        return query::route_action_hover(index, &context).unwrap_or(Value::Null);
+        return query::route_action_hover(index, &context, line).unwrap_or(Value::Null);
     }
 
     Value::Null

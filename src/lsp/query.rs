@@ -115,7 +115,8 @@ pub fn route_action_definitions(index: &ProjectIndex, context: &RouteActionConte
     }
 }
 
-pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
+pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Option<Value> {
+    let range = hover_range(line, context.start_character, context.end_character);
     match context.kind {
         SymbolKind::Config => {
             let item = index
@@ -123,10 +124,8 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": {
-                    "kind": "markdown",
-                    "value": config_hover(item),
-                }
+                "contents": { "kind": "markdown", "value": config_hover(item) },
+                "range": range,
             }))
         }
         SymbolKind::Route => {
@@ -135,10 +134,8 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": {
-                    "kind": "markdown",
-                    "value": route_hover(route),
-                }
+                "contents": { "kind": "markdown", "value": route_hover(route) },
+                "range": range,
             }))
         }
         SymbolKind::Env => {
@@ -147,10 +144,8 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": {
-                    "kind": "markdown",
-                    "value": env_hover(item),
-                }
+                "contents": { "kind": "markdown", "value": env_hover(item) },
+                "range": range,
             }))
         }
         SymbolKind::View => {
@@ -159,16 +154,19 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": {
-                    "kind": "markdown",
-                    "value": view_hover(view),
-                }
+                "contents": { "kind": "markdown", "value": view_hover(view) },
+                "range": range,
             }))
         }
     }
 }
 
-pub fn route_action_hover(index: &ProjectIndex, context: &RouteActionContext) -> Option<Value> {
+pub fn route_action_hover(
+    index: &ProjectIndex,
+    context: &RouteActionContext,
+    line: usize,
+) -> Option<Value> {
+    let range = hover_range(line, context.start_character, context.end_character);
     match context.kind {
         RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => {
             let controller = context.full_text.as_str();
@@ -177,10 +175,8 @@ pub fn route_action_hover(index: &ProjectIndex, context: &RouteActionContext) ->
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": {
-                    "kind": "markdown",
-                    "value": controller_hover(item),
-                }
+                "contents": { "kind": "markdown", "value": controller_hover(item) },
+                "range": range,
             }))
         }
         RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => {
@@ -190,10 +186,8 @@ pub fn route_action_hover(index: &ProjectIndex, context: &RouteActionContext) ->
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": {
-                    "kind": "markdown",
-                    "value": controller_method_hover(owner, method),
-                }
+                "contents": { "kind": "markdown", "value": controller_method_hover(owner, method) },
+                "range": range,
             }))
         }
     }
@@ -382,6 +376,13 @@ fn controller_method_completion(
             },
             "newText": new_text,
         }
+    })
+}
+
+fn hover_range(line: usize, start_character: usize, end_character: usize) -> Value {
+    json!({
+        "start": { "line": line, "character": start_character },
+        "end": { "line": line, "character": end_character },
     })
 }
 
