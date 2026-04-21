@@ -63,32 +63,76 @@ pub fn complete_route_actions(
     }
 }
 
-pub fn definitions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> {
+pub fn definitions(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
     match context.kind {
         SymbolKind::Config => index
             .config_definitions(&context.full_text)
             .into_iter()
-            .map(|item| location(&index.project_root, &item.file, item.line, item.column))
+            .map(|item| {
+                location_link(
+                    &index.project_root,
+                    &item.file,
+                    item.line,
+                    item.column,
+                    line,
+                    context.start_character,
+                    context.end_character,
+                )
+            })
             .collect(),
         SymbolKind::Route => index
             .route_definitions(&context.full_text)
             .into_iter()
-            .map(|route| location(&index.project_root, &route.file, route.line, route.column))
+            .map(|route| {
+                location_link(
+                    &index.project_root,
+                    &route.file,
+                    route.line,
+                    route.column,
+                    line,
+                    context.start_character,
+                    context.end_character,
+                )
+            })
             .collect(),
         SymbolKind::Env => index
             .env_definitions(&context.full_text)
             .into_iter()
-            .map(|item| location(&index.project_root, &item.file, item.line, item.column))
+            .map(|item| {
+                location_link(
+                    &index.project_root,
+                    &item.file,
+                    item.line,
+                    item.column,
+                    line,
+                    context.start_character,
+                    context.end_character,
+                )
+            })
             .collect(),
         SymbolKind::View => index
             .view_definitions(&context.full_text)
             .into_iter()
-            .map(|view| location(&index.project_root, &view.file, 1, 1))
+            .map(|view| {
+                location_link(
+                    &index.project_root,
+                    &view.file,
+                    1,
+                    1,
+                    line,
+                    context.start_character,
+                    context.end_character,
+                )
+            })
             .collect(),
     }
 }
 
-pub fn route_action_definitions(index: &ProjectIndex, context: &RouteActionContext) -> Vec<Value> {
+pub fn route_action_definitions(
+    index: &ProjectIndex,
+    context: &RouteActionContext,
+    line: usize,
+) -> Vec<Value> {
     match context.kind {
         RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => {
             let controller = context.full_text.as_str();
@@ -96,7 +140,17 @@ pub fn route_action_definitions(index: &ProjectIndex, context: &RouteActionConte
             index
                 .controller_definitions(controller)
                 .into_iter()
-                .map(|entry| location(&index.project_root, &entry.file, entry.line, 1))
+                .map(|entry| {
+                    location_link(
+                        &index.project_root,
+                        &entry.file,
+                        entry.line,
+                        1,
+                        line,
+                        context.start_character,
+                        context.end_character,
+                    )
+                })
                 .collect()
         }
         RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => {
@@ -108,7 +162,15 @@ pub fn route_action_definitions(index: &ProjectIndex, context: &RouteActionConte
                 .controller_method_definitions(controller, &context.full_text)
                 .into_iter()
                 .map(|(_, method)| {
-                    location(&index.project_root, &method.declared_in, method.line, 1)
+                    location_link(
+                        &index.project_root,
+                        &method.declared_in,
+                        method.line,
+                        1,
+                        line,
+                        context.start_character,
+                        context.end_character,
+                    )
                 })
                 .collect()
         }
@@ -799,19 +861,30 @@ fn helper_specs() -> &'static [HelperSpec] {
     ]
 }
 
-fn location(
+fn location_link(
     project_root: &std::path::Path,
     relative_file: &std::path::Path,
+    target_line: usize,
+    target_column: usize,
     line: usize,
-    column: usize,
+    start_character: usize,
+    end_character: usize,
 ) -> Value {
     let absolute = project_root.join(relative_file);
     json!({
-        "uri": path_to_file_uri(&absolute),
-        "range": {
-            "start": { "line": line.saturating_sub(1), "character": column.saturating_sub(1) },
-            "end": { "line": line.saturating_sub(1), "character": column.saturating_sub(1) },
-        }
+        "originSelectionRange": {
+            "start": { "line": line, "character": start_character },
+            "end": { "line": line, "character": end_character },
+        },
+        "targetUri": path_to_file_uri(&absolute),
+        "targetRange": {
+            "start": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
+            "end": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
+        },
+        "targetSelectionRange": {
+            "start": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
+            "end": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
+        },
     })
 }
 
@@ -833,17 +906,19 @@ fn path_to_file_uri(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
 
-    use crate::lsp::context::detect_route_action_context;
+    use crate::lsp::context::{detect_route_action_context, detect_symbol_context};
     use crate::lsp::index::ProjectIndex;
     use crate::lsp::overrides::FileOverrides;
     use crate::project;
 
     use super::{
-        complete_route_actions, route_action_code_actions, route_action_definitions,
+        complete_route_actions, definitions, hover, route_action_code_actions, route_action_definitions,
         route_diagnostics,
     };
 
@@ -852,6 +927,111 @@ mod tests {
             .join("laravel-example")
             .join("sandbox-app");
         project::from_root(root).expect("sandbox project should resolve")
+    }
+
+    fn unique_temp_project_root() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        std::env::temp_dir().join(format!("rust-php-lsp-query-{nonce}"))
+    }
+
+    fn write_file(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("parent directory should exist");
+        }
+        fs::write(path, contents).expect("fixture file should be written");
+    }
+
+    fn view_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(
+            &root,
+            "app/Http/Controllers/ViewController.php",
+            r#"<?php
+
+namespace App\Http\Controllers;
+
+class ViewController
+{
+    public function __invoke()
+    {
+        return view('admin.users.index');
+    }
+}
+"#,
+        );
+        write_file(
+            &root,
+            "resources/views/admin/users/index.blade.php",
+            "<div>{{ $title }}</div>\n",
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn symbol_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(
+            &root,
+            ".env",
+            "APP_NAME=Fixture App\nAPP_ENV=local\nAPP_DEBUG=true\n",
+        );
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(
+            &root,
+            "config/debug.php",
+            r#"<?php
+
+return [
+    'enabled' => env('APP_DEBUG', false),
+];
+"#,
+        );
+        write_file(
+            &root,
+            "routes/web.php",
+            r#"<?php
+
+use Illuminate\Support\Facades\Route;
+
+Route::get('/dashboard', function () {
+    return 'ok';
+})->name('dashboard.home');
+"#,
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
     }
 
     #[test]
@@ -889,21 +1069,33 @@ mod tests {
             detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
                 .expect("legacy method context");
 
-        let definitions = route_action_definitions(&index, &context);
+        let definitions = route_action_definitions(&index, &context, 0);
         let first = definitions.first().expect("definition expected");
 
         assert_eq!(
             first
-                .pointer("/range/start/line")
+                .pointer("/targetRange/start/line")
                 .and_then(|value| value.as_u64()),
             Some(13)
         );
         assert!(
             first
-                .pointer("/uri")
+                .pointer("/targetUri")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .ends_with("/app/Http/Controllers/WebsiteController.php")
+        );
+        assert_eq!(
+            first
+                .pointer("/originSelectionRange/start/character")
+                .and_then(|value| value.as_u64()),
+            Some(source.find("home").unwrap() as u64)
+        );
+        assert_eq!(
+            first
+                .pointer("/originSelectionRange/end/character")
+                .and_then(|value| value.as_u64()),
+            Some((source.find("home").unwrap() + "home".len()) as u64)
         );
     }
 
@@ -953,7 +1145,7 @@ mod tests {
             detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
                 .expect("route action context");
 
-        let definitions = route_action_definitions(&index, &context);
+        let definitions = route_action_definitions(&index, &context, 0);
 
         assert!(definitions.is_empty());
     }
@@ -974,5 +1166,103 @@ mod tests {
 
         let actions = route_action_code_actions(&index, &[diagnostic]);
         assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn view_hover_and_definition_use_exact_view_token_range() {
+        let project = view_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "return view('admin.users.index');";
+        let character = source.find("users").unwrap() + 2;
+        let context = detect_symbol_context(source, 0, character).expect("view context");
+
+        let hover = hover(&index, &context, 0).expect("hover expected");
+        assert_eq!(
+            hover
+                .pointer("/range/start/character")
+                .and_then(|value| value.as_u64()),
+            Some(source.find("admin.users.index").unwrap() as u64)
+        );
+        assert_eq!(
+            hover
+                .pointer("/range/end/character")
+                .and_then(|value| value.as_u64()),
+            Some((source.find("admin.users.index").unwrap() + "admin.users.index".len()) as u64)
+        );
+
+        let definitions = definitions(&index, &context, 0);
+        let first = definitions.first().expect("definition expected");
+        assert_eq!(
+            first
+                .pointer("/originSelectionRange/start/character")
+                .and_then(|value| value.as_u64()),
+            Some(source.find("admin.users.index").unwrap() as u64)
+        );
+        assert_eq!(
+            first
+                .pointer("/originSelectionRange/end/character")
+                .and_then(|value| value.as_u64()),
+            Some((source.find("admin.users.index").unwrap() + "admin.users.index".len()) as u64)
+        );
+        assert!(
+            first
+                .pointer("/targetUri")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/resources/views/admin/users/index.blade.php")
+        );
+    }
+
+    #[test]
+    fn symbol_definitions_use_exact_origin_selection_range() {
+        let project = symbol_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+
+        let cases = [
+            (
+                "return config('debug.enabled');",
+                "debug.enabled",
+                "config/debug.php",
+            ),
+            (
+                "return route('dashboard.home');",
+                "dashboard.home",
+                "routes/web.php",
+            ),
+            (
+                "return env('APP_DEBUG');",
+                "APP_DEBUG",
+                ".env",
+            ),
+        ];
+
+        for (source, token, target_suffix) in cases {
+            let character = source.find(token).unwrap() + 2;
+            let context = detect_symbol_context(source, 0, character).expect("symbol context");
+            let definitions = definitions(&index, &context, 0);
+            let first = definitions.first().expect("definition expected");
+
+            assert_eq!(
+                first
+                    .pointer("/originSelectionRange/start/character")
+                    .and_then(|value| value.as_u64()),
+                Some(source.find(token).unwrap() as u64)
+            );
+            assert_eq!(
+                first
+                    .pointer("/originSelectionRange/end/character")
+                    .and_then(|value| value.as_u64()),
+                Some((source.find(token).unwrap() + token.len()) as u64)
+            );
+            assert!(
+                first
+                    .pointer("/targetUri")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .ends_with(target_suffix)
+            );
+        }
     }
 }
