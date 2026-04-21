@@ -127,7 +127,10 @@ fn parse_chunk(
     middleware_index: &MiddlewareIndex,
     routes: &mut Vec<RouteEntry>,
 ) {
-    if !chunk.complete && !chunk.text.windows(5).any(|w| w == b"group") {
+    // Incomplete chunks are common while the user is typing. Parsing them is
+    // not safe, and incomplete `Route::group(...)` chunks can wedge the PHP
+    // parser because the closure body still contains unterminated strings.
+    if !chunk.complete || has_unsafe_string_adjacency(&chunk.text) {
         return;
     }
     let sanitized = sanitize_closure_bodies(&chunk.text);
@@ -723,7 +726,7 @@ impl ScanState {
 pub(crate) fn source_can_use_full_parse(source: &[u8]) -> bool {
     let mut state = ScanState::default();
     state.consume(source);
-    state.is_balanced()
+    state.is_balanced() && !has_unsafe_string_adjacency(source)
 }
 
 pub(crate) fn sanitize_closure_bodies(source: &[u8]) -> Vec<u8> {
@@ -948,4 +951,178 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 fn count_newlines(bytes: &[u8]) -> usize {
     bytes.iter().filter(|&&b| b == b'\n').count()
+}
+
+fn has_unsafe_string_adjacency(source: &[u8]) -> bool {
+    let mut state = ScanState::default();
+    let mut index = 0usize;
+
+    while index < source.len() {
+        let byte = source[index];
+        let next = source.get(index + 1).copied();
+
+        if state.in_line_comment {
+            if byte == b'\n' {
+                state.in_line_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if state.in_block_comment {
+            if byte == b'*' && next == Some(b'/') {
+                state.in_block_comment = false;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if state.in_single_quote {
+            if state.escape {
+                state.escape = false;
+            } else if byte == b'\\' {
+                state.escape = true;
+            } else if byte == b'\'' {
+                state.in_single_quote = false;
+                if next_non_whitespace_is_unsafe(source, index + 1) {
+                    return true;
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if state.in_double_quote {
+            if state.escape {
+                state.escape = false;
+            } else if byte == b'\\' {
+                state.escape = true;
+            } else if byte == b'"' {
+                state.in_double_quote = false;
+                if next_non_whitespace_is_unsafe(source, index + 1) {
+                    return true;
+                }
+            }
+            index += 1;
+            continue;
+        }
+
+        if byte == b'/' && next == Some(b'/') {
+            state.in_line_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'#' {
+            state.in_line_comment = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'/' && next == Some(b'*') {
+            state.in_block_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'\'' {
+            state.in_single_quote = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            state.in_double_quote = true;
+            index += 1;
+            continue;
+        }
+
+        index += 1;
+    }
+
+    false
+}
+
+fn next_non_whitespace_is_unsafe(source: &[u8], mut index: usize) -> bool {
+    while let Some(byte) = source.get(index).copied() {
+        if !byte.is_ascii_whitespace() {
+            return byte.is_ascii_alphanumeric()
+                || matches!(byte, b'_' | b'$' | b'\\' | b'\'' | b'"');
+        }
+        index += 1;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        MiddlewareIndex, RouteContext, collect_routes_from_source, has_unsafe_string_adjacency,
+        source_can_use_full_parse, split_route_chunks,
+    };
+    use crate::types::RouteRegistration;
+
+    #[test]
+    fn marks_group_with_unterminated_route_action_string_as_incomplete() {
+        let source = br#"<?php
+Route::group([], function () {
+    Route::get('/', [VirtualOfficeController::class, 'sdc'center'])->name('index');
+});
+"#;
+
+        let chunks = split_route_chunks(source, 1);
+
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].complete);
+    }
+
+    #[test]
+    fn skips_incomplete_group_chunks_without_hanging() {
+        let source = br#"<?php
+Route::view('/before', 'pages.before')->name('before');
+Route::group([], function () {
+    Route::get('/', [VirtualOfficeController::class, 'sdc'center'])->name('index');
+});
+Route::view('/after', 'pages.after')->name('after');
+"#;
+
+        let registration = RouteRegistration {
+            kind: "route-file".to_string(),
+            declared_in: PathBuf::from("routes/web.php"),
+            line: 1,
+            column: 1,
+            provider_class: None,
+        };
+        let mut routes = Vec::new();
+
+        collect_routes_from_source(
+            source,
+            Path::new("/tmp/project"),
+            Path::new("/tmp/project/routes/web.php"),
+            &registration,
+            1,
+            &RouteContext::default(),
+            &MiddlewareIndex {
+                aliases: Default::default(),
+                groups: Default::default(),
+                patterns: Default::default(),
+            },
+            &mut routes,
+        );
+
+        let names = routes
+            .iter()
+            .filter_map(|route| route.name.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["before"]);
+    }
+
+    #[test]
+    fn treats_adjacent_route_action_strings_as_unsafe_for_parser_fallback() {
+        let source = br#"<?php
+Route::group([], function () {
+    Route::get('/', [VirtualOfficeController::class, 'indea''sasx'])->name('index');
+});
+"#;
+
+        assert!(has_unsafe_string_adjacency(source));
+        assert!(!source_can_use_full_parse(source));
+    }
 }
