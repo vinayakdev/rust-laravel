@@ -5,7 +5,7 @@ use super::context::{
     HelperContext, HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
 };
 use super::index::ProjectIndex;
-use crate::types::{ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry};
+use crate::types::{ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry, ViewEntry};
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
     match context.kind {
@@ -23,6 +23,11 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
             .env_matches(&context.prefix)
             .into_iter()
             .map(|item| env_completion(item, context, line))
+            .collect(),
+        SymbolKind::View => index
+            .view_matches(&context.prefix)
+            .into_iter()
+            .map(|view| view_completion(view, context, line))
             .collect(),
     }
 }
@@ -74,6 +79,11 @@ pub fn definitions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> 
             .env_definitions(&context.full_text)
             .into_iter()
             .map(|item| location(&index.project_root, &item.file, item.line, item.column))
+            .collect(),
+        SymbolKind::View => index
+            .view_definitions(&context.full_text)
+            .into_iter()
+            .map(|view| location(&index.project_root, &view.file, 1, 1))
             .collect(),
     }
 }
@@ -140,6 +150,18 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
                 "contents": {
                     "kind": "markdown",
                     "value": env_hover(item),
+                }
+            }))
+        }
+        SymbolKind::View => {
+            let view = index
+                .view_definitions(&context.full_text)
+                .into_iter()
+                .next()?;
+            Some(json!({
+                "contents": {
+                    "kind": "markdown",
+                    "value": view_hover(view),
                 }
             }))
         }
@@ -371,6 +393,42 @@ fn replacement_edit(context: &SymbolContext, line: usize, new_text: &str) -> Val
         },
         "newText": new_text,
     })
+}
+
+fn view_completion(view: &ViewEntry, context: &SymbolContext, line: usize) -> Value {
+    json!({
+        "label": view.name,
+        "kind": 17,
+        "detail": view.file.display().to_string(),
+        "documentation": {
+            "kind": "markdown",
+            "value": view_hover(view),
+        },
+        "textEdit": replacement_edit(context, line, &view.name),
+    })
+}
+
+fn view_hover(view: &ViewEntry) -> String {
+    let mut lines = vec![
+        format!("`{}`", view.name),
+        format!("- kind: `{}`", view.kind),
+        format!("- file: `{}`", view.file.display()),
+    ];
+
+    if !view.usages.is_empty() {
+        lines.push(format!("- usages: `{}`", view.usages.len()));
+    }
+    if !view.props.is_empty() {
+        let prop_names = view
+            .props
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("- props: `{prop_names}`"));
+    }
+
+    lines.join("\n")
 }
 
 fn env_hover(item: &EnvItem) -> String {

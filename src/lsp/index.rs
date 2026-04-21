@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::analyzers::{configs, controllers, routes};
+use crate::analyzers::{configs, controllers, routes, views};
 use crate::php::env::load_env_entries_with;
 use crate::project::LaravelProject;
 use crate::types::{
     ConfigItem, ConfigReport, ControllerEntry, ControllerMethodEntry, ControllerReport, EnvItem,
-    RouteEntry, RouteReport,
+    RouteEntry, RouteReport, ViewEntry, ViewReport,
 };
 
 use super::overrides::FileOverrides;
@@ -17,9 +17,11 @@ pub struct ProjectIndex {
     controller_report: ControllerReport,
     route_report: RouteReport,
     env_items: Vec<EnvItem>,
+    view_report: ViewReport,
     config_by_key: BTreeMap<String, Vec<usize>>,
     route_by_name: BTreeMap<String, Vec<usize>>,
     env_by_key: BTreeMap<String, Vec<usize>>,
+    view_by_name: BTreeMap<String, Vec<usize>>,
 }
 
 impl ProjectIndex {
@@ -31,9 +33,22 @@ impl ProjectIndex {
         let controller_report = controllers::analyze_with_overrides(project, overrides)?;
         let route_report = routes::analyze_with_overrides(project, overrides)?;
         let env_items = load_env_entries_with(&project.root, |path| overrides.get_string(path))?;
+        let view_report = views::analyze(project).unwrap_or_else(|_| ViewReport {
+            project_name: project.name.clone(),
+            project_root: project.root.clone(),
+            view_count: 0,
+            blade_component_count: 0,
+            livewire_component_count: 0,
+            missing_view_count: 0,
+            views: Vec::new(),
+            blade_components: Vec::new(),
+            livewire_components: Vec::new(),
+            missing_views: Vec::new(),
+        });
         let mut config_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut route_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut env_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut view_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
 
         for (index, item) in config_report.items.iter().enumerate() {
             config_by_key
@@ -52,15 +67,21 @@ impl ProjectIndex {
             env_by_key.entry(item.key.clone()).or_default().push(index);
         }
 
+        for (index, view) in view_report.views.iter().enumerate() {
+            view_by_name.entry(view.name.clone()).or_default().push(index);
+        }
+
         Ok(Self {
             project_root: project.root.clone(),
             config_report,
             controller_report,
             route_report,
             env_items,
+            view_report,
             config_by_key,
             route_by_name,
             env_by_key,
+            view_by_name,
         })
     }
 
@@ -181,6 +202,30 @@ impl ProjectIndex {
                     .iter()
                     .filter(move |item| item.name == method)
                     .map(move |item| (controller, item))
+            })
+            .collect()
+    }
+
+    pub fn view_matches<'a>(&'a self, prefix: &str) -> Vec<&'a ViewEntry> {
+        self.view_by_name
+            .iter()
+            .filter(|(key, _)| key.starts_with(prefix))
+            .flat_map(|(_, indices)| {
+                indices
+                    .iter()
+                    .map(|index| &self.view_report.views[*index])
+            })
+            .collect()
+    }
+
+    pub fn view_definitions<'a>(&'a self, name: &str) -> Vec<&'a ViewEntry> {
+        self.view_by_name
+            .get(name)
+            .into_iter()
+            .flat_map(|indices| {
+                indices
+                    .iter()
+                    .map(|index| &self.view_report.views[*index])
             })
             .collect()
     }

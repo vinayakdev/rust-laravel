@@ -3,6 +3,7 @@ pub enum SymbolKind {
     Config,
     Route,
     Env,
+    View,
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +103,13 @@ fn detect_kind(before: &str) -> Option<SymbolKind> {
 
     if ["env("].iter().any(|needle| compact.ends_with(needle)) {
         return Some(SymbolKind::Env);
+    }
+
+    if ["view(", "View::make(", "view()->make("]
+        .iter()
+        .any(|needle| compact.ends_with(needle))
+    {
+        return Some(SymbolKind::View);
     }
 
     None
