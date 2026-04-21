@@ -1,12 +1,12 @@
-mod analyzers;
+pub mod analyzers;
 mod benchmark;
 mod cli;
 mod debug;
-mod lsp;
+pub mod lsp;
 mod output;
 mod php;
-mod project;
-mod types;
+pub mod project;
+pub mod types;
 
 use cli::Command;
 
@@ -38,6 +38,11 @@ pub fn run() -> Result<(), String> {
             let project = project::resolve(options.project.as_deref())?;
             let report = analyzers::configs::analyze(&project)?;
             output::print_config_sources(&report, options.json)?;
+        }
+        Command::ControllerList => {
+            let project = project::resolve(options.project.as_deref())?;
+            let report = analyzers::controllers::analyze(&project)?;
+            output::print_controllers(&report, options.json)?;
         }
         Command::ProviderList => {
             let project = project::resolve(options.project.as_deref())?;

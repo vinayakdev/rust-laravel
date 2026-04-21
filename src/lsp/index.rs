@@ -1,16 +1,20 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::analyzers::{configs, routes};
+use crate::analyzers::{configs, controllers, routes};
 use crate::php::env::load_env_entries_with;
 use crate::project::LaravelProject;
-use crate::types::{ConfigItem, ConfigReport, EnvItem, RouteEntry, RouteReport};
+use crate::types::{
+    ConfigItem, ConfigReport, ControllerEntry, ControllerMethodEntry, ControllerReport, EnvItem,
+    RouteEntry, RouteReport,
+};
 
 use super::overrides::FileOverrides;
 
 pub struct ProjectIndex {
     pub project_root: PathBuf,
     config_report: ConfigReport,
+    controller_report: ControllerReport,
     route_report: RouteReport,
     env_items: Vec<EnvItem>,
     config_by_key: BTreeMap<String, Vec<usize>>,
@@ -24,6 +28,7 @@ impl ProjectIndex {
         overrides: &FileOverrides,
     ) -> Result<Self, String> {
         let config_report = configs::analyze_with_overrides(project, overrides)?;
+        let controller_report = controllers::analyze_with_overrides(project, overrides)?;
         let route_report = routes::analyze_with_overrides(project, overrides)?;
         let env_items = load_env_entries_with(&project.root, |path| overrides.get_string(path))?;
         let mut config_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -50,6 +55,7 @@ impl ProjectIndex {
         Ok(Self {
             project_root: project.root.clone(),
             config_report,
+            controller_report,
             route_report,
             env_items,
             config_by_key,
@@ -121,4 +127,101 @@ impl ProjectIndex {
             .flat_map(|indices| indices.iter().map(|index| &self.env_items[*index]))
             .collect()
     }
+
+    pub fn controller_matches<'a>(&'a self, prefix: &str) -> Vec<&'a ControllerEntry> {
+        self.controller_report
+            .controllers
+            .iter()
+            .filter(|controller| {
+                controller.class_name.starts_with(prefix)
+                    || controller.fqn.starts_with(prefix)
+                    || controller
+                        .fqn
+                        .rsplit('\\')
+                        .next()
+                        .unwrap_or(controller.fqn.as_str())
+                        .starts_with(prefix)
+            })
+            .collect()
+    }
+
+    pub fn controller_definitions<'a>(&'a self, controller: &str) -> Vec<&'a ControllerEntry> {
+        controller_candidates(&self.controller_report, controller)
+    }
+
+    pub fn controller_methods<'a>(
+        &'a self,
+        controller: &str,
+        prefix: &str,
+    ) -> Vec<(&'a ControllerEntry, &'a ControllerMethodEntry)> {
+        controller_candidates(&self.controller_report, controller)
+            .into_iter()
+            .flat_map(|controller| {
+                controller
+                    .methods
+                    .iter()
+                    .filter(move |method| {
+                        method.accessible_from_route && method.name.starts_with(prefix)
+                    })
+                    .map(move |method| (controller, method))
+            })
+            .collect()
+    }
+
+    pub fn controller_method_definitions<'a>(
+        &'a self,
+        controller: &str,
+        method: &str,
+    ) -> Vec<(&'a ControllerEntry, &'a ControllerMethodEntry)> {
+        controller_candidates(&self.controller_report, controller)
+            .into_iter()
+            .flat_map(|controller| {
+                controller
+                    .methods
+                    .iter()
+                    .filter(move |item| item.name == method)
+                    .map(move |item| (controller, item))
+            })
+            .collect()
+    }
+
+    pub fn routes_for_file<'a>(&'a self, file: &std::path::Path) -> Vec<&'a RouteEntry> {
+        self.route_report
+            .routes
+            .iter()
+            .filter(|route| route.file == file)
+            .collect()
+    }
+}
+
+fn controller_candidates<'a>(
+    report: &'a ControllerReport,
+    controller: &str,
+) -> Vec<&'a ControllerEntry> {
+    let normalized = controller.trim_start_matches('\\');
+    let short_name = normalized.rsplit('\\').next().unwrap_or(normalized);
+
+    let exact_fqn = report
+        .controllers
+        .iter()
+        .filter(|entry| entry.fqn == normalized)
+        .collect::<Vec<_>>();
+    if !exact_fqn.is_empty() {
+        return exact_fqn;
+    }
+
+    let exact_short = report
+        .controllers
+        .iter()
+        .filter(|entry| entry.class_name == short_name)
+        .collect::<Vec<_>>();
+    if !exact_short.is_empty() {
+        return exact_short;
+    }
+
+    report
+        .controllers
+        .iter()
+        .filter(|entry| entry.fqn.ends_with(&format!("\\{normalized}")))
+        .collect()
 }

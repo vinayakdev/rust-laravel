@@ -485,6 +485,7 @@ fn expand_resource_routes(
                 ),
                 middleware_index,
             ),
+            controller_target: None,
             registration: registration.clone(),
         })
         .collect()

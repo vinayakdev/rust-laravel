@@ -1,8 +1,11 @@
 use serde_json::{Value, json};
+use std::path::Path;
 
-use super::context::{HelperContext, HelperStyle, SymbolContext, SymbolKind};
+use super::context::{
+    HelperContext, HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
+};
 use super::index::ProjectIndex;
-use crate::types::{ConfigItem, EnvItem, RouteEntry};
+use crate::types::{ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry};
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
     match context.kind {
@@ -32,6 +35,29 @@ pub fn helper_snippets(context: &HelperContext, line: usize) -> Vec<Value> {
         .collect()
 }
 
+pub fn complete_route_actions(
+    index: &ProjectIndex,
+    context: &RouteActionContext,
+    line: usize,
+) -> Vec<Value> {
+    match context.kind {
+        RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => index
+            .controller_matches(&context.prefix)
+            .into_iter()
+            .map(|controller| controller_completion(controller, context, line))
+            .collect(),
+        RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => context
+            .controller
+            .as_deref()
+            .into_iter()
+            .flat_map(|controller| index.controller_methods(controller, &context.prefix))
+            .map(|(controller, method)| {
+                controller_method_completion(controller, method, context, line)
+            })
+            .collect(),
+    }
+}
+
 pub fn definitions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> {
     match context.kind {
         SymbolKind::Config => index
@@ -49,6 +75,33 @@ pub fn definitions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> 
             .into_iter()
             .map(|item| location(&index.project_root, &item.file, item.line, item.column))
             .collect(),
+    }
+}
+
+pub fn route_action_definitions(index: &ProjectIndex, context: &RouteActionContext) -> Vec<Value> {
+    match context.kind {
+        RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => {
+            let controller = context.full_text.as_str();
+
+            index
+                .controller_definitions(controller)
+                .into_iter()
+                .map(|entry| location(&index.project_root, &entry.file, entry.line, 1))
+                .collect()
+        }
+        RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => {
+            let Some(controller) = context.controller.as_deref() else {
+                return Vec::new();
+            };
+
+            index
+                .controller_method_definitions(controller, &context.full_text)
+                .into_iter()
+                .map(|(_, method)| {
+                    location(&index.project_root, &method.declared_in, method.line, 1)
+                })
+                .collect()
+        }
     }
 }
 
@@ -91,6 +144,95 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
             }))
         }
     }
+}
+
+pub fn route_action_hover(index: &ProjectIndex, context: &RouteActionContext) -> Option<Value> {
+    match context.kind {
+        RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => {
+            let controller = context.full_text.as_str();
+            let item = index
+                .controller_definitions(controller)
+                .into_iter()
+                .next()?;
+            Some(json!({
+                "contents": {
+                    "kind": "markdown",
+                    "value": controller_hover(item),
+                }
+            }))
+        }
+        RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => {
+            let controller = context.controller.as_deref()?;
+            let (owner, method) = index
+                .controller_method_definitions(controller, &context.full_text)
+                .into_iter()
+                .next()?;
+            Some(json!({
+                "contents": {
+                    "kind": "markdown",
+                    "value": controller_method_hover(owner, method),
+                }
+            }))
+        }
+    }
+}
+
+pub fn route_diagnostics(index: &ProjectIndex, relative_file: &Path, source: &str) -> Vec<Value> {
+    index
+        .routes_for_file(relative_file)
+        .into_iter()
+        .filter_map(|route| {
+            let target = route.controller_target.as_ref()?;
+            if target.status == "ok" {
+                return None;
+            }
+
+            let severity = match target.status.as_str() {
+                "missing-method" | "missing-controller" | "ambiguous-controller" => 1,
+                _ => 2,
+            };
+            let line_index = route.line.saturating_sub(1);
+            let end_character = source
+                .lines()
+                .nth(line_index)
+                .map(|line| line.chars().count())
+                .unwrap_or(1)
+                .max(1);
+
+            Some(json!({
+                "range": {
+                    "start": { "line": line_index, "character": 0 },
+                    "end": { "line": line_index, "character": end_character },
+                },
+                "severity": severity,
+                "source": "rust-php",
+                "code": diagnostic_code(target.status.as_str()),
+                "message": diagnostic_message(route),
+                "data": {
+                    "controller": target.controller,
+                    "method": target.method,
+                    "status": target.status,
+                }
+            }))
+        })
+        .collect()
+}
+
+pub fn route_action_code_actions(index: &ProjectIndex, diagnostics: &[Value]) -> Vec<Value> {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            let code = diagnostic.get("code").and_then(Value::as_str)?;
+            if code != "rust-php/missing-controller-method" {
+                return None;
+            }
+            let controller = diagnostic
+                .pointer("/data/controller")
+                .and_then(Value::as_str)?;
+            let method = diagnostic.pointer("/data/method").and_then(Value::as_str)?;
+            create_missing_method_action(index, controller, method, diagnostic)
+        })
+        .collect()
 }
 
 fn config_completion(item: &ConfigItem, context: &SymbolContext, line: usize) -> Value {
@@ -166,6 +308,59 @@ fn helper_completion(helper: &HelperSpec, context: &HelperContext, line: usize) 
     }
 
     item
+}
+
+fn controller_completion(
+    controller: &ControllerEntry,
+    context: &RouteActionContext,
+    line: usize,
+) -> Value {
+    let insert = controller.class_name.as_str();
+    json!({
+        "label": controller.class_name,
+        "kind": 7,
+        "detail": controller.fqn,
+        "documentation": {
+            "kind": "markdown",
+            "value": controller_hover(controller),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": insert,
+        }
+    })
+}
+
+fn controller_method_completion(
+    controller: &ControllerEntry,
+    method: &ControllerMethodEntry,
+    context: &RouteActionContext,
+    line: usize,
+) -> Value {
+    let new_text = match context.kind {
+        RouteActionKind::LegacyMethodString => method.name.clone(),
+        _ => method.name.clone(),
+    };
+
+    json!({
+        "label": method.name,
+        "kind": 2,
+        "detail": format!("{} {}", controller.class_name, method.accessibility),
+        "documentation": {
+            "kind": "markdown",
+            "value": controller_method_hover(controller, method),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": new_text,
+        }
+    })
 }
 
 fn replacement_edit(context: &SymbolContext, line: usize, new_text: &str) -> Value {
@@ -264,6 +459,144 @@ fn route_hover(route: &RouteEntry) -> String {
     ));
 
     lines.join("\n")
+}
+
+fn controller_hover(controller: &ControllerEntry) -> String {
+    let mut lines = vec![
+        format!("`{}`", controller.fqn),
+        format!("- callable methods: `{}`", controller.callable_method_count),
+        format!("- total methods: `{}`", controller.method_count),
+        format!(
+            "- source: `{}`:{}",
+            controller.file.display(),
+            controller.line
+        ),
+    ];
+
+    if let Some(parent) = &controller.extends {
+        lines.push(format!("- extends: `{parent}`"));
+    }
+    if !controller.traits.is_empty() {
+        lines.push(format!("- traits: `{}`", controller.traits.join(", ")));
+    }
+
+    lines.join("\n")
+}
+
+fn controller_method_hover(controller: &ControllerEntry, method: &ControllerMethodEntry) -> String {
+    [
+        format!("`{}::{}`", controller.class_name, method.name),
+        format!("- controller: `{}`", controller.fqn),
+        format!("- route callable: `{}`", method.accessible_from_route),
+        format!("- visibility: `{}`", method.visibility),
+        format!("- source kind: `{}`", method.source_kind),
+        format!("- notes: `{}`", method.accessibility),
+        format!(
+            "- source: `{}`:{}",
+            method.declared_in.display(),
+            method.line
+        ),
+    ]
+    .join("\n")
+}
+
+fn diagnostic_code(status: &str) -> &'static str {
+    match status {
+        "missing-method" => "rust-php/missing-controller-method",
+        "missing-controller" => "rust-php/missing-controller",
+        "ambiguous-controller" => "rust-php/ambiguous-controller",
+        "not-route-callable" => "rust-php/not-route-callable",
+        _ => "rust-php/controller-route-problem",
+    }
+}
+
+fn diagnostic_message(route: &RouteEntry) -> String {
+    let Some(target) = route.controller_target.as_ref() else {
+        return "Route action could not be resolved.".to_string();
+    };
+
+    match target.status.as_str() {
+        "missing-method" => format!(
+            "Route action `{}` is missing method `{}` on `{}`.",
+            route.action.as_deref().unwrap_or_default(),
+            target.method,
+            target.controller
+        ),
+        "missing-controller" => format!(
+            "Route action `{}` references controller `{}` that could not be found.",
+            route.action.as_deref().unwrap_or_default(),
+            target.controller
+        ),
+        "ambiguous-controller" => format!(
+            "Route action `{}` matches multiple controllers named `{}`.",
+            route.action.as_deref().unwrap_or_default(),
+            target.controller
+        ),
+        "not-route-callable" => format!(
+            "Route action `{}` is not route-callable: {}",
+            route.action.as_deref().unwrap_or_default(),
+            target.notes.join("; ")
+        ),
+        _ => route
+            .action
+            .clone()
+            .unwrap_or_else(|| "Route action issue".to_string()),
+    }
+}
+
+fn create_missing_method_action(
+    index: &ProjectIndex,
+    controller: &str,
+    method: &str,
+    diagnostic: &Value,
+) -> Option<Value> {
+    if !is_valid_php_method_name(method) {
+        return None;
+    }
+
+    let entry = index
+        .controller_definitions(controller)
+        .into_iter()
+        .next()?;
+    let uri = path_to_file_uri(&index.project_root.join(&entry.file));
+    let insert_line = entry.class_end_line.saturating_sub(1);
+    let new_text = format!(
+        "\n    public function {method}()\n    {{\n        // TODO: implement {method}.\n    }}\n"
+    );
+    let mut changes = serde_json::Map::new();
+    changes.insert(
+        uri,
+        Value::Array(vec![json!({
+            "range": {
+                "start": { "line": insert_line, "character": 0 },
+                "end": { "line": insert_line, "character": 0 }
+            },
+            "newText": new_text
+        })]),
+    );
+
+    Some(json!({
+        "title": format!("Create controller method `{method}` in {}", entry.class_name),
+        "kind": "quickfix",
+        "diagnostics": [diagnostic.clone()],
+        "edit": {
+            "changes": changes
+        },
+        "isPreferred": true
+    }))
+}
+
+fn is_valid_php_method_name(method: &str) -> bool {
+    let mut chars = method.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 struct HelperSpec {
@@ -437,4 +770,150 @@ fn path_to_file_uri(path: &std::path::Path) -> String {
         .collect::<String>();
 
     format!("file://{encoded}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use serde_json::json;
+
+    use crate::lsp::context::detect_route_action_context;
+    use crate::lsp::index::ProjectIndex;
+    use crate::lsp::overrides::FileOverrides;
+    use crate::project;
+
+    use super::{
+        complete_route_actions, route_action_code_actions, route_action_definitions,
+        route_diagnostics,
+    };
+
+    fn sandbox_project() -> project::LaravelProject {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("laravel-example")
+            .join("sandbox-app");
+        project::from_root(root).expect("sandbox project should resolve")
+    }
+
+    #[test]
+    fn completes_only_route_callable_controller_methods() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "Route::get('/', [WebsiteController::class, '']);";
+        let character = source.find("''").unwrap() + 1;
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("route action context");
+
+        let items = complete_route_actions(&index, &context, 0);
+        let labels = items
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"home"));
+        assert!(labels.contains(&"team"));
+        assert!(labels.contains(&"publish"));
+        assert!(!labels.contains(&"sustainability"));
+        assert!(!labels.contains(&"docs"));
+    }
+
+    #[test]
+    fn resolves_legacy_controller_method_definition() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "Route::get('/', 'WebsiteController@home');";
+        let character = source.find("home").unwrap() + 3;
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("legacy method context");
+
+        let definitions = route_action_definitions(&index, &context);
+        let first = definitions.first().expect("definition expected");
+
+        assert_eq!(
+            first
+                .pointer("/range/start/line")
+                .and_then(|value| value.as_u64()),
+            Some(13)
+        );
+        assert!(
+            first
+                .pointer("/uri")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/app/Http/Controllers/WebsiteController.php")
+        );
+    }
+
+    #[test]
+    fn emits_missing_method_diagnostic_and_quick_fix() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("laravel-example")
+                .join("sandbox-app")
+                .join("routes")
+                .join("starter.php"),
+        )
+        .expect("starter route file should load");
+
+        let diagnostics = route_diagnostics(&index, Path::new("routes/starter.php"), &source);
+        let missing = diagnostics
+            .iter()
+            .find(|item| {
+                item.get("code").and_then(|value| value.as_str())
+                    == Some("rust-php/missing-controller-method")
+            })
+            .expect("missing method diagnostic should exist");
+
+        let actions = route_action_code_actions(&index, std::slice::from_ref(missing));
+        let action = actions.first().expect("quick fix should exist");
+
+        assert!(
+            action
+                .get("title")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .contains("Create controller method `missingLanding`")
+        );
+    }
+
+    #[test]
+    fn does_not_resolve_definition_for_missing_controller_method() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "Route::get('/', [WebsiteController::class, 'missingLanding']);";
+        let character = source.find("missingLanding").unwrap() + 3;
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("route action context");
+
+        let definitions = route_action_definitions(&index, &context);
+
+        assert!(definitions.is_empty());
+    }
+
+    #[test]
+    fn does_not_offer_quick_fix_for_invalid_php_method_name() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+
+        let diagnostic = json!({
+            "code": "rust-php/missing-controller-method",
+            "data": {
+                "controller": "App\\Http\\Controllers\\WebsiteController",
+                "method": "page.sustainability"
+            }
+        });
+
+        let actions = route_action_code_actions(&index, &[diagnostic]);
+        assert!(actions.is_empty());
+    }
 }

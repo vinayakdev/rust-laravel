@@ -38,6 +38,10 @@ pub(crate) fn render_text_report(
             let report = analyzers::configs::analyze(project)?;
             Ok(text::configs::render_config_source_table(&report))
         }
+        DebugCommand::ControllerList => {
+            let report = analyzers::controllers::analyze(project)?;
+            Ok(text::controllers::render_controller_report(&report))
+        }
         DebugCommand::ProviderList => {
             let report = analyzers::providers::analyze(project)?;
             Ok(text::providers::render_provider_table(&report))
@@ -87,6 +91,10 @@ pub(crate) fn render_json_report(
         }
         DebugCommand::ConfigSources => {
             let report = analyzers::configs::analyze(project)?;
+            json_payload(project, command, json!({ "report": report }))
+        }
+        DebugCommand::ControllerList => {
+            let report = analyzers::controllers::analyze(project)?;
             json_payload(project, command, json!({ "report": report }))
         }
         DebugCommand::ProviderList => {
