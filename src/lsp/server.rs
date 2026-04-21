@@ -221,9 +221,9 @@ fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
     };
 
     let definitions = if let Some(context) = detect_symbol_context(source, line, character) {
-        query::definitions(index, &context)
+        query::definitions(index, &context, line)
     } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
-        query::route_action_definitions(index, &context)
+        query::route_action_definitions(index, &context, line)
     } else {
         Vec::new()
     };
