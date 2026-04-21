@@ -5,7 +5,7 @@ mod parser;
 
 use collector::collect_registered_route_files;
 use context::{RouteContext, build_middleware_index};
-use parser::collect_routes_from_source;
+use parser::{collect_routes_from_source, reset_include_tracking};
 
 use crate::analyzers::middleware;
 use crate::lsp::overrides::FileOverrides;
@@ -23,6 +23,7 @@ pub fn analyze_with_overrides(
     project: &LaravelProject,
     overrides: &FileOverrides,
 ) -> Result<RouteReport, String> {
+    reset_include_tracking();
     let route_files = collect_registered_route_files(project)?;
     let middleware_index = build_middleware_index(&middleware::analyze(project)?);
     let mut routes = Vec::new();

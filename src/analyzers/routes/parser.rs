@@ -2,16 +2,27 @@ use bumpalo::Bump;
 use php_parser::ast::{Expr, ExprId, StmtId};
 use php_parser::lexer::Lexer;
 use php_parser::parser::Parser;
-use std::path::Path;
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use super::chain::{
     ChainOp, apply_modifier, build_route_entry, flatten_route_chain, join_uri, resource_routes,
     route_line, route_signature,
 };
 use super::context::{MiddlewareIndex, RouteContext};
-use crate::php::ast::{expr_name, expr_to_string, expr_to_string_list, strip_root};
+use crate::php::ast::{expr_name, expr_to_path, expr_to_string, expr_to_string_list, strip_root};
 use crate::php::walk::walk_stmts;
 use crate::types::{RouteEntry, RouteRegistration};
+
+thread_local! {
+    static VISITED_INCLUDES: RefCell<BTreeSet<PathBuf>> = RefCell::new(BTreeSet::new());
+}
+
+pub(crate) fn reset_include_tracking() {
+    VISITED_INCLUDES.with(|v| v.borrow_mut().clear());
+}
 
 pub(crate) struct RouteChunk {
     pub(crate) text: Vec<u8>,
@@ -162,6 +173,27 @@ pub(crate) fn analyze_expr(
     line_offset: usize,
     raw_chunk: Option<&[u8]>,
 ) {
+    if let Expr::Include { expr: path_expr, .. } = expr {
+        if let Some(included) = expr_to_path(path_expr, source, project_root, file) {
+            let is_new = VISITED_INCLUDES.with(|v| v.borrow_mut().insert(included.clone()));
+            if is_new {
+                if let Ok(included_source) = fs::read(&included) {
+                    collect_routes_from_source(
+                        &included_source,
+                        project_root,
+                        &included,
+                        registration,
+                        1,
+                        base_context,
+                        middleware_index,
+                        routes,
+                    );
+                }
+            }
+        }
+        return;
+    }
+
     let Some(ops) = flatten_route_chain(expr) else {
         return;
     };
