@@ -1,8 +1,8 @@
 use crate::analyzers;
 use crate::project::LaravelProject;
 use crate::types::{
-    ConfigReport, MiddlewareReport, MigrationReport, ModelReport, OutputMode, ProviderReport,
-    RouteReport, ViewReport,
+    ConfigReport, ControllerReport, MiddlewareReport, MigrationReport, ModelReport, OutputMode,
+    ProviderReport, RouteReport, ViewReport,
 };
 use serde::Serialize;
 use std::time::Instant;
@@ -50,6 +50,9 @@ fn benchmark_project(project: &LaravelProject) -> Result<BenchmarkReport, String
     })?;
     run_step("migrations", &mut artifacts, &mut steps, || {
         analyzers::migrations::analyze(project).map(Artifact::Migrations)
+    })?;
+    run_step("controllers", &mut artifacts, &mut steps, || {
+        analyzers::controllers::analyze(project).map(Artifact::Controllers)
     })?;
 
     let suite_end = ResourceSnapshot::capture()?;
@@ -234,6 +237,7 @@ enum Artifact {
     Views(ViewReport),
     Models(ModelReport),
     Migrations(MigrationReport),
+    Controllers(ControllerReport),
 }
 
 impl Artifact {
@@ -250,6 +254,7 @@ impl Artifact {
             }
             Self::Models(report) => report.model_count,
             Self::Migrations(report) => report.migration_count,
+            Self::Controllers(report) => report.controller_count,
         }
     }
 
@@ -262,6 +267,7 @@ impl Artifact {
             Self::Views(report) => json_size(report),
             Self::Models(report) => json_size(report),
             Self::Migrations(report) => json_size(report),
+            Self::Controllers(report) => json_size(report),
         }
     }
 }
