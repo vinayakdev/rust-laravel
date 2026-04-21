@@ -2,8 +2,8 @@
 
 import { Badge } from "@/components/ui/badge"
 import { DataSection } from "@/components/app/data-section"
-import { LocCell, TruncCell } from "@/components/app/cell"
-import type { Payload, RegistrationSource, ViewReport, ViewVariable } from "@/lib/types"
+import { LocCell, PlainCell, TruncCell } from "@/components/app/cell"
+import type { MissingViewReference, Payload, RegistrationSource, ViewReport, ViewVariable } from "@/lib/types"
 
 function VarBadges({ vars }: { vars: ViewVariable[] }) {
   if (!vars?.length) return <span className="text-muted-foreground text-xs">—</span>
@@ -23,6 +23,19 @@ function SrcCell({ source, root }: { source: RegistrationSource; root?: string }
     <div className="flex flex-col gap-0.5">
       <LocCell file={source.declared_in} line={source.line} col={source.column} root={root} />
       {source.provider_class && <TruncCell value={source.provider_class} maxW="max-w-[180px]" muted />}
+    </div>
+  )
+}
+
+function MissingUsageCell({ item, root }: { item: MissingViewReference; root?: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      {item.usages.map((usage, index) => (
+        <div key={index} className="flex flex-col gap-0.5">
+          <Badge variant="outline" className="w-fit h-4 rounded-sm text-[0.6rem]">{usage.kind}</Badge>
+          <LocCell file={usage.source.declared_in} line={usage.source.line} col={usage.source.column} root={root} />
+        </div>
+      ))}
     </div>
   )
 }
@@ -84,6 +97,19 @@ export function ViewsView({ payload }: { payload: Payload }) {
     <SrcCell source={c.source} root={root} />,
   ])
 
+  const missingRows = report.missing_views.map((v) => {
+    const vars = Array.from(
+      new Map(v.usages.flatMap((usage) => usage.variables.map((variable) => [variable.name, variable]))).values(),
+    )
+
+    return [
+      <TruncCell value={v.name} maxW="max-w-[200px]" size="text-[0.75rem]" />,
+      <PlainCell value={v.expected_file} maxW="max-w-[220px]" muted />,
+      <VarBadges vars={vars} />,
+      <MissingUsageCell item={v} root={root} />,
+    ]
+  })
+
   return (
     <div className="flex flex-col gap-4">
       <DataSection
@@ -121,6 +147,18 @@ export function ViewsView({ payload }: { payload: Payload }) {
           { key: "source",    label: "Declared In" },
         ]}
         rows={livewireRows}
+      />
+      <DataSection
+        title="Missing View References"
+        count={report.missing_view_count}
+        columns={[
+          { key: "name", label: "View Name" },
+          { key: "expected", label: "Expected File" },
+          { key: "vars", label: "Variables" },
+          { key: "source", label: "Referenced In" },
+        ]}
+        rows={missingRows}
+        note="Expected files are inferred paths only. Missing references stay non-clickable and do not expose file-hover affordances."
       />
     </div>
   )

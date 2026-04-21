@@ -52,6 +52,28 @@ export function TruncCell({
   )
 }
 
+export function PlainCell({
+  value,
+  maxW = "max-w-[220px]",
+  mono = true,
+  muted = false,
+  size = "text-[0.72rem]",
+}: TruncProps) {
+  return (
+    <span
+      className={[
+        "block truncate",
+        maxW,
+        size,
+        mono ? "font-mono" : "",
+        muted ? "text-muted-foreground" : "",
+      ].join(" ")}
+    >
+      {value}
+    </span>
+  )
+}
+
 /** loc = "file:line:col" — strips root prefix and shows full on hover. */
 export function LocCell({ file, line, col, root }: { file: string; line: number; col: number; root?: string }) {
   const rel  = relPath(file, root)

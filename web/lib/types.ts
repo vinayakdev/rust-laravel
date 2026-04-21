@@ -181,9 +181,23 @@ export type ViewReport = {
   view_count: number
   blade_component_count: number
   livewire_component_count: number
+  missing_view_count: number
   views: ViewEntry[]
   blade_components: BladeComponent[]
   livewire_components: LivewireComponent[]
+  missing_views: MissingViewReference[]
+}
+
+export type MissingViewReference = {
+  name: string
+  expected_file: string
+  usages: ViewUsage[]
+}
+
+export type ViewUsage = {
+  kind: string
+  source: RegistrationSource
+  variables: ViewVariable[]
 }
 
 export type ComparedRoute = {

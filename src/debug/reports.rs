@@ -224,6 +224,7 @@ fn is_debug_path_key(key: Option<&str>) -> bool {
                 | "source_file"
                 | "class_file"
                 | "view_file"
+                | "expected_file"
                 | "artisan_path"
         )
     )

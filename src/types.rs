@@ -197,9 +197,11 @@ pub struct ViewReport {
     pub view_count: usize,
     pub blade_component_count: usize,
     pub livewire_component_count: usize,
+    pub missing_view_count: usize,
     pub views: Vec<ViewEntry>,
     pub blade_components: Vec<BladeComponentEntry>,
     pub livewire_components: Vec<LivewireComponentEntry>,
+    pub missing_views: Vec<MissingViewEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -256,6 +258,13 @@ pub struct ViewUsage {
     pub kind: String,
     pub source: ViewSource,
     pub variables: Vec<ViewVariable>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MissingViewEntry {
+    pub name: String,
+    pub expected_file: PathBuf,
+    pub usages: Vec<ViewUsage>,
 }
 
 #[derive(Debug, Clone, Serialize)]
