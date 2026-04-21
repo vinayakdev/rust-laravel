@@ -54,7 +54,10 @@ pub fn detect_symbol_context(source: &str, line: usize, character: usize) -> Opt
     let inner_start = quote_start + quote_char.len_utf8();
     let inner_end = quote_end;
 
-    if cursor < inner_start || cursor > inner_end {
+    if cursor < inner_start
+        || cursor > inner_end
+        || (cursor == inner_end && inner_start != inner_end)
+    {
         return None;
     }
 
@@ -162,37 +165,38 @@ pub fn detect_route_action_context(
         return None;
     }
 
-    let line_text = source.lines().nth(line)?;
-    let cursor = character_to_byte_index(line_text, character)?;
+    let cursor = source_position_to_byte_index(source, line, character)?;
 
-    detect_route_action_string_context(line_text, cursor)
-        .or_else(|| detect_route_controller_identifier_context(line_text, cursor))
+    detect_route_action_string_context(source, cursor)
+        .or_else(|| detect_route_controller_identifier_context(source, cursor))
 }
 
-fn detect_route_action_string_context(
-    line_text: &str,
-    cursor: usize,
-) -> Option<RouteActionContext> {
-    let (quote_start, quote_char) = find_quote_start(line_text, cursor)?;
-    let quote_end = find_quote_end(line_text, quote_start + quote_char.len_utf8(), quote_char)?;
+fn detect_route_action_string_context(source: &str, cursor: usize) -> Option<RouteActionContext> {
+    let (quote_start, quote_char) = find_quote_start(source, cursor)?;
+    let quote_end = find_quote_end(source, quote_start + quote_char.len_utf8(), quote_char)?;
     let inner_start = quote_start + quote_char.len_utf8();
     let inner_end = quote_end;
 
-    if cursor < inner_start || cursor > inner_end {
+    if cursor < inner_start
+        || cursor > inner_end
+        || (cursor == inner_end && inner_start != inner_end)
+    {
         return None;
     }
 
-    let before = &line_text[..quote_start];
-    let full_text = line_text[inner_start..inner_end].to_string();
+    let before = &source[..quote_start];
+    let full_text = source[inner_start..inner_end].to_string();
+    let start_character = byte_index_to_character_in_line(source, inner_start);
+    let end_character = byte_index_to_character_in_line(source, inner_end);
 
     if let Some(controller) = array_controller_before(before) {
         return Some(RouteActionContext {
             kind: RouteActionKind::ControllerMethodArray,
             controller: Some(controller),
-            prefix: line_text[inner_start..cursor.min(inner_end)].to_string(),
+            prefix: source[inner_start..cursor.min(inner_end)].to_string(),
             full_text,
-            start_character: line_text[..inner_start].chars().count(),
-            end_character: line_text[..inner_end].chars().count(),
+            start_character,
+            end_character,
         });
     }
 
@@ -206,52 +210,52 @@ fn detect_route_action_string_context(
             return Some(RouteActionContext {
                 kind: RouteActionKind::LegacyMethodString,
                 controller: Some(full_text[..at_index].to_string()),
-                prefix: line_text[method_start..cursor.min(inner_end)].to_string(),
+                prefix: source[method_start..cursor.min(inner_end)].to_string(),
                 full_text: full_text[method_start - inner_start..].to_string(),
-                start_character: line_text[..method_start].chars().count(),
-                end_character: line_text[..inner_end].chars().count(),
+                start_character: byte_index_to_character_in_line(source, method_start),
+                end_character,
             });
         }
 
         return Some(RouteActionContext {
             kind: RouteActionKind::LegacyControllerString,
             controller: None,
-            prefix: line_text[inner_start..cursor].to_string(),
+            prefix: source[inner_start..cursor].to_string(),
             full_text: full_text[..at_index].to_string(),
-            start_character: line_text[..inner_start].chars().count(),
-            end_character: line_text[..inner_start + at_index].chars().count(),
+            start_character,
+            end_character: byte_index_to_character_in_line(source, inner_start + at_index),
         });
     }
 
     Some(RouteActionContext {
         kind: RouteActionKind::LegacyControllerString,
         controller: None,
-        prefix: line_text[inner_start..cursor.min(inner_end)].to_string(),
+        prefix: source[inner_start..cursor.min(inner_end)].to_string(),
         full_text,
-        start_character: line_text[..inner_start].chars().count(),
-        end_character: line_text[..inner_end].chars().count(),
+        start_character,
+        end_character,
     })
 }
 
 fn detect_route_controller_identifier_context(
-    line_text: &str,
+    source: &str,
     cursor: usize,
 ) -> Option<RouteActionContext> {
-    let (start, end) = find_controller_identifier_bounds(line_text, cursor)?;
-    if !line_text[end..].starts_with("::class") {
+    let (start, end) = find_controller_identifier_bounds(source, cursor)?;
+    if !source[end..].starts_with("::class") {
         return None;
     }
-    if !looks_like_controller_array_slot(line_text, start) {
+    if !looks_like_controller_array_slot(source, start) {
         return None;
     }
 
     Some(RouteActionContext {
         kind: RouteActionKind::ControllerClass,
         controller: None,
-        prefix: line_text[start..cursor.min(end)].to_string(),
-        full_text: line_text[start..end].to_string(),
-        start_character: line_text[..start].chars().count(),
-        end_character: line_text[..end].chars().count(),
+        prefix: source[start..cursor.min(end)].to_string(),
+        full_text: source[start..end].to_string(),
+        start_character: byte_index_to_character_in_line(source, start),
+        end_character: byte_index_to_character_in_line(source, end),
     })
 }
 
@@ -298,6 +302,9 @@ fn looks_like_controller_array_slot(line_text: &str, start: usize) -> bool {
 
 fn array_controller_before(before: &str) -> Option<String> {
     let open_bracket = before.rfind('[')?;
+    if before[open_bracket + 1..].contains(']') {
+        return None;
+    }
     let segment = &before[open_bracket + 1..];
     let class_index = segment.rfind("::class")?;
     let candidate = segment[..class_index].split(',').next()?.trim();
@@ -336,6 +343,26 @@ fn route_argument_index(before: &str) -> usize {
     }
 
     commas
+}
+
+fn source_position_to_byte_index(source: &str, line: usize, character: usize) -> Option<usize> {
+    let line_start = source
+        .split_inclusive('\n')
+        .take(line)
+        .map(str::len)
+        .sum::<usize>();
+    let line_text = source.lines().nth(line)?;
+    let character_offset = character_to_byte_index(line_text, character)?;
+    Some(line_start + character_offset)
+}
+
+fn byte_index_to_character_in_line(source: &str, index: usize) -> usize {
+    source[..index]
+        .rsplit('\n')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .count()
 }
 
 fn character_to_byte_index(text: &str, character: usize) -> Option<usize> {
@@ -483,27 +510,27 @@ mod tests {
     #[test]
     fn detects_array_controller_method_context() {
         let source = "Route::get('/', [WebsiteController::class, 'ho']);";
-        let character = source.find("ho").unwrap() + 2;
+        let character = source.find("ho").unwrap() + 1;
         let context =
             detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
                 .expect("route action context");
 
         assert_eq!(context.kind, RouteActionKind::ControllerMethodArray);
         assert_eq!(context.controller.as_deref(), Some("WebsiteController"));
-        assert_eq!(context.prefix, "ho");
+        assert_eq!(context.prefix, "h");
     }
 
     #[test]
     fn detects_legacy_controller_method_context() {
         let source = "Route::get('/', 'WebsiteController@ho');";
-        let character = source.find("ho").unwrap() + 2;
+        let character = source.find("ho").unwrap() + 1;
         let context =
             detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
                 .expect("legacy route action context");
 
         assert_eq!(context.kind, RouteActionKind::LegacyMethodString);
         assert_eq!(context.controller.as_deref(), Some("WebsiteController"));
-        assert_eq!(context.prefix, "ho");
+        assert_eq!(context.prefix, "h");
         assert_eq!(context.full_text, "ho");
     }
 
@@ -517,5 +544,44 @@ mod tests {
 
         assert_eq!(context.kind, RouteActionKind::ControllerClass);
         assert_eq!(context.prefix, "Websit");
+    }
+
+    #[test]
+    fn does_not_treat_route_name_string_as_controller_method_context() {
+        let source =
+            "Route::get('/{city}', [VirtualOfficeController::class, 'center'])->name('center');";
+        let character = source.rfind("center").unwrap() + 2;
+
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character);
+
+        assert!(context.is_none());
+    }
+
+    #[test]
+    fn does_not_treat_closing_quote_as_controller_method_context() {
+        let source = "Route::get('/', [VirtualOfficeController::class, 'center'])->name('center');";
+        let character = source.find("'center']").unwrap();
+
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character);
+
+        assert!(context.is_none());
+    }
+
+    #[test]
+    fn detects_multiline_array_controller_method_context() {
+        let source = "Route::get('/{city}/{locality}/{centerSlug}', [\n    SitemapController::class,\n    'ssdssdsddsdme3dds',\n])->name('center');";
+        let line = 2;
+        let character = 7;
+
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, line, character)
+                .expect("multiline route action context");
+
+        assert_eq!(context.kind, RouteActionKind::ControllerMethodArray);
+        assert_eq!(context.controller.as_deref(), Some("SitemapController"));
+        assert_eq!(context.full_text, "ssdssdsddsdme3dds");
+        assert_eq!(context.prefix, "ss");
     }
 }

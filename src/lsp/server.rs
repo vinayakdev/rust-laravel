@@ -1,6 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use serde_json::{Value, json};
 
@@ -35,6 +37,7 @@ struct ServerState {
     project: Option<project::LaravelProject>,
     index: Option<ProjectIndex>,
     documents: HashMap<String, String>,
+    dirty_documents: HashSet<String>,
     shutdown_requested: bool,
     exiting: bool,
 }
@@ -65,6 +68,8 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                     params.pointer("/textDocument/text").and_then(Value::as_str),
                 ) {
                     state.documents.insert(uri.to_string(), text.to_string());
+                    state.dirty_documents.remove(uri);
+                    log_lsp_event(format!("didOpen uri={uri} bytes={}", text.len()));
                     reindex_for_uri(state, uri);
                 }
             }
@@ -78,7 +83,11 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                         .and_then(Value::as_str)
                     {
                         state.documents.insert(uri.to_string(), text.to_string());
-                        reindex_for_uri(state, uri);
+                        state.dirty_documents.insert(uri.to_string());
+                        log_lsp_event(format!(
+                            "didChange uri={uri} bytes={} dirty=true reindex=deferred",
+                            text.len()
+                        ));
                     }
                 }
             }
@@ -89,6 +98,8 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                 .pointer("/params/textDocument/uri")
                 .and_then(Value::as_str)
             {
+                state.dirty_documents.remove(uri);
+                log_lsp_event(format!("didSave uri={uri} dirty=false"));
                 reindex_for_uri(state, uri);
             }
             Ok(None)
@@ -99,6 +110,8 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                 .and_then(Value::as_str)
             {
                 state.documents.remove(uri);
+                state.dirty_documents.remove(uri);
+                log_lsp_event(format!("didClose uri={uri}"));
                 reindex_for_uri(state, uri);
             }
             Ok(None)
@@ -148,6 +161,14 @@ fn initialize(state: &mut ServerState, params: Value) {
 
     state.project_root = root_path.clone();
     state.project = root_path.and_then(|root| project::from_root(root).ok());
+    log_lsp_event(format!(
+        "initialize root={}",
+        state
+            .project
+            .as_ref()
+            .map(|project| project.root.display().to_string())
+            .unwrap_or_else(|| "<unresolved>".to_string())
+    ));
     state.index = rebuild_index(state).ok();
 }
 
@@ -160,12 +181,28 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
     };
 
     let items = if let Some(context) = detect_symbol_context(source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=symbol prefix={:?}",
+            line, character, context.prefix
+        ));
         query::complete(index, &context, line)
     } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=route-action kind={:?} controller={:?} prefix={:?}",
+            line, character, context.kind, context.controller, context.prefix
+        ));
         query::complete_route_actions(index, &context, line)
     } else if let Some(context) = detect_helper_context(uri, source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=helper prefix={:?}",
+            line, character, context.prefix
+        ));
         query::helper_snippets(&context, line)
     } else {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=none",
+            line, character
+        ));
         Vec::new()
     };
 
@@ -223,6 +260,10 @@ fn diagnostic_result(state: &ServerState, params: Option<&Value>) -> Value {
     let Some(uri) = params.pointer("/textDocument/uri").and_then(Value::as_str) else {
         return json!({ "kind": "full", "items": [] });
     };
+    if state.dirty_documents.contains(uri) {
+        log_lsp_event(format!("diagnostics uri={uri} skipped=dirty items=0"));
+        return json!({ "kind": "full", "items": [] });
+    }
     let Some(index) = &state.index else {
         return json!({ "kind": "full", "items": [] });
     };
@@ -236,9 +277,14 @@ fn diagnostic_result(state: &ServerState, params: Option<&Value>) -> Value {
         return json!({ "kind": "full", "items": [] });
     };
 
+    let items = query::route_diagnostics(index, relative, source);
+    log_lsp_event(format!(
+        "diagnostics uri={uri} skipped=false items={}",
+        items.len()
+    ));
     json!({
         "kind": "full",
-        "items": query::route_diagnostics(index, relative, source),
+        "items": items,
     })
 }
 
@@ -405,9 +451,105 @@ fn collect_overrides(state: &ServerState, root: &Path) -> FileOverrides {
 }
 
 fn reindex_for_uri(state: &mut ServerState, _uri: &str) {
+    let start = Instant::now();
+    log_lsp_event(format!("reindex start uri={_uri}"));
+
     match rebuild_index(state) {
-        Ok(index) => state.index = Some(index),
-        Err(_) => {}
+        Ok(index) => {
+            let elapsed = start.elapsed().as_millis();
+            log_lsp_event(format!("reindex ok uri={_uri} elapsed_ms={elapsed}"));
+            state.index = Some(index);
+        }
+        Err(error) => {
+            let elapsed = start.elapsed().as_millis();
+            log_lsp_event(format!(
+                "reindex error uri={_uri} elapsed_ms={elapsed} error={error}"
+            ));
+        }
+    }
+}
+
+fn log_lsp_event(message: String) {
+    let path = std::env::var_os("RUST_PHP_LSP_LOG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/rust-php-lsp.log"));
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(file, "[rust-php:lsp] {message}");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+    use std::path::Path;
+
+    use serde_json::json;
+
+    use crate::lsp::index::ProjectIndex;
+    use crate::lsp::overrides::FileOverrides;
+    use crate::project;
+
+    use super::{ServerState, diagnostic_result};
+
+    fn sandbox_project() -> project::LaravelProject {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("laravel-example")
+            .join("sandbox-app");
+        project::from_root(root).expect("sandbox project should resolve")
+    }
+
+    #[test]
+    fn skips_diagnostics_for_dirty_documents() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let uri = format!(
+            "file://{}",
+            project.root.join("routes/starter.php").display()
+        );
+        let source = std::fs::read_to_string(project.root.join("routes/starter.php"))
+            .expect("starter route file should load");
+
+        let mut state = ServerState {
+            project_root: Some(project.root.clone()),
+            project: Some(project),
+            index: Some(index),
+            documents: HashMap::from([(uri.clone(), source)]),
+            dirty_documents: HashSet::from([uri.clone()]),
+            shutdown_requested: false,
+            exiting: false,
+        };
+
+        let result = diagnostic_result(
+            &state,
+            Some(&json!({
+                "textDocument": { "uri": uri }
+            })),
+        );
+
+        assert_eq!(
+            result
+                .pointer("/items")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(0)
+        );
+
+        state.dirty_documents.clear();
+        let saved = diagnostic_result(
+            &state,
+            Some(&json!({
+                "textDocument": { "uri": uri }
+            })),
+        );
+        assert!(
+            saved
+                .pointer("/items")
+                .and_then(|v| v.as_array())
+                .map(|items| !items.is_empty())
+                .unwrap_or(false)
+        );
     }
 }
 

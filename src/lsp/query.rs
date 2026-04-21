@@ -94,16 +94,8 @@ pub fn route_action_definitions(index: &ProjectIndex, context: &RouteActionConte
                 return Vec::new();
             };
 
-            let methods = index.controller_method_definitions(controller, &context.full_text);
-            if methods.is_empty() {
-                return index
-                    .controller_definitions(controller)
-                    .into_iter()
-                    .map(|entry| location(&index.project_root, &entry.file, entry.line, 1))
-                    .collect();
-            }
-
-            methods
+            index
+                .controller_method_definitions(controller, &context.full_text)
                 .into_iter()
                 .map(|(_, method)| {
                     location(&index.project_root, &method.declared_in, method.line, 1)
@@ -833,7 +825,7 @@ mod tests {
         let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
             .expect("index should build");
         let source = "Route::get('/', 'WebsiteController@home');";
-        let character = source.find("home").unwrap() + 4;
+        let character = source.find("home").unwrap() + 3;
         let context =
             detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
                 .expect("legacy method context");
@@ -889,6 +881,22 @@ mod tests {
                 .unwrap_or_default()
                 .contains("Create controller method `missingLanding`")
         );
+    }
+
+    #[test]
+    fn does_not_resolve_definition_for_missing_controller_method() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "Route::get('/', [WebsiteController::class, 'missingLanding']);";
+        let character = source.find("missingLanding").unwrap() + 3;
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("route action context");
+
+        let definitions = route_action_definitions(&index, &context);
+
+        assert!(definitions.is_empty());
     }
 
     #[test]
