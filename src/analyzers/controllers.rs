@@ -508,7 +508,7 @@ fn parse_file_defs(
             } => {
                 let short_name = span_text(name.span, &source);
                 let (line, _) = byte_offset_to_line_col(&source, span.start);
-                let (end_line, _) = byte_offset_to_line_col(&source, span.end);
+                let (end_line, _) = byte_offset_to_line_col(&source, span.end.saturating_sub(1));
                 defs.push(TypeDef {
                     fqn: qualify_name(&namespace, &short_name),
                     short_name,
@@ -532,7 +532,7 @@ fn parse_file_defs(
             } => {
                 let short_name = span_text(name.span, &source);
                 let (line, _) = byte_offset_to_line_col(&source, span.start);
-                let (end_line, _) = byte_offset_to_line_col(&source, span.end);
+                let (end_line, _) = byte_offset_to_line_col(&source, span.end.saturating_sub(1));
                 defs.push(TypeDef {
                     fqn: qualify_name(&namespace, &short_name),
                     short_name,

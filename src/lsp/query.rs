@@ -558,6 +558,10 @@ fn create_missing_method_action(
     method: &str,
     diagnostic: &Value,
 ) -> Option<Value> {
+    if !is_valid_php_method_name(method) {
+        return None;
+    }
+
     let entry = index
         .controller_definitions(controller)
         .into_iter()
@@ -588,6 +592,19 @@ fn create_missing_method_action(
         },
         "isPreferred": true
     }))
+}
+
+fn is_valid_php_method_name(method: &str) -> bool {
+    let mut chars = method.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+
+    chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 struct HelperSpec {
@@ -767,6 +784,8 @@ fn path_to_file_uri(path: &std::path::Path) -> String {
 mod tests {
     use std::path::Path;
 
+    use serde_json::json;
+
     use crate::lsp::context::detect_route_action_context;
     use crate::lsp::index::ProjectIndex;
     use crate::lsp::overrides::FileOverrides;
@@ -870,5 +889,23 @@ mod tests {
                 .unwrap_or_default()
                 .contains("Create controller method `missingLanding`")
         );
+    }
+
+    #[test]
+    fn does_not_offer_quick_fix_for_invalid_php_method_name() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+
+        let diagnostic = json!({
+            "code": "rust-php/missing-controller-method",
+            "data": {
+                "controller": "App\\Http\\Controllers\\WebsiteController",
+                "method": "page.sustainability"
+            }
+        });
+
+        let actions = route_action_code_actions(&index, &[diagnostic]);
+        assert!(actions.is_empty());
     }
 }
