@@ -2,7 +2,6 @@ mod analyzers;
 mod benchmark;
 mod cli;
 mod debug;
-mod debug_web;
 mod lsp;
 mod output;
 mod php;
@@ -68,10 +67,10 @@ pub fn run() -> Result<(), String> {
             benchmark::run(&project, options.json)?;
         }
         Command::DebugBrowse => {
-            debug::run(options.project.as_deref())?;
+            debug::run_browse(options.project.as_deref())?;
         }
         Command::DebugWeb => {
-            debug_web::run(options.project.as_deref())?;
+            debug::run_web(options.project.as_deref())?;
         }
     }
 

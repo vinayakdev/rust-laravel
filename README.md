@@ -26,6 +26,7 @@ It is designed for two uses:
 | ----------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | [README.md](/Users/hotdogb/Work/rust-php/README.md)                                 | Main guide and command reference                     |
 | [example.md](/Users/hotdogb/Work/rust-php/example.md)                               | Static input/output examples without running the CLI |
+| [project_structure.md](/Users/hotdogb/Work/rust-php/project_structure.md)           | Plain-English codebase map for Laravel developers    |
 | [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md)                                     | Roadmap and completed milestones                     |
 | [laravel-example/README.md](/Users/hotdogb/Work/rust-php/laravel-example/README.md) | How to place Laravel apps for analysis               |
 

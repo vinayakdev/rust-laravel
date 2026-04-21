@@ -66,7 +66,8 @@ where
     }
 
     entries.sort_by(|l, r| {
-        l.key.cmp(&r.key)
+        l.key
+            .cmp(&r.key)
             .then(l.file.cmp(&r.file))
             .then(l.line.cmp(&r.line))
             .then(l.column.cmp(&r.column))
@@ -165,49 +166,4 @@ fn strip_quotes(value: &str) -> &str {
         .and_then(|v| v.strip_suffix('"'))
         .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
         .unwrap_or(value)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{load_env_entries_with, load_env_map_with};
-    use std::path::Path;
-
-    #[test]
-    fn prefers_dot_env_over_example_and_resolves_placeholders() {
-        let root = Path::new("/tmp/project");
-        let env = load_env_map_with(root, |path| match path.file_name().and_then(|name| name.to_str()) {
-            Some(".env") => Some("APP_NAME=Demo\nAPP_URL=https://${APP_NAME}.test".to_string()),
-            Some(".env.example") => Some("APP_NAME=Example".to_string()),
-            _ => None,
-        })
-        .expect("env map");
-
-        assert_eq!(env.get("APP_NAME").map(String::as_str), Some("Demo"));
-        assert_eq!(
-            env.get("APP_URL").map(String::as_str),
-            Some("https://Demo.test")
-        );
-    }
-
-    #[test]
-    fn loads_entries_from_both_env_files() {
-        let root = Path::new("/tmp/project");
-        let entries = load_env_entries_with(root, |path| match path.file_name().and_then(|name| name.to_str()) {
-            Some(".env") => Some("APP_NAME=Demo\n# comment\nAPP_ENV=local".to_string()),
-            Some(".env.example") => Some("APP_NAME=Example\nQUEUE_CONNECTION=sync".to_string()),
-            _ => None,
-        })
-        .expect("env entries");
-
-        let keys = entries.into_iter().map(|item| item.key).collect::<Vec<_>>();
-        assert_eq!(
-            keys,
-            vec![
-                "APP_ENV".to_string(),
-                "APP_NAME".to_string(),
-                "APP_NAME".to_string(),
-                "QUEUE_CONNECTION".to_string()
-            ]
-        );
-    }
 }

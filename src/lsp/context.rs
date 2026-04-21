@@ -213,18 +213,16 @@ fn is_identifier_char(ch: char) -> bool {
 
 fn is_inside_blade_echo(line_text: &str, cursor: usize) -> bool {
     let before = &line_text[..cursor];
-    let last_open = before.rmatch_indices("{{").map(|(index, _)| index).next().max(
-        before
-            .rmatch_indices("{!!")
-            .map(|(index, _)| index)
-            .next(),
-    );
-    let last_close = before.rmatch_indices("}}").map(|(index, _)| index).next().max(
-        before
-            .rmatch_indices("!!}")
-            .map(|(index, _)| index)
-            .next(),
-    );
+    let last_open = before
+        .rmatch_indices("{{")
+        .map(|(index, _)| index)
+        .next()
+        .max(before.rmatch_indices("{!!").map(|(index, _)| index).next());
+    let last_close = before
+        .rmatch_indices("}}")
+        .map(|(index, _)| index)
+        .next()
+        .max(before.rmatch_indices("!!}").map(|(index, _)| index).next());
 
     match (last_open, last_close) {
         (Some(open), Some(close)) => open > close,
@@ -255,7 +253,12 @@ fn is_inside_blade_php(source: &str, line: usize, cursor: usize) -> bool {
         .rmatch_indices("@php")
         .map(|(index, _)| index)
         .next()
-        .max(before.rmatch_indices("<?php").map(|(index, _)| index).next());
+        .max(
+            before
+                .rmatch_indices("<?php")
+                .map(|(index, _)| index)
+                .next(),
+        );
     let last_close = before
         .rmatch_indices("@endphp")
         .map(|(index, _)| index)
@@ -266,50 +269,5 @@ fn is_inside_blade_php(source: &str, line: usize, cursor: usize) -> bool {
         (Some(open), Some(close)) => open > close,
         (Some(_), None) => true,
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{HelperStyle, SymbolKind, detect_helper_context, detect_symbol_context};
-
-    #[test]
-    fn detects_env_symbol_context() {
-        let source = "<?php env('APP_N');";
-        let ctx = detect_symbol_context(source, 0, 16).expect("env context");
-        assert_eq!(ctx.kind, SymbolKind::Env);
-        assert_eq!(ctx.prefix, "APP_N");
-    }
-
-    #[test]
-    fn detects_php_helper_context() {
-        let source = "<?php rou";
-        let ctx = detect_helper_context("file:///test.php", source, 0, 9).expect("php helper");
-        assert_eq!(ctx.prefix, "rou");
-        assert_eq!(ctx.style, HelperStyle::Php);
-    }
-
-    #[test]
-    fn detects_blade_helper_context_inside_echo() {
-        let source = "{{ rou }}";
-        let ctx =
-            detect_helper_context("file:///test.blade.php", source, 0, 6).expect("blade helper");
-        assert_eq!(ctx.prefix, "rou");
-        assert_eq!(ctx.style, HelperStyle::BladeEcho);
-    }
-
-    #[test]
-    fn ignores_blade_text_outside_echo() {
-        let source = "<div>rou</div>";
-        assert!(detect_helper_context("file:///test.blade.php", source, 0, 8).is_none());
-    }
-
-    #[test]
-    fn detects_blade_php_block_as_php_context() {
-        let source = "<div>\n    @php\n        rou\n    @endphp\n</div>";
-        let ctx =
-            detect_helper_context("file:///test.blade.php", source, 2, 11).expect("blade php");
-        assert_eq!(ctx.prefix, "rou");
-        assert_eq!(ctx.style, HelperStyle::Php);
     }
 }

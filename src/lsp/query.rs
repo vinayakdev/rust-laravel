@@ -79,7 +79,10 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
             }))
         }
         SymbolKind::Env => {
-            let item = index.env_definitions(&context.full_text).into_iter().next()?;
+            let item = index
+                .env_definitions(&context.full_text)
+                .into_iter()
+                .next()?;
             Some(json!({
                 "contents": {
                     "kind": "markdown",
@@ -179,7 +182,12 @@ fn env_hover(item: &EnvItem) -> String {
     [
         format!("`{}`", item.key),
         format!("- value: `{}`", item.value),
-        format!("- source: `{}`:{}:{}", item.file.display(), item.line, item.column),
+        format!(
+            "- source: `{}`:{}:{}",
+            item.file.display(),
+            item.line,
+            item.column
+        ),
     ]
     .join("\n")
 }

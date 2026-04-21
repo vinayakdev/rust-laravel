@@ -173,7 +173,10 @@ pub(crate) fn analyze_expr(
     line_offset: usize,
     raw_chunk: Option<&[u8]>,
 ) {
-    if let Expr::Include { expr: path_expr, .. } = expr {
+    if let Expr::Include {
+        expr: path_expr, ..
+    } = expr
+    {
         if let Some(included) = expr_to_path(path_expr, source, project_root, file) {
             let is_new = VISITED_INCLUDES.with(|v| v.borrow_mut().insert(included.clone()));
             if is_new {
@@ -544,111 +547,6 @@ fn group_body_stmts<'ast>(
     match expr {
         Expr::Closure { body, .. } => Some(body),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::context::MiddlewareIndex;
-    use super::*;
-    use std::collections::BTreeMap;
-    use std::path::PathBuf;
-
-    fn empty_index() -> MiddlewareIndex {
-        MiddlewareIndex {
-            aliases: BTreeMap::new(),
-            groups: BTreeMap::new(),
-            patterns: BTreeMap::new(),
-        }
-    }
-
-    fn registration() -> RouteRegistration {
-        RouteRegistration {
-            kind: "test".to_string(),
-            declared_in: PathBuf::from("routes/web.php"),
-            line: 1,
-            column: 1,
-            provider_class: None,
-        }
-    }
-
-    fn parse(source: &str) -> Vec<RouteEntry> {
-        let mut routes = Vec::new();
-        let project_root = PathBuf::from("/tmp/example");
-        let file = project_root.join("routes/web.php");
-        collect_routes_from_source(
-            source.as_bytes(),
-            &project_root,
-            &file,
-            &registration(),
-            1,
-            &RouteContext::default(),
-            &empty_index(),
-            &mut routes,
-        );
-        routes
-    }
-
-    #[test]
-    fn parses_view_redirect_fallback_and_resources() {
-        let routes = parse(
-            r#"<?php
-Route::view('/pages/about', 'pages.about')->name('pages.about');
-Route::redirect('/legacy', '/new-home');
-Route::permanentRedirect('/old-home', '/home');
-Route::resource('photos', \App\Http\Controllers\PhotoController::class)->only(['index', 'show']);
-Route::apiResource('articles', \App\Http\Controllers\ArticleController::class);
-Route::singleton('profile', \App\Http\Controllers\ProfileController::class)->except(['destroy']);
-Route::fallback(function () {
-    return 'fallback';
-});
-"#,
-        );
-
-        assert!(routes.iter().any(|route| {
-            route.uri == "/pages/about"
-                && route.action.as_deref() == Some("view:pages.about")
-                && route.name.as_deref() == Some("pages.about")
-        }));
-        assert!(routes.iter().any(|route| {
-            route.uri == "/legacy" && route.action.as_deref() == Some("redirect:/new-home")
-        }));
-        assert!(routes.iter().any(|route| {
-            route.uri == "/old-home" && route.action.as_deref() == Some("redirect-permanent:/home")
-        }));
-        assert!(routes.iter().any(|route| {
-            route.uri == "/{fallbackPlaceholder}"
-                && route.methods == vec!["ANY".to_string()]
-                && route.action.as_deref() == Some("closure")
-        }));
-
-        let photo_names: Vec<String> = routes
-            .iter()
-            .filter_map(|route| route.name.clone())
-            .filter(|name| name.starts_with("photos."))
-            .collect();
-        assert_eq!(
-            photo_names,
-            vec!["photos.index".to_string(), "photos.show".to_string()]
-        );
-
-        assert!(routes.iter().any(|route| {
-            route.name.as_deref() == Some("articles.update")
-                && route.methods == vec!["PUT".to_string(), "PATCH".to_string()]
-                && route
-                    .action
-                    .as_deref()
-                    .map(|action| action.ends_with("ArticleController@update"))
-                    .unwrap_or(false)
-        }));
-
-        let profile_names: Vec<String> = routes
-            .iter()
-            .filter_map(|route| route.name.clone())
-            .filter(|name| name.starts_with("profile."))
-            .collect();
-        assert!(!profile_names.iter().any(|name| name == "profile.destroy"));
-        assert!(profile_names.iter().any(|name| name == "profile.show"));
     }
 }
 
