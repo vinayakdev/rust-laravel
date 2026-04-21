@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use std::path::Path;
 
 use super::context::{
     HelperContext, HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
@@ -182,6 +183,64 @@ pub fn route_action_hover(index: &ProjectIndex, context: &RouteActionContext) ->
             }))
         }
     }
+}
+
+pub fn route_diagnostics(index: &ProjectIndex, relative_file: &Path, source: &str) -> Vec<Value> {
+    index
+        .routes_for_file(relative_file)
+        .into_iter()
+        .filter_map(|route| {
+            let target = route.controller_target.as_ref()?;
+            if target.status == "ok" {
+                return None;
+            }
+
+            let severity = match target.status.as_str() {
+                "missing-method" | "missing-controller" | "ambiguous-controller" => 1,
+                _ => 2,
+            };
+            let line_index = route.line.saturating_sub(1);
+            let end_character = source
+                .lines()
+                .nth(line_index)
+                .map(|line| line.chars().count())
+                .unwrap_or(1)
+                .max(1);
+
+            Some(json!({
+                "range": {
+                    "start": { "line": line_index, "character": 0 },
+                    "end": { "line": line_index, "character": end_character },
+                },
+                "severity": severity,
+                "source": "rust-php",
+                "code": diagnostic_code(target.status.as_str()),
+                "message": diagnostic_message(route),
+                "data": {
+                    "controller": target.controller,
+                    "method": target.method,
+                    "status": target.status,
+                }
+            }))
+        })
+        .collect()
+}
+
+pub fn route_action_code_actions(index: &ProjectIndex, diagnostics: &[Value]) -> Vec<Value> {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            let code = diagnostic.get("code").and_then(Value::as_str)?;
+            if code != "rust-php/missing-controller-method" {
+                return None;
+            }
+            let controller = diagnostic
+                .pointer("/data/controller")
+                .and_then(Value::as_str)?;
+            let method = diagnostic.pointer("/data/method").and_then(Value::as_str)?;
+            create_missing_method_action(index, controller, method, diagnostic)
+        })
+        .collect()
 }
 
 fn config_completion(item: &ConfigItem, context: &SymbolContext, line: usize) -> Value {
@@ -449,6 +508,88 @@ fn controller_method_hover(controller: &ControllerEntry, method: &ControllerMeth
     .join("\n")
 }
 
+fn diagnostic_code(status: &str) -> &'static str {
+    match status {
+        "missing-method" => "rust-php/missing-controller-method",
+        "missing-controller" => "rust-php/missing-controller",
+        "ambiguous-controller" => "rust-php/ambiguous-controller",
+        "not-route-callable" => "rust-php/not-route-callable",
+        _ => "rust-php/controller-route-problem",
+    }
+}
+
+fn diagnostic_message(route: &RouteEntry) -> String {
+    let Some(target) = route.controller_target.as_ref() else {
+        return "Route action could not be resolved.".to_string();
+    };
+
+    match target.status.as_str() {
+        "missing-method" => format!(
+            "Route action `{}` is missing method `{}` on `{}`.",
+            route.action.as_deref().unwrap_or_default(),
+            target.method,
+            target.controller
+        ),
+        "missing-controller" => format!(
+            "Route action `{}` references controller `{}` that could not be found.",
+            route.action.as_deref().unwrap_or_default(),
+            target.controller
+        ),
+        "ambiguous-controller" => format!(
+            "Route action `{}` matches multiple controllers named `{}`.",
+            route.action.as_deref().unwrap_or_default(),
+            target.controller
+        ),
+        "not-route-callable" => format!(
+            "Route action `{}` is not route-callable: {}",
+            route.action.as_deref().unwrap_or_default(),
+            target.notes.join("; ")
+        ),
+        _ => route
+            .action
+            .clone()
+            .unwrap_or_else(|| "Route action issue".to_string()),
+    }
+}
+
+fn create_missing_method_action(
+    index: &ProjectIndex,
+    controller: &str,
+    method: &str,
+    diagnostic: &Value,
+) -> Option<Value> {
+    let entry = index
+        .controller_definitions(controller)
+        .into_iter()
+        .next()?;
+    let uri = path_to_file_uri(&index.project_root.join(&entry.file));
+    let insert_line = entry.class_end_line.saturating_sub(1);
+    let new_text = format!(
+        "\n    public function {method}()\n    {{\n        // TODO: implement {method}.\n    }}\n"
+    );
+    let mut changes = serde_json::Map::new();
+    changes.insert(
+        uri,
+        Value::Array(vec![json!({
+            "range": {
+                "start": { "line": insert_line, "character": 0 },
+                "end": { "line": insert_line, "character": 0 }
+            },
+            "newText": new_text
+        })]),
+    );
+
+    Some(json!({
+        "title": format!("Create controller method `{method}` in {}", entry.class_name),
+        "kind": "quickfix",
+        "diagnostics": [diagnostic.clone()],
+        "edit": {
+            "changes": changes
+        },
+        "isPreferred": true
+    }))
+}
+
 struct HelperSpec {
     name: &'static str,
     detail: &'static str,
@@ -631,7 +772,10 @@ mod tests {
     use crate::lsp::overrides::FileOverrides;
     use crate::project;
 
-    use super::{complete_route_actions, route_action_definitions};
+    use super::{
+        complete_route_actions, route_action_code_actions, route_action_definitions,
+        route_diagnostics,
+    };
 
     fn sandbox_project() -> project::LaravelProject {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -690,6 +834,41 @@ mod tests {
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .ends_with("/app/Http/Controllers/WebsiteController.php")
+        );
+    }
+
+    #[test]
+    fn emits_missing_method_diagnostic_and_quick_fix() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("laravel-example")
+                .join("sandbox-app")
+                .join("routes")
+                .join("starter.php"),
+        )
+        .expect("starter route file should load");
+
+        let diagnostics = route_diagnostics(&index, Path::new("routes/starter.php"), &source);
+        let missing = diagnostics
+            .iter()
+            .find(|item| {
+                item.get("code").and_then(|value| value.as_str())
+                    == Some("rust-php/missing-controller-method")
+            })
+            .expect("missing method diagnostic should exist");
+
+        let actions = route_action_code_actions(&index, std::slice::from_ref(missing));
+        let action = actions.first().expect("quick fix should exist");
+
+        assert!(
+            action
+                .get("title")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .contains("Create controller method `missingLanding`")
         );
     }
 }

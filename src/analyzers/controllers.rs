@@ -29,6 +29,7 @@ struct TypeDef {
     namespace: String,
     file: PathBuf,
     line: usize,
+    end_line: usize,
     kind: TypeKind,
     extends: Option<String>,
     traits: Vec<String>,
@@ -242,6 +243,7 @@ fn build_controller_entry(
     ControllerEntry {
         file: strip_root(&project.root, &def.file),
         line: def.line,
+        class_end_line: def.end_line,
         class_name: def.short_name.clone(),
         namespace: def.namespace.clone(),
         fqn: def.fqn.clone(),
@@ -506,12 +508,14 @@ fn parse_file_defs(
             } => {
                 let short_name = span_text(name.span, &source);
                 let (line, _) = byte_offset_to_line_col(&source, span.start);
+                let (end_line, _) = byte_offset_to_line_col(&source, span.end);
                 defs.push(TypeDef {
                     fqn: qualify_name(&namespace, &short_name),
                     short_name,
                     namespace: namespace.clone(),
                     file: strip_root(&project.root, file),
                     line,
+                    end_line,
                     kind: TypeKind::Class,
                     extends: extends.as_ref().map(|value| {
                         resolve_name(&name_to_string(value, &source), &namespace, &imports)
@@ -528,12 +532,14 @@ fn parse_file_defs(
             } => {
                 let short_name = span_text(name.span, &source);
                 let (line, _) = byte_offset_to_line_col(&source, span.start);
+                let (end_line, _) = byte_offset_to_line_col(&source, span.end);
                 defs.push(TypeDef {
                     fqn: qualify_name(&namespace, &short_name),
                     short_name,
                     namespace: namespace.clone(),
                     file: strip_root(&project.root, file),
                     line,
+                    end_line,
                     kind: TypeKind::Trait,
                     extends: None,
                     traits: collect_trait_uses(members, &source, &namespace, &imports),

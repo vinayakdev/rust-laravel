@@ -112,6 +112,12 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
         Some("textDocument/hover") => {
             Ok(id.map(|id| success(id, hover_result(state, message.get("params")))))
         }
+        Some("textDocument/diagnostic") => {
+            Ok(id.map(|id| success(id, diagnostic_result(state, message.get("params")))))
+        }
+        Some("textDocument/codeAction") => {
+            Ok(id.map(|id| success(id, code_action_result(state, message.get("params")))))
+        }
         Some(_) | None => {
             if let Some(id) = id {
                 Ok(Some(success(id, Value::Null)))
@@ -210,6 +216,48 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
     Value::Null
 }
 
+fn diagnostic_result(state: &ServerState, params: Option<&Value>) -> Value {
+    let Some(params) = params else {
+        return json!({ "kind": "full", "items": [] });
+    };
+    let Some(uri) = params.pointer("/textDocument/uri").and_then(Value::as_str) else {
+        return json!({ "kind": "full", "items": [] });
+    };
+    let Some(index) = &state.index else {
+        return json!({ "kind": "full", "items": [] });
+    };
+    let Some(source) = state.documents.get(uri) else {
+        return json!({ "kind": "full", "items": [] });
+    };
+    let Some(path) = file_uri_to_path(uri) else {
+        return json!({ "kind": "full", "items": [] });
+    };
+    let Ok(relative) = path.strip_prefix(&index.project_root) else {
+        return json!({ "kind": "full", "items": [] });
+    };
+
+    json!({
+        "kind": "full",
+        "items": query::route_diagnostics(index, relative, source),
+    })
+}
+
+fn code_action_result(state: &ServerState, params: Option<&Value>) -> Value {
+    let Some(params) = params else {
+        return Value::Array(Vec::new());
+    };
+    let Some(index) = &state.index else {
+        return Value::Array(Vec::new());
+    };
+    let diagnostics = params
+        .pointer("/context/diagnostics")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    Value::Array(query::route_action_code_actions(index, &diagnostics))
+}
+
 fn source_and_position<'a>(
     state: &'a ServerState,
     params: Option<&'a Value>,
@@ -242,7 +290,12 @@ fn initialize_result() -> Value {
                 "triggerCharacters": ["'", "\"", ".", "(", "@", "[", ","]
             },
             "definitionProvider": true,
-            "hoverProvider": true
+            "hoverProvider": true,
+            "codeActionProvider": true,
+            "diagnosticProvider": {
+                "interFileDependencies": true,
+                "workspaceDiagnostics": false
+            }
         },
         "serverInfo": {
             "name": "rust-php",

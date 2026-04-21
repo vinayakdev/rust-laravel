@@ -184,6 +184,14 @@ impl ProjectIndex {
             })
             .collect()
     }
+
+    pub fn routes_for_file<'a>(&'a self, file: &std::path::Path) -> Vec<&'a RouteEntry> {
+        self.route_report
+            .routes
+            .iter()
+            .filter(|route| route.file == file)
+            .collect()
+    }
 }
 
 fn controller_candidates<'a>(

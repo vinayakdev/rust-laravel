@@ -117,6 +117,7 @@ pub struct ControllerMethodEntry {
 pub struct ControllerEntry {
     pub file: PathBuf,
     pub line: usize,
+    pub class_end_line: usize,
     pub class_name: String,
     pub namespace: String,
     pub fqn: String,
