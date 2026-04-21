@@ -2,7 +2,7 @@ pub mod analyzers;
 mod benchmark;
 mod cli;
 mod debug;
-mod lsp;
+pub mod lsp;
 mod output;
 mod php;
 pub mod project;

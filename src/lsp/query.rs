@@ -1,8 +1,10 @@
 use serde_json::{Value, json};
 
-use super::context::{HelperContext, HelperStyle, SymbolContext, SymbolKind};
+use super::context::{
+    HelperContext, HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
+};
 use super::index::ProjectIndex;
-use crate::types::{ConfigItem, EnvItem, RouteEntry};
+use crate::types::{ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry};
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
     match context.kind {
@@ -32,6 +34,29 @@ pub fn helper_snippets(context: &HelperContext, line: usize) -> Vec<Value> {
         .collect()
 }
 
+pub fn complete_route_actions(
+    index: &ProjectIndex,
+    context: &RouteActionContext,
+    line: usize,
+) -> Vec<Value> {
+    match context.kind {
+        RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => index
+            .controller_matches(&context.prefix)
+            .into_iter()
+            .map(|controller| controller_completion(controller, context, line))
+            .collect(),
+        RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => context
+            .controller
+            .as_deref()
+            .into_iter()
+            .flat_map(|controller| index.controller_methods(controller, &context.prefix))
+            .map(|(controller, method)| {
+                controller_method_completion(controller, method, context, line)
+            })
+            .collect(),
+    }
+}
+
 pub fn definitions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> {
     match context.kind {
         SymbolKind::Config => index
@@ -49,6 +74,41 @@ pub fn definitions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> 
             .into_iter()
             .map(|item| location(&index.project_root, &item.file, item.line, item.column))
             .collect(),
+    }
+}
+
+pub fn route_action_definitions(index: &ProjectIndex, context: &RouteActionContext) -> Vec<Value> {
+    match context.kind {
+        RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => {
+            let controller = context.full_text.as_str();
+
+            index
+                .controller_definitions(controller)
+                .into_iter()
+                .map(|entry| location(&index.project_root, &entry.file, entry.line, 1))
+                .collect()
+        }
+        RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => {
+            let Some(controller) = context.controller.as_deref() else {
+                return Vec::new();
+            };
+
+            let methods = index.controller_method_definitions(controller, &context.full_text);
+            if methods.is_empty() {
+                return index
+                    .controller_definitions(controller)
+                    .into_iter()
+                    .map(|entry| location(&index.project_root, &entry.file, entry.line, 1))
+                    .collect();
+            }
+
+            methods
+                .into_iter()
+                .map(|(_, method)| {
+                    location(&index.project_root, &method.declared_in, method.line, 1)
+                })
+                .collect()
+        }
     }
 }
 
@@ -87,6 +147,37 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext) -> Option<Value> {
                 "contents": {
                     "kind": "markdown",
                     "value": env_hover(item),
+                }
+            }))
+        }
+    }
+}
+
+pub fn route_action_hover(index: &ProjectIndex, context: &RouteActionContext) -> Option<Value> {
+    match context.kind {
+        RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => {
+            let controller = context.full_text.as_str();
+            let item = index
+                .controller_definitions(controller)
+                .into_iter()
+                .next()?;
+            Some(json!({
+                "contents": {
+                    "kind": "markdown",
+                    "value": controller_hover(item),
+                }
+            }))
+        }
+        RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => {
+            let controller = context.controller.as_deref()?;
+            let (owner, method) = index
+                .controller_method_definitions(controller, &context.full_text)
+                .into_iter()
+                .next()?;
+            Some(json!({
+                "contents": {
+                    "kind": "markdown",
+                    "value": controller_method_hover(owner, method),
                 }
             }))
         }
@@ -166,6 +257,59 @@ fn helper_completion(helper: &HelperSpec, context: &HelperContext, line: usize) 
     }
 
     item
+}
+
+fn controller_completion(
+    controller: &ControllerEntry,
+    context: &RouteActionContext,
+    line: usize,
+) -> Value {
+    let insert = controller.class_name.as_str();
+    json!({
+        "label": controller.class_name,
+        "kind": 7,
+        "detail": controller.fqn,
+        "documentation": {
+            "kind": "markdown",
+            "value": controller_hover(controller),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": insert,
+        }
+    })
+}
+
+fn controller_method_completion(
+    controller: &ControllerEntry,
+    method: &ControllerMethodEntry,
+    context: &RouteActionContext,
+    line: usize,
+) -> Value {
+    let new_text = match context.kind {
+        RouteActionKind::LegacyMethodString => method.name.clone(),
+        _ => method.name.clone(),
+    };
+
+    json!({
+        "label": method.name,
+        "kind": 2,
+        "detail": format!("{} {}", controller.class_name, method.accessibility),
+        "documentation": {
+            "kind": "markdown",
+            "value": controller_method_hover(controller, method),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": new_text,
+        }
+    })
 }
 
 fn replacement_edit(context: &SymbolContext, line: usize, new_text: &str) -> Value {
@@ -264,6 +408,45 @@ fn route_hover(route: &RouteEntry) -> String {
     ));
 
     lines.join("\n")
+}
+
+fn controller_hover(controller: &ControllerEntry) -> String {
+    let mut lines = vec![
+        format!("`{}`", controller.fqn),
+        format!("- callable methods: `{}`", controller.callable_method_count),
+        format!("- total methods: `{}`", controller.method_count),
+        format!(
+            "- source: `{}`:{}",
+            controller.file.display(),
+            controller.line
+        ),
+    ];
+
+    if let Some(parent) = &controller.extends {
+        lines.push(format!("- extends: `{parent}`"));
+    }
+    if !controller.traits.is_empty() {
+        lines.push(format!("- traits: `{}`", controller.traits.join(", ")));
+    }
+
+    lines.join("\n")
+}
+
+fn controller_method_hover(controller: &ControllerEntry, method: &ControllerMethodEntry) -> String {
+    [
+        format!("`{}::{}`", controller.class_name, method.name),
+        format!("- controller: `{}`", controller.fqn),
+        format!("- route callable: `{}`", method.accessible_from_route),
+        format!("- visibility: `{}`", method.visibility),
+        format!("- source kind: `{}`", method.source_kind),
+        format!("- notes: `{}`", method.accessibility),
+        format!(
+            "- source: `{}`:{}",
+            method.declared_in.display(),
+            method.line
+        ),
+    ]
+    .join("\n")
 }
 
 struct HelperSpec {
@@ -437,4 +620,76 @@ fn path_to_file_uri(path: &std::path::Path) -> String {
         .collect::<String>();
 
     format!("file://{encoded}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::lsp::context::detect_route_action_context;
+    use crate::lsp::index::ProjectIndex;
+    use crate::lsp::overrides::FileOverrides;
+    use crate::project;
+
+    use super::{complete_route_actions, route_action_definitions};
+
+    fn sandbox_project() -> project::LaravelProject {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("laravel-example")
+            .join("sandbox-app");
+        project::from_root(root).expect("sandbox project should resolve")
+    }
+
+    #[test]
+    fn completes_only_route_callable_controller_methods() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "Route::get('/', [WebsiteController::class, '']);";
+        let character = source.find("''").unwrap() + 1;
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("route action context");
+
+        let items = complete_route_actions(&index, &context, 0);
+        let labels = items
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"home"));
+        assert!(labels.contains(&"team"));
+        assert!(labels.contains(&"publish"));
+        assert!(!labels.contains(&"sustainability"));
+        assert!(!labels.contains(&"docs"));
+    }
+
+    #[test]
+    fn resolves_legacy_controller_method_definition() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "Route::get('/', 'WebsiteController@home');";
+        let character = source.find("home").unwrap() + 4;
+        let context =
+            detect_route_action_context("file:///tmp/routes/web.php", source, 0, character)
+                .expect("legacy method context");
+
+        let definitions = route_action_definitions(&index, &context);
+        let first = definitions.first().expect("definition expected");
+
+        assert_eq!(
+            first
+                .pointer("/range/start/line")
+                .and_then(|value| value.as_u64()),
+            Some(13)
+        );
+        assert!(
+            first
+                .pointer("/uri")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/app/Http/Controllers/WebsiteController.php")
+        );
+    }
 }

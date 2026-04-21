@@ -6,6 +6,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::lsp::overrides::FileOverrides;
 use crate::php::ast::{byte_offset_to_line_col, span_text, strip_root};
 use crate::php::psr4::{Psr4Mapping, collect_psr4_mappings};
 use crate::project::LaravelProject;
@@ -52,8 +53,15 @@ struct FlattenedMethod {
 }
 
 pub fn analyze(project: &LaravelProject) -> Result<ControllerReport, String> {
+    analyze_with_overrides(project, &FileOverrides::default())
+}
+
+pub fn analyze_with_overrides(
+    project: &LaravelProject,
+    overrides: &FileOverrides,
+) -> Result<ControllerReport, String> {
     let mappings = collect_psr4_mappings(&project.root)?;
-    let defs = collect_type_defs(project, &mappings);
+    let defs = collect_type_defs(project, &mappings, overrides);
 
     let mut controllers = defs
         .values()
@@ -408,6 +416,7 @@ fn looks_like_controller(def: &TypeDef, defs: &HashMap<String, TypeDef>) -> bool
 fn collect_type_defs(
     project: &LaravelProject,
     mappings: &[Psr4Mapping],
+    overrides: &FileOverrides,
 ) -> HashMap<String, TypeDef> {
     let mut files = Vec::new();
     let mut seen_dirs = BTreeSet::new();
@@ -426,7 +435,7 @@ fn collect_type_defs(
 
     let mut defs = HashMap::new();
     for file in files {
-        for def in parse_file_defs(project, &file) {
+        for def in parse_file_defs(project, &file, overrides) {
             defs.insert(def.fqn.clone(), def);
         }
     }
@@ -447,8 +456,12 @@ fn collect_php_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn parse_file_defs(project: &LaravelProject, file: &Path) -> Vec<TypeDef> {
-    let Ok(source) = fs::read(file) else {
+fn parse_file_defs(
+    project: &LaravelProject,
+    file: &Path,
+    overrides: &FileOverrides,
+) -> Vec<TypeDef> {
+    let Some(source) = overrides.get_bytes(file).or_else(|| fs::read(file).ok()) else {
         return Vec::new();
     };
     let arena = Bump::new();

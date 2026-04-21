@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::context::{detect_helper_context, detect_symbol_context};
+use super::context::{detect_helper_context, detect_route_action_context, detect_symbol_context};
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
 use super::query;
@@ -155,6 +155,8 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
 
     let items = if let Some(context) = detect_symbol_context(source, line, character) {
         query::complete(index, &context, line)
+    } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
+        query::complete_route_actions(index, &context, line)
     } else if let Some(context) = detect_helper_context(uri, source, line, character) {
         query::helper_snippets(&context, line)
     } else {
@@ -168,17 +170,21 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
 }
 
 fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
-    let Some((_, source, line, character)) = source_and_position(state, params) else {
+    let Some((uri, source, line, character)) = source_and_position(state, params) else {
         return Value::Null;
     };
     let Some(index) = &state.index else {
         return Value::Null;
     };
-    let Some(context) = detect_symbol_context(source, line, character) else {
-        return Value::Null;
+
+    let definitions = if let Some(context) = detect_symbol_context(source, line, character) {
+        query::definitions(index, &context)
+    } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
+        query::route_action_definitions(index, &context)
+    } else {
+        Vec::new()
     };
 
-    let definitions = query::definitions(index, &context);
     if definitions.is_empty() {
         Value::Null
     } else {
@@ -187,17 +193,21 @@ fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
 }
 
 fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
-    let Some((_, source, line, character)) = source_and_position(state, params) else {
+    let Some((uri, source, line, character)) = source_and_position(state, params) else {
         return Value::Null;
     };
     let Some(index) = &state.index else {
         return Value::Null;
     };
-    let Some(context) = detect_symbol_context(source, line, character) else {
-        return Value::Null;
-    };
 
-    query::hover(index, &context).unwrap_or(Value::Null)
+    if let Some(context) = detect_symbol_context(source, line, character) {
+        return query::hover(index, &context).unwrap_or(Value::Null);
+    }
+    if let Some(context) = detect_route_action_context(uri, source, line, character) {
+        return query::route_action_hover(index, &context).unwrap_or(Value::Null);
+    }
+
+    Value::Null
 }
 
 fn source_and_position<'a>(
@@ -229,7 +239,7 @@ fn initialize_result() -> Value {
             },
             "completionProvider": {
                 "resolveProvider": false,
-                "triggerCharacters": ["'", "\"", ".", "("]
+                "triggerCharacters": ["'", "\"", ".", "(", "@", "[", ","]
             },
             "definitionProvider": true,
             "hoverProvider": true
@@ -357,7 +367,11 @@ fn path_affects_index(root: &Path, path: &Path) -> bool {
         return false;
     };
 
-    if relative.starts_with("routes") || relative.starts_with("config") {
+    if relative.starts_with("routes")
+        || relative.starts_with("config")
+        || relative.starts_with("app")
+        || relative.starts_with("packages")
+    {
         return path.extension().and_then(|ext| ext.to_str()) == Some("php");
     }
 
