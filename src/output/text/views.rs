@@ -1,7 +1,9 @@
 use std::fmt::Write as _;
 
 use super::{header, new_table, terminal_width, wrap_cell};
-use crate::types::{BladeComponentEntry, LivewireComponentEntry, ViewEntry, ViewReport};
+use crate::types::{
+    BladeComponentEntry, LivewireComponentEntry, MissingViewEntry, ViewEntry, ViewReport,
+};
 
 struct ViewWidths {
     name: usize,
@@ -34,6 +36,7 @@ pub fn render_view_report(report: &ViewReport) -> String {
         "Livewire components: {}",
         report.livewire_component_count
     );
+    let _ = writeln!(output, "Missing view refs: {}", report.missing_view_count);
     let _ = writeln!(output);
 
     let _ = writeln!(output, "Views");
@@ -47,10 +50,17 @@ pub fn render_view_report(report: &ViewReport) -> String {
     );
     let _ = writeln!(output);
     let _ = writeln!(output, "Livewire Components");
-    let _ = write!(
+    let _ = writeln!(
         output,
         "{}",
         render_livewire_components_table(&report.livewire_components)
+    );
+    let _ = writeln!(output);
+    let _ = writeln!(output, "Missing View References");
+    let _ = write!(
+        output,
+        "{}",
+        render_missing_views_table(&report.missing_views)
     );
     output
 }
@@ -176,6 +186,51 @@ fn render_livewire_components_table(components: &[LivewireComponentEntry]) -> St
                 ),
                 widths.source,
             ),
+        ]);
+    }
+
+    table.to_string()
+}
+
+fn render_missing_views_table(missing_views: &[MissingViewEntry]) -> String {
+    if missing_views.is_empty() {
+        return "No missing view references found.".to_string();
+    }
+
+    let widths = view_widths();
+    let mut table = new_table();
+    table.set_header(vec![
+        header("View"),
+        header("Expected File"),
+        header("Inputs"),
+        header("Referenced In"),
+    ]);
+
+    for missing in missing_views {
+        let variables = missing
+            .usages
+            .iter()
+            .flat_map(|usage| usage.variables.clone())
+            .collect::<Vec<_>>();
+        let referenced_in = missing
+            .usages
+            .iter()
+            .map(|usage| {
+                format!(
+                    "{} [{}:{}:{}]",
+                    usage.kind,
+                    usage.source.declared_in.display(),
+                    usage.source.line,
+                    usage.source.column
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        table.add_row(vec![
+            wrap_cell(&missing.name, widths.name),
+            wrap_cell(&missing.expected_file.display().to_string(), widths.file),
+            wrap_cell(&display_list(&variables), widths.vars),
+            wrap_cell(&referenced_in, widths.source),
         ]);
     }
 
