@@ -7,7 +7,7 @@ use collector::collect_registered_route_files;
 use context::{RouteContext, build_middleware_index};
 use parser::{collect_routes_from_source, reset_include_tracking};
 
-use crate::analyzers::middleware;
+use crate::analyzers::{controllers, middleware};
 use crate::lsp::overrides::FileOverrides;
 use crate::project::LaravelProject;
 use crate::types::RouteReport;
@@ -52,6 +52,14 @@ pub fn analyze_with_overrides(
             .then(l.line.cmp(&r.line))
             .then(l.uri.cmp(&r.uri))
     });
+
+    let controller_report = controllers::analyze(project)?;
+    for route in &mut routes {
+        route.controller_target = route
+            .action
+            .as_deref()
+            .and_then(|action| controllers::resolve_route_target(&controller_report, action));
+    }
 
     Ok(RouteReport {
         project_name: project.name.clone(),

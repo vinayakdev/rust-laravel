@@ -20,7 +20,21 @@ pub struct RouteEntry {
     pub middleware: Vec<String>,
     pub resolved_middleware: Vec<String>,
     pub parameter_patterns: BTreeMap<String, String>,
+    pub controller_target: Option<RouteControllerTarget>,
     pub registration: RouteRegistration,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteControllerTarget {
+    pub controller: String,
+    pub method: String,
+    pub declared_in: Option<PathBuf>,
+    pub method_declared_in: Option<PathBuf>,
+    pub method_line: Option<usize>,
+    pub accessible_from_route: bool,
+    pub status: String,
+    pub source_kind: Option<String>,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,6 +98,41 @@ pub struct ProviderReport {
     pub project_root: PathBuf,
     pub provider_count: usize,
     pub providers: Vec<ProviderEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ControllerMethodEntry {
+    pub name: String,
+    pub declared_in: PathBuf,
+    pub line: usize,
+    pub visibility: String,
+    pub is_static: bool,
+    pub source_kind: String,
+    pub source_name: String,
+    pub accessible_from_route: bool,
+    pub accessibility: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ControllerEntry {
+    pub file: PathBuf,
+    pub line: usize,
+    pub class_name: String,
+    pub namespace: String,
+    pub fqn: String,
+    pub extends: Option<String>,
+    pub traits: Vec<String>,
+    pub method_count: usize,
+    pub callable_method_count: usize,
+    pub methods: Vec<ControllerMethodEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ControllerReport {
+    pub project_name: String,
+    pub project_root: PathBuf,
+    pub controller_count: usize,
+    pub controllers: Vec<ControllerEntry>,
 }
 
 #[derive(Debug, Serialize)]

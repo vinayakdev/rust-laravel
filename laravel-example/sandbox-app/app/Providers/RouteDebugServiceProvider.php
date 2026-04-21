@@ -6,6 +6,7 @@ class RouteDebugServiceProvider
 {
     public function boot(): void
     {
+        $this->loadRoutesFrom(__DIR__.'/../../routes/web.php');
         $this->loadRoutesFrom(__DIR__.'/../../routes/provider.php');
     }
 

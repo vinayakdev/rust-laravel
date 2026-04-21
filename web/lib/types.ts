@@ -30,7 +30,20 @@ export type RouteEntry = {
   middleware: string[]
   resolved_middleware: string[]
   parameter_patterns: Record<string, string>
+  controller_target?: RouteControllerTarget
   registration: RegistrationSource
+}
+
+export type RouteControllerTarget = {
+  controller: string
+  method: string
+  declared_in?: string
+  method_declared_in?: string
+  method_line?: number
+  accessible_from_route: boolean
+  status: string
+  source_kind?: string
+  notes: string[]
 }
 
 export type RoutesReport = {
@@ -96,6 +109,36 @@ export type ProviderEntry = {
 export type ProviderReport = {
   provider_count: number
   providers: ProviderEntry[]
+}
+
+export type ControllerMethodEntry = {
+  name: string
+  declared_in: string
+  line: number
+  visibility: string
+  is_static: boolean
+  source_kind: string
+  source_name: string
+  accessible_from_route: boolean
+  accessibility: string
+}
+
+export type ControllerEntry = {
+  file: string
+  line: number
+  class_name: string
+  namespace: string
+  fqn: string
+  extends?: string
+  traits: string[]
+  method_count: number
+  callable_method_count: number
+  methods: ControllerMethodEntry[]
+}
+
+export type ControllerReport = {
+  controller_count: number
+  controllers: ControllerEntry[]
 }
 
 export type ViewVariable = {
@@ -252,6 +295,7 @@ export type CommandId =
   | "middleware:list"
   | "config:list"
   | "config:sources"
+  | "controller:list"
   | "provider:list"
   | "view:list"
   | "model:list"
@@ -262,7 +306,7 @@ export type Payload = {
   root: string
   command: CommandId
   debug?: DebugInfo
-  report?: RoutesReport | MiddlewareReport | ConfigReport | ProviderReport | ViewReport | ModelReport | MigrationReport
+  report?: RoutesReport | MiddlewareReport | ConfigReport | ControllerReport | ProviderReport | ViewReport | ModelReport | MigrationReport
   comparison?: RouteComparison
   error?: string
 }

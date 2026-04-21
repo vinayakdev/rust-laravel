@@ -28,6 +28,7 @@ const COLS = [
   { key: "location",   label: "Location" },
   { key: "name",       label: "Name" },
   { key: "action",     label: "Action" },
+  { key: "controller", label: "Controller Debug" },
   { key: "middleware", label: "Middleware" },
   { key: "patterns",   label: "Patterns" },
   { key: "registered", label: "Registered Via" },
@@ -62,6 +63,36 @@ export function RoutesView({ payload, sourceMode }: { payload: Payload; sourceMo
       route.action
         ? <TruncCell value={route.action} maxW="max-w-[180px]" />
         : <span className="text-muted-foreground text-xs">—</span>,
+
+      route.controller_target ? (
+        <div className="flex min-w-[180px] flex-col gap-1">
+          <Badge
+            variant={route.controller_target.accessible_from_route ? "default" : "destructive"}
+            className="h-5 w-fit rounded-sm font-mono text-[0.6rem]"
+          >
+            {route.controller_target.status}
+          </Badge>
+          <TruncCell
+            value={`${route.controller_target.controller}@${route.controller_target.method}`}
+            maxW="max-w-[220px]"
+          />
+          {route.controller_target.method_declared_in && route.controller_target.method_line ? (
+            <LocCell
+              file={route.controller_target.method_declared_in}
+              line={route.controller_target.method_line}
+              col={1}
+              root={root}
+            />
+          ) : null}
+          {route.controller_target.notes.map((note, index) => (
+            <span key={index} className="text-[0.68rem] text-muted-foreground">
+              {note}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <span className="text-muted-foreground text-xs">—</span>
+      ),
 
       /* Middleware */
       mw.length ? (

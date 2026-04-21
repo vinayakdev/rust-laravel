@@ -59,7 +59,7 @@ pub fn render_route_table(routes: &[RouteEntry]) -> String {
             Cell::new(route.methods.join("|")),
             wrap_cell(&route.uri, widths.uri),
             wrap_cell(route.name.as_deref().unwrap_or("-"), widths.name),
-            wrap_cell(route.action.as_deref().unwrap_or("-"), widths.action),
+            wrap_cell(&display_action(route), widths.action),
             wrap_cell(&display_middleware(route), widths.middleware),
             wrap_cell(&display_patterns(route), widths.patterns),
             wrap_cell(
@@ -125,6 +125,16 @@ fn display_middleware(route: &RouteEntry) -> String {
         &route.resolved_middleware
     };
     join_or_dash(values)
+}
+
+fn display_action(route: &RouteEntry) -> String {
+    let Some(action) = route.action.as_deref() else {
+        return "-".to_string();
+    };
+    match route.controller_target.as_ref() {
+        Some(target) if target.status != "ok" => format!("{action} [{}]", target.status),
+        _ => action.to_string(),
+    }
 }
 
 fn display_patterns(route: &RouteEntry) -> String {

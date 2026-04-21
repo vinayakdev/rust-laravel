@@ -33,6 +33,7 @@ import { RoutesView } from "@/components/app/views/routes-view"
 import { RouteCompareView } from "@/components/app/views/route-compare-view"
 import { MiddlewareView } from "@/components/app/views/middleware-view"
 import { ConfigView } from "@/components/app/views/config-view"
+import { ControllersView } from "@/components/app/views/controllers-view"
 import { ProvidersView } from "@/components/app/views/providers-view"
 import { ViewsView } from "@/components/app/views/views-view"
 import { ModelsView } from "@/components/app/views/models-view"
@@ -41,6 +42,7 @@ import type { CommandId, Payload, Project } from "@/lib/types"
 import {
   IconAlertTriangle,
   IconBox,
+  IconBracketsContain,
   IconBrandLaravel,
   IconDatabase,
   IconEye,
@@ -70,6 +72,7 @@ const COMMANDS: CommandDef[] = [
   { id: "middleware:list", label: "Middleware",      description: "Aliases, groups, and route parameter patterns",   icon: IconShieldLock, group: "Routing" },
   { id: "config:list",     label: "Config",          description: "Collected config values and env defaults",         icon: IconSettings,   group: "Application" },
   { id: "config:sources",  label: "Config Sources",  description: "Config keys with provider and origin",            icon: IconSettings,   group: "Application" },
+  { id: "controller:list", label: "Controllers",     description: "Controller methods, traits, inheritance, and route callability", icon: IconBracketsContain, group: "Application" },
   { id: "provider:list",   label: "Providers",       description: "Service provider registration inventory",         icon: IconBox,        group: "Application" },
   { id: "view:list",       label: "Views",           description: "Blade views, components, and Livewire",           icon: IconEye,        group: "Application" },
   { id: "model:list",      label: "Models",          description: "Eloquent model inventory",                        icon: IconDatabase,   group: "Data" },
@@ -325,6 +328,7 @@ function ReportView({ payload }: { payload: Payload }) {
     case "middleware:list":return <MiddlewareView payload={payload} />
     case "config:list":    return <ConfigView payload={payload} sourceMode={false} />
     case "config:sources": return <ConfigView payload={payload} sourceMode={true} />
+    case "controller:list": return <ControllersView payload={payload} />
     case "provider:list":  return <ProvidersView payload={payload} />
     case "view:list":      return <ViewsView payload={payload} />
     case "model:list":     return <ModelsView payload={payload} />

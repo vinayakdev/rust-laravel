@@ -1,4 +1,5 @@
 pub mod configs;
+pub mod controllers;
 pub mod middleware;
 pub mod migrations;
 pub mod models;
