@@ -180,34 +180,35 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
         return json!({ "isIncomplete": false, "items": [] });
     };
 
-    let items = if let Some(context) = detect_symbol_context(source, line, character) {
+    let (items, is_incomplete) = if let Some(context) = detect_symbol_context(source, line, character)
+    {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=symbol prefix={:?}",
             line, character, context.prefix
         ));
-        query::complete(index, &context, line)
+        (query::complete(index, &context, line), true)
     } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=route-action kind={:?} controller={:?} prefix={:?}",
             line, character, context.kind, context.controller, context.prefix
         ));
-        query::complete_route_actions(index, &context, line)
+        (query::complete_route_actions(index, &context, line), true)
     } else if let Some(context) = detect_helper_context(uri, source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=helper prefix={:?}",
             line, character, context.prefix
         ));
-        query::helper_snippets(&context, line)
+        (query::helper_snippets(&context, line), true)
     } else {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=none",
             line, character
         ));
-        Vec::new()
+        (Vec::new(), false)
     };
 
     json!({
-        "isIncomplete": false,
+        "isIncomplete": is_incomplete,
         "items": items,
     })
 }
@@ -490,7 +491,7 @@ mod tests {
     use crate::lsp::overrides::FileOverrides;
     use crate::project;
 
-    use super::{ServerState, diagnostic_result};
+    use super::{ServerState, completion_result, diagnostic_result};
 
     fn sandbox_project() -> project::LaravelProject {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -547,6 +548,57 @@ mod tests {
             saved
                 .pointer("/items")
                 .and_then(|v| v.as_array())
+                .map(|items| !items.is_empty())
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn keeps_symbol_completion_lists_live_for_retriggering() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let uri = format!(
+            "file://{}",
+            project
+                .root
+                .join("app/Http/Controllers/WebsiteController.php")
+                .display()
+        );
+        let source = "<?php\n\nreturn route('health');\n".to_string();
+        let character = source
+            .lines()
+            .nth(2)
+            .and_then(|line| line.find("health"))
+            .expect("route token should exist")
+            + "hea".len();
+
+        let state = ServerState {
+            project_root: Some(project.root.clone()),
+            project: Some(project),
+            index: Some(index),
+            documents: HashMap::from([(uri.clone(), source)]),
+            dirty_documents: HashSet::new(),
+            shutdown_requested: false,
+            exiting: false,
+        };
+
+        let result = completion_result(
+            &state,
+            Some(&json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": 2, "character": character }
+            })),
+        );
+
+        assert_eq!(
+            result.get("isIncomplete").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(
+            result
+                .pointer("/items")
+                .and_then(|value| value.as_array())
                 .map(|items| !items.is_empty())
                 .unwrap_or(false)
         );

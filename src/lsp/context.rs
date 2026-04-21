@@ -55,10 +55,7 @@ pub fn detect_symbol_context(source: &str, line: usize, character: usize) -> Opt
     let inner_start = quote_start + quote_char.len_utf8();
     let inner_end = quote_end;
 
-    if cursor < inner_start
-        || cursor > inner_end
-        || (cursor == inner_end && inner_start != inner_end)
-    {
+    if cursor < inner_start || cursor > inner_end {
         return None;
     }
 
@@ -517,7 +514,29 @@ fn is_inside_blade_php(source: &str, line: usize, cursor: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RouteActionKind, detect_route_action_context};
+    use super::{RouteActionKind, SymbolKind, detect_route_action_context, detect_symbol_context};
+
+    #[test]
+    fn detects_symbol_context_at_end_of_non_empty_string() {
+        let source = "return config('a');";
+        let character = source.find("');").expect("closing quote should exist");
+        let context = detect_symbol_context(source, 0, character).expect("symbol context");
+
+        assert_eq!(context.kind, SymbolKind::Config);
+        assert_eq!(context.full_text, "a");
+        assert_eq!(context.prefix, "a");
+    }
+
+    #[test]
+    fn detects_symbol_context_at_end_of_dotted_string() {
+        let source = "return route('resources.');";
+        let character = source.find("');").expect("closing quote should exist");
+        let context = detect_symbol_context(source, 0, character).expect("symbol context");
+
+        assert_eq!(context.kind, SymbolKind::Route);
+        assert_eq!(context.full_text, "resources.");
+        assert_eq!(context.prefix, "resources.");
+    }
 
     #[test]
     fn detects_array_controller_method_context() {
