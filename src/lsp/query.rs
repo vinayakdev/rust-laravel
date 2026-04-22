@@ -3,13 +3,14 @@ use std::cmp::Reverse;
 use std::path::Path;
 
 use super::context::{
-    HelperContext, HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
-    ViewDataContext, ViewDataKind,
+    BladeVariableContext, HelperContext, HelperStyle, RouteActionContext, RouteActionKind,
+    SymbolContext, SymbolKind, ViewDataContext, ViewDataKind,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
 use crate::types::{
     ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry, ViewEntry,
+    ViewVariable,
 };
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
@@ -58,6 +59,19 @@ pub fn complete_view_data_variables(
     matches
         .into_iter()
         .map(|(_, _, name)| view_data_variable_completion(&name, context, line))
+        .collect()
+}
+
+pub fn complete_blade_view_variables(
+    index: &ProjectIndex,
+    file: &Path,
+    context: &BladeVariableContext,
+    line: usize,
+) -> Vec<Value> {
+    index
+        .blade_variables_for_file(file, &context.prefix)
+        .into_iter()
+        .map(|variable| blade_view_variable_completion(variable, context, line))
         .collect()
 }
 
@@ -431,6 +445,35 @@ fn view_data_variable_completion(name: &str, context: &ViewDataContext, line: us
                 "end": { "line": line, "character": context.end_character },
             },
             "newText": name,
+        }
+    })
+}
+
+fn blade_view_variable_completion(
+    variable: &ViewVariable,
+    context: &BladeVariableContext,
+    line: usize,
+) -> Value {
+    let detail = variable
+        .default_value
+        .as_ref()
+        .map(|value| format!("Blade view variable = {value}"))
+        .unwrap_or_else(|| "Blade view variable".to_string());
+    json!({
+        "label": format!("${}", variable.name),
+        "filterText": variable.name,
+        "kind": 6,
+        "detail": detail,
+        "documentation": {
+            "kind": "markdown",
+            "value": format!("`${}`\n- available in the current Blade view", variable.name),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": variable.name,
         }
     })
 }
@@ -1223,15 +1266,17 @@ mod tests {
     use serde_json::json;
 
     use crate::lsp::context::{
-        HelperContext, HelperStyle, detect_route_action_context, detect_symbol_context,
+        HelperContext, HelperStyle, detect_blade_variable_context, detect_route_action_context,
+        detect_symbol_context,
     };
     use crate::lsp::index::ProjectIndex;
     use crate::lsp::overrides::FileOverrides;
     use crate::project;
 
     use super::{
-        complete_route_actions, complete_view_data_variables, definitions, helper_snippets, hover,
-        route_action_code_actions, route_action_definitions, route_diagnostics,
+        complete_blade_view_variables, complete_route_actions, complete_view_data_variables,
+        definitions, helper_snippets, hover, route_action_code_actions, route_action_definitions,
+        route_diagnostics,
     };
 
     fn sandbox_project() -> project::LaravelProject {
@@ -1285,7 +1330,10 @@ class ViewController
 {
     public function __invoke()
     {
-        return view('admin.users.index');
+        $headline = 'Team';
+        $cta = 'Invite';
+
+        return view('admin.users.index', compact('headline', 'cta'), ['version' => 2]);
     }
 }
 "#,
@@ -1671,5 +1719,61 @@ class DemoController
         assert!(labels.contains(&"examples"));
         assert!(labels.contains(&"breadcrumbs"));
         assert!(labels.contains(&"requestFilters"));
+    }
+
+    #[test]
+    fn completes_indexed_view_variables_inside_blade_echo_and_php_blocks() {
+        let project = view_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let file = Path::new("resources/views/admin/users/index.blade.php");
+        let source = "<div>\n    {{ $ }}\n    @php\n        $he\n    @endphp\n</div>\n";
+
+        let echo_line = source
+            .lines()
+            .position(|line| line.contains("{{ $ }}"))
+            .expect("echo line should exist");
+        let echo_text = source.lines().nth(echo_line).expect("line should exist");
+        let echo_character = echo_text.find("$ ").expect("dollar should exist") + 1;
+        let echo_context = detect_blade_variable_context(
+            "file:///tmp/resources/views/admin/users/index.blade.php",
+            source,
+            echo_line,
+            echo_character,
+        )
+        .expect("blade echo variable context");
+
+        let echo_items = complete_blade_view_variables(&index, file, &echo_context, echo_line);
+        let echo_labels = echo_items
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(echo_labels.contains(&"$headline"));
+        assert!(echo_labels.contains(&"$cta"));
+        assert!(echo_labels.contains(&"$version"));
+
+        let php_line = source
+            .lines()
+            .position(|line| line.contains("$he"))
+            .expect("php line should exist");
+        let php_text = source.lines().nth(php_line).expect("line should exist");
+        let php_character = php_text.find("$he").expect("prefix should exist") + "$he".len();
+        let php_context = detect_blade_variable_context(
+            "file:///tmp/resources/views/admin/users/index.blade.php",
+            source,
+            php_line,
+            php_character,
+        )
+        .expect("blade php variable context");
+
+        let php_items = complete_blade_view_variables(&index, file, &php_context, php_line);
+        let php_labels = php_items
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(php_labels.contains(&"$headline"));
+        assert!(!php_labels.contains(&"$cta"));
     }
 }

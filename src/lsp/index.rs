@@ -7,7 +7,7 @@ use crate::php::env::load_env_entries_with;
 use crate::project::LaravelProject;
 use crate::types::{
     ConfigItem, ConfigReport, ControllerEntry, ControllerMethodEntry, ControllerReport, EnvItem,
-    RouteEntry, RouteReport, ViewEntry, ViewReport,
+    RouteEntry, RouteReport, ViewEntry, ViewReport, ViewVariable,
 };
 
 use super::overrides::FileOverrides;
@@ -233,6 +233,31 @@ impl ProjectIndex {
             .get(name)
             .into_iter()
             .flat_map(|indices| indices.iter().map(|index| &self.view_report.views[*index]))
+            .collect()
+    }
+
+    pub fn blade_variables_for_file<'a>(
+        &'a self,
+        file: &std::path::Path,
+        prefix: &str,
+    ) -> Vec<&'a ViewVariable> {
+        let mut matches = self
+            .view_report
+            .views
+            .iter()
+            .filter(|view| view.file == file)
+            .flat_map(|view| view.props.iter().chain(view.variables.iter()))
+            .filter_map(|variable| {
+                let score = fuzzy_score(&variable.name, prefix)?;
+                Some((score, variable.name.len(), variable.name.as_str(), variable))
+            })
+            .collect::<Vec<_>>();
+
+        matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, *label));
+        matches.dedup_by(|left, right| left.2 == right.2);
+        matches
+            .into_iter()
+            .map(|(_, _, _, variable)| variable)
             .collect()
     }
 

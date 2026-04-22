@@ -30,6 +30,13 @@ pub struct ViewDataContext {
     pub cursor_offset: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct BladeVariableContext {
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HelperStyle {
     Php,
@@ -121,6 +128,31 @@ pub fn detect_view_data_context(
         start_character: byte_index_to_character_in_line(source, inner_start),
         end_character: byte_index_to_character_in_line(source, inner_end),
         cursor_offset: cursor,
+    })
+}
+
+pub fn detect_blade_variable_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<BladeVariableContext> {
+    if !uri.ends_with(".blade.php") {
+        return None;
+    }
+
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+
+    if !is_inside_blade_echo(line_text, cursor) && !is_inside_blade_php(source, line, cursor) {
+        return None;
+    }
+
+    let (name_start, name_end) = find_dollar_variable_name_bounds(line_text, cursor)?;
+    Some(BladeVariableContext {
+        prefix: line_text[name_start..cursor.min(name_end)].to_string(),
+        start_character: line_text[..name_start].chars().count(),
+        end_character: line_text[..name_end].chars().count(),
     })
 }
 
@@ -493,6 +525,36 @@ fn find_identifier_bounds(text: &str, cursor: usize) -> Option<(usize, usize)> {
     } else {
         Some((start, end))
     }
+}
+
+fn find_dollar_variable_name_bounds(text: &str, cursor: usize) -> Option<(usize, usize)> {
+    if cursor > text.len() {
+        return None;
+    }
+
+    let mut start = cursor;
+    while start > 0 {
+        let ch = text[..start].chars().next_back()?;
+        if !is_identifier_char(ch) {
+            break;
+        }
+        start -= ch.len_utf8();
+    }
+
+    if start == 0 || text[..start].chars().next_back()? != '$' {
+        return None;
+    }
+
+    let mut end = cursor;
+    while end < text.len() {
+        let ch = text[end..].chars().next()?;
+        if !is_identifier_char(ch) {
+            break;
+        }
+        end += ch.len_utf8();
+    }
+
+    Some((start, end))
 }
 
 fn is_identifier_char(ch: char) -> bool {

@@ -7,8 +7,8 @@ use std::time::Instant;
 use serde_json::{Value, json};
 
 use super::context::{
-    detect_helper_context, detect_route_action_context, detect_symbol_context,
-    detect_view_data_context,
+    detect_blade_variable_context, detect_helper_context, detect_route_action_context,
+    detect_symbol_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -194,6 +194,23 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
             query::complete_view_data_variables(source, &context, line),
             true,
         )
+    } else if let Some(context) = detect_blade_variable_context(uri, source, line, character) {
+        let relative = file_uri_to_path(uri).and_then(|path| {
+            path.strip_prefix(&index.project_root)
+                .ok()
+                .map(PathBuf::from)
+        });
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=blade-variable prefix={:?}",
+            line, character, context.prefix
+        ));
+        (
+            relative
+                .as_deref()
+                .map(|file| query::complete_blade_view_variables(index, file, &context, line))
+                .unwrap_or_default(),
+            true,
+        )
     } else if let Some(context) = detect_symbol_context(source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=symbol prefix={:?}",
@@ -347,7 +364,7 @@ fn initialize_result() -> Value {
             },
             "completionProvider": {
                 "resolveProvider": false,
-                "triggerCharacters": ["'", "\"", ".", "(", "@", "[", ","]
+                "triggerCharacters": ["'", "\"", ".", "(", "@", "[", ",", "$"]
             },
             "definitionProvider": true,
             "hoverProvider": true,
@@ -682,6 +699,57 @@ mod tests {
         assert!(labels.contains(&"flashMessage"));
         assert!(labels.contains(&"internalAuditLog"));
         assert!(labels.contains(&"draftInvoice"));
+    }
+
+    #[test]
+    fn completes_blade_view_variables_from_lsp_request() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let uri = format!(
+            "file://{}",
+            project
+                .root
+                .join("resources/views/ide-lab/orders.blade.php")
+                .display()
+        );
+        let source =
+            "<div>\n    {{ $ }}\n    @php\n        $ord\n    @endphp\n</div>\n".to_string();
+        let line_index = source
+            .lines()
+            .position(|line| line.contains("{{ $ }}"))
+            .expect("blade echo line should exist");
+        let line_text = source.lines().nth(line_index).expect("line should exist");
+        let character = line_text.find("$ ").expect("dollar should exist") + 1;
+
+        let state = ServerState {
+            project_root: Some(project.root.clone()),
+            project: Some(project),
+            index: Some(index),
+            documents: HashMap::from([(uri.clone(), source)]),
+            dirty_documents: HashSet::new(),
+            shutdown_requested: false,
+            exiting: false,
+        };
+
+        let result = completion_result(
+            &state,
+            Some(&json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line_index, "character": character }
+            })),
+        );
+
+        let labels = result
+            .pointer("/items")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"$orders"));
+        assert!(labels.contains(&"$filters"));
     }
 }
 
