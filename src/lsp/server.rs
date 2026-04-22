@@ -118,7 +118,9 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                 log_lsp_event(format!("didSave uri={uri} dirty=false"));
                 if !document_is_reindexable(state, uri) {
                     state.parse_failed_documents.insert(uri.to_string());
-                    log_lsp_event(format!("didSave uri={uri} reindex=skipped reason=parse-error"));
+                    log_lsp_event(format!(
+                        "didSave uri={uri} reindex=skipped reason=parse-error"
+                    ));
                     if let Some(source) = state.documents.get(uri) {
                         log_php_parse_errors(uri, source, "didSave");
                     }
@@ -142,7 +144,9 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                 state.parse_failed_documents.remove(uri);
                 log_lsp_event(format!("didClose uri={uri}"));
                 if parse_failed {
-                    log_lsp_event(format!("didClose uri={uri} reindex=skipped reason=parse-error"));
+                    log_lsp_event(format!(
+                        "didClose uri={uri} reindex=skipped reason=parse-error"
+                    ));
                 } else if uri_affects_index(state, uri) {
                     reindex_for_uri(state, uri);
                 }
@@ -892,8 +896,10 @@ mod tests {
             "file:///tmp/routes/web.php",
             "<?php\nRoute::get('/', fn() => ;\n"
         ));
-        let errors =
-            php_document_parse_errors("file:///tmp/routes/web.php", "<?php\nRoute::get('/', fn() => ;\n");
+        let errors = php_document_parse_errors(
+            "file:///tmp/routes/web.php",
+            "<?php\nRoute::get('/', fn() => ;\n",
+        );
         assert!(!errors.is_empty());
         assert!(errors[0].contains("error:"));
         assert!(errors[0].contains("/tmp/routes/web.php:2:"));
