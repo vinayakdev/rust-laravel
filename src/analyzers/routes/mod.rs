@@ -67,7 +67,3 @@ pub(crate) fn collect_registered_route_paths(
         context.overrides(),
     )
 }
-
-pub(crate) fn reindex_guard_reason(source: &[u8]) -> Option<&'static str> {
-    rust_php_routes::reindex_guard_reason(source)
-}

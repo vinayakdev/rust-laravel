@@ -1072,10 +1072,13 @@ dependencies = [
  "php-parser",
  "rust-php-configs",
  "rust-php-controllers",
+ "rust-php-debug",
  "rust-php-foundation",
+ "rust-php-lsp",
  "rust-php-middleware",
  "rust-php-migrations",
  "rust-php-models",
+ "rust-php-output",
  "rust-php-routes",
  "rust-php-views",
  "serde",
@@ -1104,12 +1107,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-php-debug"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "rust-php-configs",
+ "rust-php-controllers",
+ "rust-php-foundation",
+ "rust-php-middleware",
+ "rust-php-migrations",
+ "rust-php-models",
+ "rust-php-output",
+ "rust-php-routes",
+ "rust-php-views",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rust-php-foundation"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
  "php-parser",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rust-php-lsp"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-configs",
+ "rust-php-controllers",
+ "rust-php-foundation",
+ "rust-php-middleware",
+ "rust-php-routes",
+ "rust-php-views",
  "serde_json",
 ]
 
@@ -1142,6 +1178,22 @@ dependencies = [
  "rust-php-foundation",
  "rust-php-migrations",
  "serde",
+]
+
+[[package]]
+name = "rust-php-output"
+version = "0.1.0"
+dependencies = [
+ "comfy-table",
+ "rust-php-configs",
+ "rust-php-controllers",
+ "rust-php-foundation",
+ "rust-php-middleware",
+ "rust-php-migrations",
+ "rust-php-models",
+ "rust-php-routes",
+ "rust-php-views",
+ "serde_json",
 ]
 
 [[package]]

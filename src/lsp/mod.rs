@@ -1,7 +1,8 @@
-pub mod context;
-pub mod index;
-pub(crate) mod overrides;
-pub mod query;
-mod server;
+pub use rust_php_lsp::context;
+pub use rust_php_lsp::index;
+pub use rust_php_lsp::query;
+pub use rust_php_lsp::run_stdio;
 
-pub use server::run_stdio;
+pub mod overrides {
+    pub use rust_php_foundation::overrides::FileOverrides;
+}
