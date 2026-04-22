@@ -1,12 +1,18 @@
-id = "rust-php-laravel"
-name = "rust-php Laravel"
-version = "0.0.1"
+id = "rust-laravel"
+name = "Rust Laravel"
+version = "0.1.0"
 schema_version = 1
-authors = ["hotdogb"]
+authors = ["vinayakdev"]
 description = "Laravel route/config navigation and completion powered by rust-php."
-repository = "https://github.com/hotdogb/rust-php"
+repository = "https://github.com/vinayakdev/rust-laravel"
+languages = []
+capabilities = []
+
+[lib]
+kind = "Rust"
+version = "0.7.0"
 
 [language_servers.rust-php-lsp]
-name = "rust-php-lsp"
-languages = ["PHP", "Blade"]
+language = "PHP"
+languages = ["Blade"]
 language_ids = { PHP = "php", Blade = "blade" }
