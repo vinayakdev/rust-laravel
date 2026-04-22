@@ -255,7 +255,11 @@ fn serve_web_asset(stream: &mut TcpStream, relative_path: &str) -> Result<(), St
 }
 
 fn web_dist_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .ancestors()
+        .find(|dir| dir.join("web").is_dir())
+        .unwrap_or(manifest_dir)
         .join("web")
         .join("out")
 }
