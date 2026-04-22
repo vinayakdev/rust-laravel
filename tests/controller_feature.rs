@@ -60,6 +60,50 @@ fn controller_report_flattens_class_trait_and_parent_methods() {
         docs.accessibility,
         "static methods are not callable as controller actions"
     );
+
+    let blade_sandbox = report
+        .controllers
+        .iter()
+        .find(|controller| controller.fqn == "App\\Http\\Controllers\\BladeSandboxController")
+        .expect("BladeSandboxController should be discovered");
+
+    let orders = blade_sandbox
+        .methods
+        .iter()
+        .find(|method| method.name == "orders")
+        .expect("orders method should exist");
+    let order_vars = orders
+        .variables
+        .iter()
+        .map(|variable| variable.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(order_vars.contains(&"pageTitle"));
+    assert!(order_vars.contains(&"currentUser"));
+    assert!(order_vars.contains(&"orders"));
+    assert!(order_vars.contains(&"stats"));
+    assert!(order_vars.contains(&"filters"));
+    assert!(order_vars.contains(&"teamMembers"));
+    assert!(order_vars.contains(&"breadcrumbs"));
+    assert!(order_vars.contains(&"flashMessage"));
+    assert!(order_vars.contains(&"internalAuditLog"));
+    assert!(order_vars.contains(&"draftInvoice"));
+
+    let components = blade_sandbox
+        .methods
+        .iter()
+        .find(|method| method.name == "components")
+        .expect("components method should exist");
+    let component_vars = components
+        .variables
+        .iter()
+        .map(|variable| variable.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(component_vars.contains(&"pageTitle"));
+    assert!(component_vars.contains(&"currentUser"));
+    assert!(component_vars.contains(&"summary"));
+    assert!(component_vars.contains(&"metrics"));
+    assert!(component_vars.contains(&"tone"));
+    assert!(component_vars.contains(&"hiddenExperiment"));
 }
 
 #[test]

@@ -11,7 +11,8 @@ use crate::php::ast::{byte_offset_to_line_col, span_text, strip_root};
 use crate::php::psr4::{Psr4Mapping, collect_psr4_mappings};
 use crate::project::LaravelProject;
 use crate::types::{
-    ControllerEntry, ControllerMethodEntry, ControllerReport, RouteControllerTarget,
+    ControllerEntry, ControllerMethodEntry, ControllerReport, ControllerVariableEntry,
+    RouteControllerTarget,
 };
 
 #[derive(Clone)]
@@ -20,6 +21,7 @@ struct MethodDef {
     line: usize,
     visibility: String,
     is_static: bool,
+    variables: Vec<ControllerVariableEntry>,
 }
 
 #[derive(Clone)]
@@ -51,6 +53,7 @@ struct FlattenedMethod {
     is_static: bool,
     source_kind: String,
     source_name: String,
+    variables: Vec<ControllerVariableEntry>,
 }
 
 pub fn analyze(project: &LaravelProject) -> Result<ControllerReport, String> {
@@ -231,6 +234,7 @@ fn build_controller_entry(
                 source_name: method.source_name,
                 accessible_from_route,
                 accessibility,
+                variables: method.variables,
             }
         })
         .collect::<Vec<_>>();
@@ -321,6 +325,7 @@ fn collect_class_methods(
                     "class".to_string()
                 },
                 source_name: def.fqn.clone(),
+                variables: method.variables.clone(),
             });
         }
     }
@@ -378,6 +383,7 @@ fn collect_trait_methods(
                     "trait".to_string()
                 },
                 source_name: def.fqn.clone(),
+                variables: method.variables.clone(),
             });
         }
     }
@@ -567,6 +573,7 @@ fn collect_methods(members: &[ClassMember<'_>], source: &[u8]) -> Vec<MethodDef>
             continue;
         };
         let (line, _) = byte_offset_to_line_col(source, span.start);
+        let method_source = span_text(*span, source);
         let modifier_text = modifiers
             .iter()
             .map(|token| span_text(token.span, source))
@@ -585,10 +592,249 @@ fn collect_methods(members: &[ClassMember<'_>], source: &[u8]) -> Vec<MethodDef>
             line,
             visibility,
             is_static,
+            variables: extract_method_variables(&method_source),
         });
     }
 
     methods
+}
+
+fn extract_method_variables(source: &str) -> Vec<ControllerVariableEntry> {
+    let mut variables = extract_method_parameters(source);
+    variables.extend(extract_method_assignments(source));
+
+    let mut seen = BTreeSet::new();
+    variables.retain(|variable| seen.insert((variable.name.clone(), variable.source_kind.clone())));
+    variables
+}
+
+fn extract_method_parameters(source: &str) -> Vec<ControllerVariableEntry> {
+    let Some(signature_start) = source.find('(') else {
+        return Vec::new();
+    };
+    let Some(signature_end) = find_matching_delimiter(source, signature_start, '(', ')') else {
+        return Vec::new();
+    };
+
+    split_top_level(&source[signature_start + 1..signature_end], ',')
+        .into_iter()
+        .filter_map(|part| extract_dollar_variable_name(&part))
+        .map(|name| ControllerVariableEntry {
+            name,
+            source_kind: "parameter".to_string(),
+        })
+        .collect()
+}
+
+fn extract_method_assignments(source: &str) -> Vec<ControllerVariableEntry> {
+    let Some(body_start) = source.find('{') else {
+        return Vec::new();
+    };
+    let Some(body_end) = find_matching_delimiter(source, body_start, '{', '}') else {
+        return Vec::new();
+    };
+    let body = &source[body_start + 1..body_end];
+
+    let mut variables = Vec::new();
+    let bytes = body.as_bytes();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+
+        if index > 0 {
+            let prev = body[..index].chars().next_back().unwrap_or(' ');
+            if prev.is_ascii_alphanumeric() || prev == '_' {
+                index += 1;
+                continue;
+            }
+        }
+
+        let rest = &body[index + 1..];
+        let name_len = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if name_len == 0 {
+            index += 1;
+            continue;
+        }
+
+        let name = &rest[..name_len];
+        let after_name = &rest[name_len..];
+        let trimmed = after_name.trim_start();
+        if trimmed.starts_with("->") || trimmed.starts_with("::") {
+            index += 1 + name_len;
+            continue;
+        }
+        if trimmed.starts_with('=') {
+            let mut chars = trimmed.chars();
+            chars.next();
+            if chars.next() != Some('=') && name != "this" {
+                variables.push(ControllerVariableEntry {
+                    name: name.to_string(),
+                    source_kind: "local".to_string(),
+                });
+            }
+        }
+
+        index += 1 + name_len;
+    }
+
+    variables
+}
+
+fn extract_dollar_variable_name(text: &str) -> Option<String> {
+    let dollar = text.find('$')?;
+    let after = &text[dollar + 1..];
+    let name: String = after
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .collect();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+fn find_matching_delimiter(
+    source: &str,
+    open_index: usize,
+    open: char,
+    close: char,
+) -> Option<usize> {
+    if source[open_index..].chars().next()? != open {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for (relative, ch) in source[open_index..].char_indices() {
+        let index = open_index + relative;
+
+        if in_single {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+
+        if in_double {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => in_single = true,
+            '"' => in_double = true,
+            _ if ch == open => depth += 1,
+            _ if ch == close => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn split_top_level(source: &str, separator: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for ch in source.chars() {
+        if in_single {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+        if in_double {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_single = true;
+                current.push(ch);
+            }
+            '"' => {
+                in_double = true;
+                current.push(ch);
+            }
+            '(' => {
+                paren += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren = paren.saturating_sub(1);
+                current.push(ch);
+            }
+            '[' => {
+                bracket += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket = bracket.saturating_sub(1);
+                current.push(ch);
+            }
+            '{' => {
+                brace += 1;
+                current.push(ch);
+            }
+            '}' => {
+                brace = brace.saturating_sub(1);
+                current.push(ch);
+            }
+            _ if ch == separator && paren == 0 && bracket == 0 && brace == 0 => {
+                parts.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+
+    parts
 }
 
 fn collect_trait_uses(

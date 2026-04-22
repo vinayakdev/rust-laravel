@@ -6,7 +6,10 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use super::context::{detect_helper_context, detect_route_action_context, detect_symbol_context};
+use super::context::{
+    detect_helper_context, detect_route_action_context, detect_symbol_context,
+    detect_view_data_context,
+};
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
 use super::query;
@@ -180,8 +183,18 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
         return json!({ "isIncomplete": false, "items": [] });
     };
 
-    let (items, is_incomplete) = if let Some(context) = detect_symbol_context(source, line, character)
+    let (items, is_incomplete) = if let Some(context) =
+        detect_view_data_context(uri, source, line, character)
     {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=view-data prefix={:?}",
+            line, character, context.prefix
+        ));
+        (
+            query::complete_view_data_variables(source, &context, line),
+            true,
+        )
+    } else if let Some(context) = detect_symbol_context(source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=symbol prefix={:?}",
             line, character, context.prefix
@@ -602,6 +615,73 @@ mod tests {
                 .map(|items| !items.is_empty())
                 .unwrap_or(false)
         );
+    }
+
+    #[test]
+    fn completes_local_view_variables_inside_compact_strings() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let uri = format!(
+            "file://{}",
+            project
+                .root
+                .join("app/Http/Controllers/BladeSandboxController.php")
+                .display()
+        );
+        let source = std::fs::read_to_string(
+            project
+                .root
+                .join("app/Http/Controllers/BladeSandboxController.php"),
+        )
+        .expect("controller should load");
+        let source = source.replace(
+            "compact('pageTitle', 'currentUser', 'orders', 'filters')",
+            "compact('')",
+        );
+        let line_index = source
+            .lines()
+            .position(|line| line.contains("compact('')"))
+            .expect("compact line should exist");
+        let line_text = source.lines().nth(line_index).expect("line should exist");
+        let character = line_text.find("''").expect("compact token should exist") + 1;
+
+        let state = ServerState {
+            project_root: Some(project.root.clone()),
+            project: Some(project),
+            index: Some(index),
+            documents: HashMap::from([(uri.clone(), source)]),
+            dirty_documents: HashSet::new(),
+            shutdown_requested: false,
+            exiting: false,
+        };
+
+        let result = completion_result(
+            &state,
+            Some(&json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line_index, "character": character }
+            })),
+        );
+
+        let labels = result
+            .pointer("/items")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"currentUser"));
+        assert!(labels.contains(&"pageTitle"));
+        assert!(labels.contains(&"orders"));
+        assert!(labels.contains(&"filters"));
+        assert!(labels.contains(&"stats"));
+        assert!(labels.contains(&"teamMembers"));
+        assert!(labels.contains(&"breadcrumbs"));
+        assert!(labels.contains(&"flashMessage"));
+        assert!(labels.contains(&"internalAuditLog"));
+        assert!(labels.contains(&"draftInvoice"));
     }
 }
 

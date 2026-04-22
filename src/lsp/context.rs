@@ -6,6 +6,11 @@ pub enum SymbolKind {
     View,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewDataKind {
+    CompactVariable,
+}
+
 #[derive(Clone, Debug)]
 pub struct SymbolContext {
     pub kind: SymbolKind,
@@ -13,6 +18,16 @@ pub struct SymbolContext {
     pub prefix: String,
     pub start_character: usize,
     pub end_character: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ViewDataContext {
+    pub kind: ViewDataKind,
+    pub full_text: String,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+    pub cursor_offset: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +85,42 @@ pub fn detect_symbol_context(source: &str, line: usize, character: usize) -> Opt
         prefix,
         start_character: line_text[..inner_start].chars().count(),
         end_character: line_text[..inner_end].chars().count(),
+    })
+}
+
+pub fn detect_view_data_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<ViewDataContext> {
+    if !uri.ends_with(".php") {
+        return None;
+    }
+
+    let cursor = source_position_to_byte_index(source, line, character)?;
+    let (quote_start, quote_char) = find_quote_start(source, cursor)?;
+    let quote_end = find_quote_end(source, quote_start + quote_char.len_utf8(), quote_char)?;
+    let inner_start = quote_start + quote_char.len_utf8();
+    let inner_end = quote_end;
+
+    if cursor < inner_start || cursor > inner_end {
+        return None;
+    }
+
+    let before = &source[..quote_start];
+    let compact: String = before.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if !compact.ends_with("compact(") {
+        return None;
+    }
+
+    Some(ViewDataContext {
+        kind: ViewDataKind::CompactVariable,
+        full_text: source[inner_start..inner_end].to_string(),
+        prefix: source[inner_start..cursor.min(inner_end)].to_string(),
+        start_character: byte_index_to_character_in_line(source, inner_start),
+        end_character: byte_index_to_character_in_line(source, inner_end),
+        cursor_offset: cursor,
     })
 }
 
@@ -511,7 +562,10 @@ fn is_inside_blade_php(source: &str, line: usize, cursor: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{RouteActionKind, SymbolKind, detect_route_action_context, detect_symbol_context};
+    use super::{
+        RouteActionKind, SymbolKind, ViewDataKind, detect_route_action_context,
+        detect_symbol_context, detect_view_data_context,
+    };
 
     #[test]
     fn detects_symbol_context_at_end_of_non_empty_string() {
@@ -557,7 +611,10 @@ mod tests {
                 .expect("route action context");
 
         assert_eq!(context.kind, RouteActionKind::ControllerMethodArray);
-        assert_eq!(context.controller.as_deref(), Some("VirtualOfficeController"));
+        assert_eq!(
+            context.controller.as_deref(),
+            Some("VirtualOfficeController")
+        );
         assert_eq!(context.full_text, "index");
         assert_eq!(context.prefix, "index");
     }
@@ -571,7 +628,10 @@ mod tests {
                 .expect("route action context");
 
         assert_eq!(context.kind, RouteActionKind::ControllerMethodArray);
-        assert_eq!(context.controller.as_deref(), Some("VirtualOfficeController"));
+        assert_eq!(
+            context.controller.as_deref(),
+            Some("VirtualOfficeController")
+        );
         assert_eq!(context.full_text, "");
         assert_eq!(context.prefix, "");
     }
@@ -653,5 +713,27 @@ mod tests {
         assert_eq!(context.controller.as_deref(), Some("SitemapController"));
         assert_eq!(context.full_text, "ssdssdsddsdme3dds");
         assert_eq!(context.prefix, "ss");
+    }
+
+    #[test]
+    fn detects_compact_variable_context_inside_multiline_view_call() {
+        let source =
+            "<?php\n\nreturn view(\n    'demo',\n    compact(\n        'currentUs'\n    )\n);\n";
+        let line = 5;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character =
+            line_text.find("currentUs").expect("token should exist") + "currentUs".len();
+
+        let context = detect_view_data_context(
+            "file:///tmp/app/Http/Controllers/DemoController.php",
+            source,
+            line,
+            character,
+        )
+        .expect("view data context");
+
+        assert_eq!(context.kind, ViewDataKind::CompactVariable);
+        assert_eq!(context.full_text, "currentUs");
+        assert_eq!(context.prefix, "currentUs");
     }
 }

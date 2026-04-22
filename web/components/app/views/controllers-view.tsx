@@ -22,6 +22,44 @@ function MethodBadge({
   )
 }
 
+function MethodVariables({
+  name,
+  callable,
+  variables,
+}: {
+  name: string
+  callable: boolean
+  variables: { name: string; source_kind: string }[]
+}) {
+  return (
+    <div className="flex min-w-[220px] flex-col gap-1 rounded-md border border-border/60 p-2">
+      <div className="flex items-center gap-2">
+        <MethodBadge label={name} callable={callable} />
+        <span className="text-[0.65rem] text-muted-foreground">
+          {variables.length ? `${variables.length} vars` : "No vars"}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-1">
+        {variables.length ? (
+          variables.map((variable) => (
+            <Badge
+              key={`${name}:${variable.name}:${variable.source_kind}`}
+              variant="outline"
+              className="h-4 rounded-sm text-[0.6rem]"
+            >
+              {variable.name}
+              <span className="ml-1 text-muted-foreground">[{variable.source_kind}]</span>
+            </Badge>
+          ))
+        ) : (
+          <span className="text-xs text-muted-foreground">No parameters or local assignments</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function ControllersView({ payload }: { payload: Payload }) {
   const report = payload.report as ControllerReport
   const root = payload.root as string | undefined
@@ -78,6 +116,21 @@ export function ControllersView({ payload }: { payload: Payload }) {
           <span className="text-xs text-muted-foreground">No blocked methods</span>
         )}
       </div>,
+
+      <div className="flex min-w-[320px] flex-col gap-2">
+        {controller.methods.length ? (
+          controller.methods.map((method) => (
+            <MethodVariables
+              key={`${controller.fqn}:${method.name}:variables`}
+              name={method.name}
+              callable={method.accessible_from_route}
+              variables={method.variables}
+            />
+          ))
+        ) : (
+          <span className="text-xs text-muted-foreground">No methods</span>
+        )}
+      </div>,
     ]
   })
 
@@ -90,6 +143,7 @@ export function ControllersView({ payload }: { payload: Payload }) {
         { key: "shape", label: "Extends / Traits" },
         { key: "callable", label: "Route Callable" },
         { key: "blocked", label: "Not Route Callable" },
+        { key: "variables", label: "Variables By Function" },
       ]}
       rows={rows}
       note="Route-callable means a public non-static method. Constructors, non-public methods, static methods, and magic methods other than __invoke are flagged."

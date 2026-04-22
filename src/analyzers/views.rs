@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 
 use crate::analyzers::providers;
 use crate::analyzers::routes;
-use crate::php::ast::{expr_name, expr_to_path, expr_to_string, expr_to_string_list, strip_root};
+use crate::php::ast::{
+    byte_offset_to_line_col, expr_name, expr_to_path, expr_to_string, expr_to_string_list,
+    span_text, strip_root,
+};
 use crate::php::psr4::{collect_psr4_mappings, resolve_class_file, resolve_namespace_dir};
 use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
@@ -24,7 +27,8 @@ pub fn analyze(project: &LaravelProject) -> Result<ViewReport, String> {
     let mut view_namespaces = default_view_namespaces(project);
 
     let mut views = collect_app_views(project)?;
-    let mut blade_components = collect_default_blade_components(project, &mappings, &view_namespaces)?;
+    let mut blade_components =
+        collect_default_blade_components(project, &mappings, &view_namespaces)?;
     let mut livewire_components =
         collect_conventional_livewire_components(project, &mappings, &view_namespaces)?;
 
@@ -688,7 +692,9 @@ fn extract_view_usages_from_php(
     let mut parser = Parser::new(lexer, &arena);
     let program = parser.parse_program();
     if !program.errors.is_empty() {
-        return Ok(Vec::new());
+        return Ok(extract_view_usages_from_php_fallback(
+            project, file, &source,
+        ));
     }
 
     let imports = build_import_map(program.statements, &source);
@@ -702,6 +708,109 @@ fn extract_view_usages_from_php(
         &mut usages,
     );
     Ok(usages)
+}
+
+fn extract_view_usages_from_php_fallback(
+    project: &LaravelProject,
+    file: &Path,
+    source: &[u8],
+) -> Vec<(String, ViewUsage)> {
+    const PATTERNS: [(&str, &str); 5] = [
+        ("response()->view(", "response-view"),
+        ("View::make(", "view-facade-make"),
+        ("View::first(", "view-facade-first"),
+        ("Route::view(", "route-view"),
+        ("view(", "view-call"),
+    ];
+
+    let text = String::from_utf8_lossy(source);
+    let mut usages = Vec::new();
+    let mut offset = 0usize;
+
+    while offset < text.len() {
+        let mut matched = None;
+        for (prefix, kind) in PATTERNS {
+            if text[offset..].starts_with(prefix) {
+                matched = Some((prefix, kind));
+                break;
+            }
+        }
+
+        let Some((prefix, kind)) = matched else {
+            offset += 1;
+            continue;
+        };
+
+        let open_index = offset + prefix.len() - 1;
+        let Some(close_index) = find_matching_delimiter(&text, open_index, '(', ')') else {
+            offset += prefix.len();
+            continue;
+        };
+
+        let args_body = &text[open_index + 1..close_index];
+        let args = split_top_level(args_body, ',');
+        let view_names = match kind {
+            "route-view" => args
+                .get(1)
+                .map(|arg| extract_string_list_from_text(arg))
+                .unwrap_or_default(),
+            "view-facade-first" => args
+                .first()
+                .map(|arg| extract_string_list_from_text(arg))
+                .unwrap_or_default(),
+            _ => args
+                .first()
+                .and_then(|arg| extract_string_literal(arg))
+                .into_iter()
+                .collect(),
+        };
+
+        if view_names.is_empty() {
+            offset = close_index + 1;
+            continue;
+        }
+
+        let start_index = if kind == "route-view" { 2 } else { 1 };
+        let mut variables = args
+            .iter()
+            .skip(start_index)
+            .flat_map(|arg| extract_passed_variables_from_text(arg))
+            .collect::<Vec<_>>();
+
+        let mut chain_index = skip_ascii_whitespace(&text, close_index + 1);
+        while text[chain_index..].starts_with("->with(") {
+            let with_open = chain_index + "->with".len();
+            let Some(with_close) = find_matching_delimiter(&text, with_open, '(', ')') else {
+                break;
+            };
+            let with_body = &text[with_open + 1..with_close];
+            variables.extend(extract_with_variables_from_text(&split_top_level(
+                with_body, ',',
+            )));
+            chain_index = skip_ascii_whitespace(&text, with_close + 1);
+        }
+
+        dedup_variables(&mut variables);
+        let (line, column) = byte_offset_to_line_col(source, offset);
+        let usage = ViewUsage {
+            kind: kind.to_string(),
+            source: ViewSource {
+                declared_in: strip_root(&project.root, file),
+                line,
+                column,
+                provider_class: None,
+            },
+            variables,
+        };
+
+        for view_name in view_names {
+            usages.push((view_name, usage.clone()));
+        }
+
+        offset = chain_index.max(close_index + 1);
+    }
+
+    usages
 }
 
 fn collect_view_usages_from_stmts(
@@ -754,9 +863,7 @@ fn collect_view_usages_from_stmts(
             } => {
                 collect_view_usages_from_stmts(then_block, source, project, file, imports, out);
                 if let Some(else_block) = else_block {
-                    collect_view_usages_from_stmts(
-                        else_block, source, project, file, imports, out,
-                    );
+                    collect_view_usages_from_stmts(else_block, source, project, file, imports, out);
                 }
             }
             Stmt::While { body, .. }
@@ -840,6 +947,14 @@ fn extract_view_invocation(
         } => {
             let method_name = expr_name(method, source)?;
             match method_name.as_str() {
+                "with" => {
+                    let mut invocation = extract_view_invocation(target, source, imports)?;
+                    invocation
+                        .variables
+                        .extend(extract_with_variables(&args, source));
+                    dedup_variables(&mut invocation.variables);
+                    Some(invocation)
+                }
                 "view" if is_response_helper_call(target, source) => Some(ViewInvocation {
                     kind: "response-view".to_string(),
                     view_names: args
@@ -958,7 +1073,12 @@ fn is_view_factory_class(class_name: Option<&str>) -> bool {
 fn is_route_class(class_name: Option<&str>) -> bool {
     matches!(
         class_name,
-        Some("Route" | "\\Route" | "Illuminate\\Support\\Facades\\Route" | "\\Illuminate\\Support\\Facades\\Route")
+        Some(
+            "Route"
+                | "\\Route"
+                | "Illuminate\\Support\\Facades\\Route"
+                | "\\Illuminate\\Support\\Facades\\Route"
+        )
     )
 }
 
@@ -983,12 +1103,8 @@ fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable
                     .key
                     .and_then(|key| expr_to_string(key, source))
                     .or_else(|| {
-                        item.key.map(|key| {
-                            crate::php::ast::span_text(key.span(), source)
-                                .trim_matches('\'')
-                                .trim_matches('"')
-                                .to_string()
-                        })
+                        item.key
+                            .map(|key| trim_quotes(&span_text(key.span(), source)).to_string())
                     })?;
                 Some(ViewVariable {
                     name: key,
@@ -1016,16 +1132,95 @@ fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable
                 dedup_variables(&mut merged);
                 return merged;
             }
-            Vec::new()
+            extract_passed_variables_from_text(&span_text(expr.span(), source))
         }
-        _ => Vec::new(),
+        _ => extract_passed_variables_from_text(&span_text(expr.span(), source)),
     }
 }
 
+fn extract_passed_variables_from_text(expr: &str) -> Vec<ViewVariable> {
+    let trimmed = strip_wrapping_parens(expr.trim());
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let plus_parts = split_top_level(trimmed, '+');
+    if plus_parts.len() > 1 {
+        let mut merged = plus_parts
+            .into_iter()
+            .flat_map(|part| extract_passed_variables_from_text(&part))
+            .collect::<Vec<_>>();
+        dedup_variables(&mut merged);
+        return merged;
+    }
+
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        return parse_array_like_variables(&trimmed[1..trimmed.len() - 1]);
+    }
+
+    if let Some(body) = extract_function_call_body(trimmed, &["compact", "\\compact"]) {
+        return split_top_level(body, ',')
+            .into_iter()
+            .filter_map(|part| extract_string_literal(&part))
+            .map(|name| ViewVariable {
+                name,
+                default_value: None,
+            })
+            .collect();
+    }
+
+    if let Some(body) = extract_function_call_body(trimmed, &["array_merge", "\\array_merge"]) {
+        let mut merged = split_top_level(body, ',')
+            .into_iter()
+            .flat_map(|part| extract_passed_variables_from_text(&part))
+            .collect::<Vec<_>>();
+        dedup_variables(&mut merged);
+        return merged;
+    }
+
+    Vec::new()
+}
+
+fn extract_with_variables(args: &[php_parser::ast::Arg<'_>], source: &[u8]) -> Vec<ViewVariable> {
+    if args.len() >= 2 {
+        if let Some(name) = expr_to_string(args[0].value, source) {
+            return vec![ViewVariable {
+                name,
+                default_value: expr_literal_default(args[1].value, source),
+            }];
+        }
+    }
+
+    let mut variables = extract_passed_variables_from_args(args, 0, source);
+    dedup_variables(&mut variables);
+    variables
+}
+
+fn extract_with_variables_from_text(args: &[String]) -> Vec<ViewVariable> {
+    if args.len() >= 2 {
+        if let Some(name) = extract_string_literal(&args[0]) {
+            return vec![ViewVariable {
+                name,
+                default_value: literal_default_from_text(&args[1]),
+            }];
+        }
+    }
+
+    let mut variables = args
+        .iter()
+        .flat_map(|arg| extract_passed_variables_from_text(arg))
+        .collect::<Vec<_>>();
+    dedup_variables(&mut variables);
+    variables
+}
+
 fn expr_literal_default(expr: ExprId<'_>, source: &[u8]) -> Option<String> {
-    let raw = crate::php::ast::span_text(expr.span(), source)
-        .trim()
-        .to_string();
+    let raw = span_text(expr.span(), source).trim().to_string();
+    literal_default_from_text(&raw)
+}
+
+fn literal_default_from_text(raw: &str) -> Option<String> {
+    let raw = raw.trim().to_string();
     if raw.is_empty() || raw.starts_with('$') {
         return None;
     }
@@ -1232,6 +1427,63 @@ fn extract_balanced_segment(source: &str, open: char, close: char) -> Option<&st
     None
 }
 
+fn find_matching_delimiter(
+    source: &str,
+    open_index: usize,
+    open: char,
+    close: char,
+) -> Option<usize> {
+    if source[open_index..].chars().next()? != open {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for (relative, ch) in source[open_index..].char_indices() {
+        let index = open_index + relative;
+
+        if in_single {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+
+        if in_double {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => in_single = true,
+            '"' => in_double = true,
+            _ if ch == open => depth += 1,
+            _ if ch == close => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
 fn split_top_level(source: &str, separator: char) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
@@ -1312,6 +1564,76 @@ fn split_top_level(source: &str, separator: char) -> Vec<String> {
     }
 
     parts
+}
+
+fn strip_wrapping_parens(mut value: &str) -> &str {
+    loop {
+        let trimmed = value.trim();
+        if !trimmed.starts_with('(') {
+            return trimmed;
+        }
+        let Some(end) = find_matching_delimiter(trimmed, 0, '(', ')') else {
+            return trimmed;
+        };
+        if end != trimmed.len() - 1 {
+            return trimmed;
+        }
+        value = &trimmed[1..end];
+    }
+}
+
+fn extract_function_call_body<'a>(source: &'a str, names: &[&str]) -> Option<&'a str> {
+    let trimmed = strip_wrapping_parens(source);
+    for name in names {
+        let Some(rest) = trimmed.strip_prefix(name) else {
+            continue;
+        };
+        if !rest.starts_with('(') {
+            continue;
+        }
+        let open_index = trimmed.len() - rest.len();
+        let close_index = find_matching_delimiter(trimmed, open_index, '(', ')')?;
+        if close_index == trimmed.len() - 1 {
+            return trimmed.get(open_index + 1..close_index);
+        }
+    }
+    None
+}
+
+fn extract_string_literal(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.len() < 2 {
+        return None;
+    }
+    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+    {
+        return Some(trim_quotes(trimmed).to_string());
+    }
+    None
+}
+
+fn extract_string_list_from_text(value: &str) -> Vec<String> {
+    let trimmed = strip_wrapping_parens(value.trim());
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        return split_top_level(&trimmed[1..trimmed.len() - 1], ',')
+            .into_iter()
+            .filter_map(|entry| extract_string_literal(&entry))
+            .collect();
+    }
+
+    extract_string_literal(trimmed).into_iter().collect()
+}
+
+fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {
+    while index < source.len() {
+        let ch = source[index..].chars().next().unwrap_or('\0');
+        if !ch.is_ascii_whitespace() {
+            break;
+        }
+        index += ch.len_utf8();
+    }
+    index
 }
 
 fn trim_quotes(value: &str) -> &str {

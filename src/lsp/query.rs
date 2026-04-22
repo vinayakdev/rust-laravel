@@ -1,13 +1,16 @@
-use std::cmp::Reverse;
 use serde_json::{Value, json};
+use std::cmp::Reverse;
 use std::path::Path;
 
 use super::context::{
     HelperContext, HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
+    ViewDataContext, ViewDataKind,
 };
-use super::index::fuzzy_score;
 use super::index::ProjectIndex;
-use crate::types::{ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry, ViewEntry};
+use super::index::fuzzy_score;
+use crate::types::{
+    ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry, ViewEntry,
+};
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
     match context.kind {
@@ -32,6 +35,30 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
             .map(|view| view_completion(view, context, line))
             .collect(),
     }
+}
+
+pub fn complete_view_data_variables(
+    source: &str,
+    context: &ViewDataContext,
+    line: usize,
+) -> Vec<Value> {
+    let candidates = match context.kind {
+        ViewDataKind::CompactVariable => local_view_data_variables(source, context.cursor_offset),
+    };
+
+    let mut matches = candidates
+        .into_iter()
+        .filter_map(|name| {
+            let score = fuzzy_score(&name, &context.prefix)?;
+            Some((score, name.len(), name))
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by_key(|(score, len, label)| (Reverse(*score), *len, label.clone()));
+    matches
+        .into_iter()
+        .map(|(_, _, name)| view_data_variable_completion(&name, context, line))
+        .collect()
 }
 
 pub fn helper_snippets(context: &HelperContext, line: usize) -> Vec<Value> {
@@ -387,6 +414,25 @@ fn helper_completion(helper: &HelperSpec, context: &HelperContext, line: usize) 
     }
 
     item
+}
+
+fn view_data_variable_completion(name: &str, context: &ViewDataContext, line: usize) -> Value {
+    json!({
+        "label": name,
+        "kind": 6,
+        "detail": "Local variable in current function",
+        "documentation": {
+            "kind": "markdown",
+            "value": format!("`{name}`\n- available as a local variable in the current controller method"),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": name,
+        }
+    })
 }
 
 fn controller_completion(
@@ -878,6 +924,253 @@ fn ranked_helper_specs(query: &str) -> Vec<&'static HelperSpec> {
         .collect()
 }
 
+fn local_view_data_variables(source: &str, cursor: usize) -> Vec<String> {
+    let Some((signature_start, body_start, body_end)) = enclosing_function_bounds(source, cursor)
+    else {
+        return Vec::new();
+    };
+
+    let mut names = extract_function_parameters(&source[signature_start..body_start]);
+    names.extend(extract_assigned_variables(&source[body_start..body_end]));
+    names.retain(|name| name != "this");
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn enclosing_function_bounds(source: &str, cursor: usize) -> Option<(usize, usize, usize)> {
+    let before = &source[..cursor.min(source.len())];
+    let function_start = before.rfind("function")?;
+    let signature = &source[function_start..];
+    let open_paren_rel = signature.find('(')?;
+    let open_paren = function_start + open_paren_rel;
+    let close_paren = find_matching_delimiter(source, open_paren, '(', ')')?;
+    let body_start = source[close_paren..]
+        .find('{')
+        .map(|rel| close_paren + rel)?;
+    let body_end = find_matching_delimiter(source, body_start, '{', '}')?;
+
+    if cursor < body_start || cursor > body_end {
+        return None;
+    }
+
+    Some((function_start, body_start + 1, body_end))
+}
+
+fn extract_function_parameters(signature: &str) -> Vec<String> {
+    let Some(open_paren) = signature.find('(') else {
+        return Vec::new();
+    };
+    let Some(close_paren) = find_matching_delimiter(signature, open_paren, '(', ')') else {
+        return Vec::new();
+    };
+
+    split_top_level(&signature[open_paren + 1..close_paren], ',')
+        .into_iter()
+        .filter_map(|part| extract_dollar_variable_name(&part))
+        .collect()
+}
+
+fn extract_assigned_variables(body: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let bytes = body.as_bytes();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+        if index > 0 {
+            let prev = body[..index].chars().next_back().unwrap_or(' ');
+            if prev.is_ascii_alphanumeric() || prev == '_' {
+                index += 1;
+                continue;
+            }
+        }
+
+        let rest = &body[index + 1..];
+        let name_len = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if name_len == 0 {
+            index += 1;
+            continue;
+        }
+
+        let name = &rest[..name_len];
+        let after_name = &rest[name_len..];
+        let trimmed = after_name.trim_start();
+        if trimmed.starts_with("->") || trimmed.starts_with("::") {
+            index += 1;
+            continue;
+        }
+        if trimmed.starts_with('=') {
+            let mut chars = trimmed.chars();
+            chars.next();
+            let next = chars.next();
+            if next != Some('=') {
+                names.push(name.to_string());
+            }
+        }
+
+        index += 1 + name_len;
+    }
+
+    names
+}
+
+fn extract_dollar_variable_name(text: &str) -> Option<String> {
+    let dollar = text.find('$')?;
+    let after = &text[dollar + 1..];
+    let name: String = after
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .collect();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+fn find_matching_delimiter(
+    source: &str,
+    open_index: usize,
+    open: char,
+    close: char,
+) -> Option<usize> {
+    if source[open_index..].chars().next()? != open {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for (relative, ch) in source[open_index..].char_indices() {
+        let index = open_index + relative;
+
+        if in_single {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+
+        if in_double {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => in_single = true,
+            '"' => in_double = true,
+            _ if ch == open => depth += 1,
+            _ if ch == close => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn split_top_level(source: &str, separator: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for ch in source.chars() {
+        if in_single {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+        if in_double {
+            current.push(ch);
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_single = true;
+                current.push(ch);
+            }
+            '"' => {
+                in_double = true;
+                current.push(ch);
+            }
+            '(' => {
+                paren += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren = paren.saturating_sub(1);
+                current.push(ch);
+            }
+            '[' => {
+                bracket += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket = bracket.saturating_sub(1);
+                current.push(ch);
+            }
+            '{' => {
+                brace += 1;
+                current.push(ch);
+            }
+            '}' => {
+                brace = brace.saturating_sub(1);
+                current.push(ch);
+            }
+            _ if ch == separator && paren == 0 && bracket == 0 && brace == 0 => {
+                parts.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+
+    parts
+}
+
 fn location_link(
     project_root: &std::path::Path,
     relative_file: &std::path::Path,
@@ -937,8 +1230,8 @@ mod tests {
     use crate::project;
 
     use super::{
-        complete_route_actions, definitions, helper_snippets, hover, route_action_code_actions,
-        route_action_definitions, route_diagnostics,
+        complete_route_actions, complete_view_data_variables, definitions, helper_snippets, hover,
+        route_action_code_actions, route_action_definitions, route_diagnostics,
     };
 
     fn sandbox_project() -> project::LaravelProject {
@@ -1095,7 +1388,8 @@ Route::get('/dashboard', function () {
             .expect("home completion should exist");
 
         assert_eq!(
-            home.pointer("/textEdit/newText").and_then(|value| value.as_str()),
+            home.pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
             Some("home")
         );
         assert_eq!(
@@ -1283,11 +1577,7 @@ Route::get('/dashboard', function () {
                 "dashboard.home",
                 "routes/web.php",
             ),
-            (
-                "return env('APP_DEBUG');",
-                "APP_DEBUG",
-                ".env",
-            ),
+            ("return env('APP_DEBUG');", "APP_DEBUG", ".env"),
         ];
 
         for (source, token, target_suffix) in cases {
@@ -1334,5 +1624,52 @@ Route::get('/dashboard', function () {
             .collect::<Vec<_>>();
 
         assert!(labels.contains(&"asset"));
+    }
+
+    #[test]
+    fn completes_local_controller_variables_inside_compact_strings() {
+        let source = r#"<?php
+
+class DemoController
+{
+    public function index(array $requestFilters)
+    {
+        $pageTitle = 'Blade IDE Sandbox';
+        $currentUser = ['name' => 'Maya'];
+        $examples = [];
+        $breadcrumbs = ['Home'];
+
+        return view('ide-lab.index', compact(''));
+    }
+}
+"#;
+        let line = source
+            .lines()
+            .position(|line| line.contains("compact('')"))
+            .expect("compact line should exist");
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text
+            .find("''")
+            .expect("empty compact token should exist")
+            + 1;
+        let context = crate::lsp::context::detect_view_data_context(
+            "file:///tmp/app/Http/Controllers/DemoController.php",
+            source,
+            line,
+            character,
+        )
+        .expect("view data context");
+
+        let items = complete_view_data_variables(source, &context, line);
+        let labels = items
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"currentUser"));
+        assert!(labels.contains(&"pageTitle"));
+        assert!(labels.contains(&"examples"));
+        assert!(labels.contains(&"breadcrumbs"));
+        assert!(labels.contains(&"requestFilters"));
     }
 }

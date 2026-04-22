@@ -69,7 +69,10 @@ impl ProjectIndex {
         }
 
         for (index, view) in view_report.views.iter().enumerate() {
-            view_by_name.entry(view.name.clone()).or_default().push(index);
+            view_by_name
+                .entry(view.name.clone())
+                .or_default()
+                .push(index);
         }
 
         Ok(Self {
@@ -99,7 +102,9 @@ impl ProjectIndex {
     }
 
     pub fn env_matches<'a>(&'a self, prefix: &str) -> Vec<&'a EnvItem> {
-        ranked_index_matches(self.env_by_key.iter(), prefix, |index| &self.env_items[index])
+        ranked_index_matches(self.env_by_key.iter(), prefix, |index| {
+            &self.env_items[index]
+        })
     }
 
     pub fn config_definitions<'a>(&'a self, key: &str) -> Vec<&'a ConfigItem> {
@@ -148,12 +153,20 @@ impl ProjectIndex {
                 let score = fuzzy_score(&controller.class_name, prefix)
                     .max(fuzzy_score(&controller.fqn, prefix))
                     .max(fuzzy_score(short_name, prefix))?;
-                Some((score, controller.class_name.len(), controller.class_name.as_str(), controller))
+                Some((
+                    score,
+                    controller.class_name.len(),
+                    controller.class_name.as_str(),
+                    controller,
+                ))
             })
             .collect::<Vec<_>>();
 
         matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, *label));
-        matches.into_iter().map(|(_, _, _, controller)| controller).collect()
+        matches
+            .into_iter()
+            .map(|(_, _, _, controller)| controller)
+            .collect()
     }
 
     pub fn controller_definitions<'a>(&'a self, controller: &str) -> Vec<&'a ControllerEntry> {
@@ -174,7 +187,13 @@ impl ProjectIndex {
                     .filter(move |method| method.accessible_from_route)
                     .filter_map(move |method| {
                         let score = fuzzy_score(&method.name, prefix)?;
-                        Some((score, method.name.len(), method.name.as_str(), controller, method))
+                        Some((
+                            score,
+                            method.name.len(),
+                            method.name.as_str(),
+                            controller,
+                            method,
+                        ))
                     })
             })
             .collect::<Vec<_>>();
@@ -213,11 +232,7 @@ impl ProjectIndex {
         self.view_by_name
             .get(name)
             .into_iter()
-            .flat_map(|indices| {
-                indices
-                    .iter()
-                    .map(|index| &self.view_report.views[*index])
-            })
+            .flat_map(|indices| indices.iter().map(|index| &self.view_report.views[*index]))
             .collect()
     }
 

@@ -86,6 +86,16 @@ class ViewDebugFixtures
         );
     }
 
+    public function chained(): ViewContract
+    {
+        return view(
+            'welcome',
+            compact('headline') + ['cta' => 'Launch']
+        )->with([
+            'version' => 2,
+        ])->with('status', 'ready');
+    }
+
     public function facadeMake(): ViewContract
     {
         return View::make('demo::page', ['posts' => $posts], compact('filters'));
@@ -177,8 +187,16 @@ class DemoPanel extends Component
 "#,
     );
 
-    write_file(&root, "resources/views/welcome.blade.php", "<div>Welcome</div>\n");
-    write_file(&root, "module/resources/views/page.blade.php", "<div>Page</div>\n");
+    write_file(
+        &root,
+        "resources/views/welcome.blade.php",
+        "<div>Welcome</div>\n",
+    );
+    write_file(
+        &root,
+        "module/resources/views/page.blade.php",
+        "<div>Page</div>\n",
+    );
     write_file(
         &root,
         "module/resources/views/components/card.blade.php",
@@ -217,25 +235,80 @@ fn view_report_collects_real_world_view_entry_points_and_missing_targets() {
         .iter()
         .find(|view| view.name == "welcome")
         .expect("welcome view should exist");
-    assert!(welcome.variables.iter().any(|variable| variable.name == "headline"));
-    assert!(welcome.variables.iter().any(|variable| variable.name == "cta"));
-    assert!(welcome.variables.iter().any(|variable| variable.name == "version"));
-    assert!(welcome.variables.iter().any(|variable| variable.name == "status"));
-    assert!(welcome.variables.iter().any(|variable| variable.name == "routeFlag"));
+    assert!(
+        welcome
+            .variables
+            .iter()
+            .any(|variable| variable.name == "headline")
+    );
+    assert!(
+        welcome
+            .variables
+            .iter()
+            .any(|variable| variable.name == "cta")
+    );
+    assert!(
+        welcome
+            .variables
+            .iter()
+            .any(|variable| variable.name == "version")
+    );
+    assert!(
+        welcome
+            .variables
+            .iter()
+            .any(|variable| variable.name == "status")
+    );
+    assert!(
+        welcome
+            .variables
+            .iter()
+            .any(|variable| variable.name == "routeFlag")
+    );
     assert!(welcome.usages.iter().any(|usage| usage.kind == "view-call"));
-    assert!(welcome.usages.iter().any(|usage| usage.kind == "view-facade-first"));
-    assert!(welcome.usages.iter().any(|usage| usage.kind == "route-view"));
+    assert!(
+        welcome
+            .usages
+            .iter()
+            .any(|usage| usage.kind == "view-facade-first")
+    );
+    assert!(
+        welcome
+            .usages
+            .iter()
+            .any(|usage| usage.kind == "route-view")
+    );
 
     let page = report
         .views
         .iter()
         .find(|view| view.name == "demo::page")
         .expect("demo::page should exist");
-    assert!(page.variables.iter().any(|variable| variable.name == "posts"));
-    assert!(page.variables.iter().any(|variable| variable.name == "filters"));
-    assert!(page.variables.iter().any(|variable| variable.name == "subject"));
-    assert!(page.usages.iter().any(|usage| usage.kind == "view-facade-make"));
-    assert!(page.usages.iter().any(|usage| usage.kind == "response-view"));
+    assert!(
+        page.variables
+            .iter()
+            .any(|variable| variable.name == "posts")
+    );
+    assert!(
+        page.variables
+            .iter()
+            .any(|variable| variable.name == "filters")
+    );
+    assert!(
+        page.variables
+            .iter()
+            .any(|variable| variable.name == "subject")
+    );
+    assert!(
+        page.usages
+            .iter()
+            .any(|usage| usage.kind == "view-facade-make")
+    );
+    assert!(
+        page.usages
+            .iter()
+            .any(|usage| usage.kind == "response-view")
+    );
 
     let missing_route = report
         .missing_views
@@ -246,17 +319,22 @@ fn view_report_collects_real_world_view_entry_points_and_missing_targets() {
         missing_route.expected_file,
         Path::new("resources/views/vendor/pages/home.blade.php")
     );
-    assert!(missing_route
-        .usages
-        .iter()
-        .any(|usage| usage.kind == "route-view"));
+    assert!(
+        missing_route
+            .usages
+            .iter()
+            .any(|usage| usage.kind == "route-view")
+    );
 
     let ghost = report
         .missing_views
         .iter()
         .find(|view| view.name == "ghost.page")
         .expect("ghost.page should be tracked as missing");
-    assert_eq!(ghost.expected_file, Path::new("resources/views/ghost/page.blade.php"));
+    assert_eq!(
+        ghost.expected_file,
+        Path::new("resources/views/ghost/page.blade.php")
+    );
     assert!(ghost.usages.iter().any(|usage| usage.kind == "view-call"));
 
     let fallback = report
@@ -264,10 +342,12 @@ fn view_report_collects_real_world_view_entry_points_and_missing_targets() {
         .iter()
         .find(|view| view.name == "missing-page")
         .expect("View::first should preserve missing candidates");
-    assert!(fallback
-        .usages
-        .iter()
-        .any(|usage| usage.kind == "view-facade-first"));
+    assert!(
+        fallback
+            .usages
+            .iter()
+            .any(|usage| usage.kind == "view-facade-first")
+    );
 }
 
 #[test]
@@ -286,7 +366,9 @@ fn view_report_resolves_namespaced_component_view_files_from_load_views_from() {
         .expect("demo::card component should exist");
     assert_eq!(
         demo_card.view_file.as_deref(),
-        Some(Path::new("module/resources/views/components/card.blade.php"))
+        Some(Path::new(
+            "module/resources/views/components/card.blade.php"
+        ))
     );
 
     let demo_panel = report
@@ -297,5 +379,148 @@ fn view_report_resolves_namespaced_component_view_files_from_load_views_from() {
     assert_eq!(
         demo_panel.view_file.as_deref(),
         Some(Path::new("module/resources/views/livewire/panel.blade.php"))
+    );
+}
+
+fn build_broken_view_fixture_project() -> project::LaravelProject {
+    let root = unique_temp_project_root();
+    fs::create_dir_all(&root).expect("fixture root should exist");
+
+    write_file(
+        &root,
+        "composer.json",
+        r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+    );
+
+    write_file(
+        &root,
+        "config/app.php",
+        r#"<?php
+
+return [
+    'name' => 'fixture',
+];
+"#,
+    );
+
+    write_file(&root, "routes/web.php", "<?php\n");
+
+    write_file(
+        &root,
+        "app/Http/Controllers/BrokenBladeController.php",
+        r#"<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Contracts\View\View;
+
+class BrokenBladeController
+{
+    public function orders(): View
+    {
+        $pageTitle = 'Orders Overview';
+        $currentUser = (object) ['name' => 'Maya'];
+        $orders = [];
+        $filters = [];
+        $stats = [];
+        $teamMembers = [];
+        $breadcrumbs = ['Home', 'Orders'];
+        $flashMessage = 'synced';
+
+        return view(
+            'ide-lab.orders',
+            compact('pageTitle, 'currentUser', 'orders', 'filters')
+            + [
+                'breadcrumbs' => $breadcrumbs,
+                'flashMessage' => $flashMessage,
+            ],
+        )->with([
+            'stats' => $stats,
+            'teamMembers' => $teamMembers,
+            'activeTab' => 'orders',
+        ]);
+    }
+
+    public function components(): View
+    {
+        $pageTitle = 'Components Showcase';
+        $currentUser = (object) ['name' => 'Maya Chen'];
+        $summary = (object) ['title' => 'Quarterly pipeline'];
+        $metrics = [['title' => 'Open tickets', 'value' => 14]];
+        $tone = 'info';
+        $hiddenExperiment = 'not passed to the view';
+
+        return view('ide-lab.components', compact('pageTitle', 'currentUser', 'summary', 'metrics'))->with(
+            'tone',
+            $tone,
+        );
+    }
+}
+"#,
+    );
+
+    write_file(
+        &root,
+        "resources/views/ide-lab/components.blade.php",
+        "<div>{{ $pageTitle }}</div>\n",
+    );
+
+    project::from_root(root).expect("fixture project should resolve")
+}
+
+#[test]
+fn view_report_recovers_later_valid_view_calls_when_a_php_file_has_parse_errors() {
+    let report = run_with_large_stack(|| {
+        let project = build_broken_view_fixture_project();
+        views::analyze(&project).expect("view analysis should succeed")
+    });
+
+    let components = report
+        .views
+        .iter()
+        .find(|view| view.name == "ide-lab.components")
+        .expect("components view should exist");
+
+    assert!(
+        components
+            .variables
+            .iter()
+            .any(|variable| variable.name == "pageTitle")
+    );
+    assert!(
+        components
+            .variables
+            .iter()
+            .any(|variable| variable.name == "currentUser")
+    );
+    assert!(
+        components
+            .variables
+            .iter()
+            .any(|variable| variable.name == "summary")
+    );
+    assert!(
+        components
+            .variables
+            .iter()
+            .any(|variable| variable.name == "metrics")
+    );
+    assert!(
+        components
+            .variables
+            .iter()
+            .any(|variable| variable.name == "tone")
+    );
+    assert!(
+        !components
+            .variables
+            .iter()
+            .any(|variable| variable.name == "hiddenExperiment")
     );
 }

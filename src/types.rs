@@ -101,6 +101,12 @@ pub struct ProviderReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ControllerVariableEntry {
+    pub name: String,
+    pub source_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ControllerMethodEntry {
     pub name: String,
     pub declared_in: PathBuf,
@@ -111,6 +117,7 @@ pub struct ControllerMethodEntry {
     pub source_name: String,
     pub accessible_from_route: bool,
     pub accessibility: String,
+    pub variables: Vec<ControllerVariableEntry>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -121,6 +121,12 @@ export type ControllerMethodEntry = {
   source_name: string
   accessible_from_route: boolean
   accessibility: string
+  variables: ControllerVariableEntry[]
+}
+
+export type ControllerVariableEntry = {
+  name: string
+  source_kind: string
 }
 
 export type ControllerEntry = {

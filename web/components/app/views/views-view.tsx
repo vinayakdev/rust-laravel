@@ -11,7 +11,7 @@ function VarBadges({ vars }: { vars: ViewVariable[] }) {
     <div className="flex flex-wrap gap-0.5">
       {vars.map((v, i) => (
         <Badge key={i} variant="outline" className="h-4 rounded-sm font-mono text-[0.6rem]">
-          {v.default_value != null ? `${v.name}=${v.default_value}` : v.name}
+          {v.name}
         </Badge>
       ))}
     </div>
