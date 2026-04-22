@@ -66,17 +66,84 @@ type CommandDef = {
 }
 
 const COMMANDS: CommandDef[] = [
-  { id: "route:list",      label: "Routes",         description: "Resolved route table with middleware and patterns", icon: IconRoute,      group: "Routing" },
-  { id: "route:compare",   label: "Route Compare",  description: "Compare analyzer vs artisan runtime output",       icon: IconGitCompare, group: "Routing" },
-  { id: "route:sources",   label: "Route Sources",  description: "Route registration origin attribution",            icon: IconTimeline,   group: "Routing" },
-  { id: "middleware:list", label: "Middleware",      description: "Aliases, groups, and route parameter patterns",   icon: IconShieldLock, group: "Routing" },
-  { id: "config:list",     label: "Config",          description: "Collected config values and env defaults",         icon: IconSettings,   group: "Application" },
-  { id: "config:sources",  label: "Config Sources",  description: "Config keys with provider and origin",            icon: IconSettings,   group: "Application" },
-  { id: "controller:list", label: "Controllers",     description: "Controller methods, traits, inheritance, and route callability", icon: IconBracketsContain, group: "Application" },
-  { id: "provider:list",   label: "Providers",       description: "Service provider registration inventory",         icon: IconBox,        group: "Application" },
-  { id: "view:list",       label: "Views",           description: "Blade views, components, and Livewire",           icon: IconEye,        group: "Application" },
-  { id: "model:list",      label: "Models",          description: "Eloquent model inventory",                        icon: IconDatabase,   group: "Data" },
-  { id: "migration:list",  label: "Migrations",      description: "Database migration files and status",             icon: IconTable,      group: "Data" },
+  {
+    id: "route:list",
+    label: "Routes",
+    description: "Resolved route table with middleware and patterns",
+    icon: IconRoute,
+    group: "Routing",
+  },
+  {
+    id: "route:compare",
+    label: "Route Compare",
+    description: "Compare analyzer vs artisan runtime output",
+    icon: IconGitCompare,
+    group: "Routing",
+  },
+  {
+    id: "route:sources",
+    label: "Route Sources",
+    description: "Route registration origin attribution",
+    icon: IconTimeline,
+    group: "Routing",
+  },
+  {
+    id: "middleware:list",
+    label: "Middleware",
+    description: "Aliases, groups, and route parameter patterns",
+    icon: IconShieldLock,
+    group: "Routing",
+  },
+  {
+    id: "config:list",
+    label: "Config",
+    description: "Collected config values and env defaults",
+    icon: IconSettings,
+    group: "Application",
+  },
+  {
+    id: "config:sources",
+    label: "Config Sources",
+    description: "Config keys with provider and origin",
+    icon: IconSettings,
+    group: "Application",
+  },
+  {
+    id: "controller:list",
+    label: "Controllers",
+    description:
+      "Controller methods, traits, inheritance, and route callability",
+    icon: IconBracketsContain,
+    group: "Application",
+  },
+  {
+    id: "provider:list",
+    label: "Providers",
+    description: "Service provider registration inventory",
+    icon: IconBox,
+    group: "Application",
+  },
+  {
+    id: "view:list",
+    label: "Views",
+    description: "Blade views, components, and Livewire",
+    icon: IconEye,
+    group: "Application",
+  },
+  {
+    id: "model:list",
+    label: "Models",
+    description: "Eloquent model inventory",
+    icon: IconDatabase,
+    group: "Data",
+  },
+  {
+    id: "migration:list",
+    label: "Migrations",
+    description: "Database migration files and status",
+    icon: IconTable,
+    group: "Data",
+  },
 ]
 
 const GROUPS = ["Routing", "Application", "Data"]
@@ -99,54 +166,72 @@ function initialProject(): string {
 
 function compactProjectPath(root: string): string {
   const parts = root.split("/").filter(Boolean)
-  const markerIndex = parts.findIndex((part) => part === "laravel-example" || part === "test")
+  const markerIndex = parts.findIndex(
+    (part) => part === "laravel-example" || part === "test"
+  )
   if (markerIndex >= 0) return parts.slice(markerIndex).join("/")
   if (parts.length <= 2) return root
   return parts.slice(-2).join("/")
 }
 
 export default function Page() {
-  const [projects, setProjects]         = useState<Project[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [selectedProject, setSelectedProject] = useState<string>(initialProject)
-  const [selectedCommand, setSelectedCommand] = useState<CommandId>(initialCommand)
-  const [payload, setPayload]           = useState<Payload | null>(null)
-  const [loadState, setLoadState]       = useState<LoadState>("idle")
-  const [error, setError]               = useState<string | null>(null)
-  const abortRef                        = useRef<AbortController | null>(null)
+  const [selectedCommand, setSelectedCommand] =
+    useState<CommandId>(initialCommand)
+  const [payload, setPayload] = useState<Payload | null>(null)
+  const [loadState, setLoadState] = useState<LoadState>("idle")
+  const [error, setError] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   const loadProjects = useCallback(async () => {
     try {
-      const res  = await fetch("/api/projects")
+      const res = await fetch("/api/projects")
       const data: Project[] = await res.json()
       setProjects(data)
       if (data.length > 0) {
         setSelectedProject((current) => {
-          if (current && data.some((project) => project.id === current)) return current
+          if (current && data.some((project) => project.id === current))
+            return current
           return data[0].id
         })
       }
       return data
-    } catch { return [] }
-  }, [])
-
-  const loadReport = useCallback(async (projectId: string, command: CommandId) => {
-    if (!projectId) return
-    abortRef.current?.abort()
-    const ctrl = new AbortController()
-    abortRef.current = ctrl
-    setLoadState("loading"); setError(null); setPayload(null)
-    try {
-      const params = new URLSearchParams({ project: projectId, command })
-      const res    = await fetch(`/api/report?${params}`, { signal: ctrl.signal })
-      const data: Payload = await res.json()
-      if (!res.ok) { setError(data.error ?? "Unknown error"); setLoadState("error"); return }
-      setPayload(data); setLoadState("done")
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AbortError") return
-      setError(err instanceof Error ? err.message : "Request failed")
-      setLoadState("error")
+    } catch {
+      return []
     }
   }, [])
+
+  const loadReport = useCallback(
+    async (projectId: string, command: CommandId) => {
+      if (!projectId) return
+      abortRef.current?.abort()
+      const ctrl = new AbortController()
+      abortRef.current = ctrl
+      setLoadState("loading")
+      setError(null)
+      setPayload(null)
+      try {
+        const params = new URLSearchParams({ project: projectId, command })
+        const res = await fetch(`/api/report?${params}`, {
+          signal: ctrl.signal,
+        })
+        const data: Payload = await res.json()
+        if (!res.ok) {
+          setError(data.error ?? "Unknown error")
+          setLoadState("error")
+          return
+        }
+        setPayload(data)
+        setLoadState("done")
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") return
+        setError(err instanceof Error ? err.message : "Request failed")
+        setLoadState("error")
+      }
+    },
+    []
+  )
 
   useEffect(() => {
     loadProjects()
@@ -164,13 +249,17 @@ export default function Page() {
     params.set("project", selectedProject)
     params.set("command", selectedCommand)
     const query = params.toString()
-    const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname
+    const nextUrl = query
+      ? `${window.location.pathname}?${query}`
+      : window.location.pathname
     window.history.replaceState(null, "", nextUrl)
   }, [selectedProject, selectedCommand])
 
   const activeProject = projects.find((p) => p.id === selectedProject)
   const activeCommand = COMMANDS.find((c) => c.id === selectedCommand)
-  const activeProjectPath = activeProject ? compactProjectPath(activeProject.root) : ""
+  const activeProjectPath = activeProject
+    ? compactProjectPath(activeProject.root)
+    : ""
 
   return (
     // h-screen + overflow-hidden pins the shell to viewport
@@ -178,18 +267,22 @@ export default function Page() {
       <Sidebar variant="inset">
         <SidebarHeader className="border-b px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shrink-0">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <IconBrandLaravel className="size-4" />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold leading-none">rust-php</p>
-              <p className="mt-0.5 text-[0.65rem] text-muted-foreground">Laravel Static Analyzer</p>
+              <p className="text-sm leading-none font-semibold">rust-php</p>
+              <p className="mt-0.5 text-[0.65rem] text-muted-foreground">
+                Laravel Static Analyzer
+              </p>
             </div>
           </div>
         </SidebarHeader>
 
         <div className="border-b px-3 py-3">
-          <p className="mb-1.5 text-[0.65rem] font-medium uppercase tracking-wider text-muted-foreground">Project</p>
+          <p className="mb-1.5 text-[0.65rem] font-medium tracking-wider text-muted-foreground uppercase">
+            Project
+          </p>
           <Select value={selectedProject} onValueChange={setSelectedProject}>
             <SelectTrigger className="h-8 w-full text-xs">
               <SelectValue placeholder="Select project…" />
@@ -197,7 +290,9 @@ export default function Page() {
             <SelectContent>
               <SelectGroup>
                 {projects.map((p) => (
-                  <SelectItem key={p.id} value={p.id} className="text-xs">{p.name}</SelectItem>
+                  <SelectItem key={p.id} value={p.id} className="text-xs">
+                    {p.name}
+                  </SelectItem>
                 ))}
               </SelectGroup>
             </SelectContent>
@@ -238,30 +333,48 @@ export default function Page() {
         <SidebarFooter className="border-t px-3 py-2">
           {activeProject && (
             <div className="min-w-0">
-              <p className="text-[0.6rem] uppercase tracking-wider text-muted-foreground">Active path</p>
-              <code className="mt-0.5 block truncate font-mono text-[0.65rem] text-muted-foreground">{activeProjectPath}</code>
+              <p className="text-[0.6rem] tracking-wider text-muted-foreground uppercase">
+                Active path
+              </p>
+              <code className="mt-0.5 block truncate font-mono text-[0.65rem] text-muted-foreground">
+                {activeProjectPath}
+              </code>
             </div>
           )}
         </SidebarFooter>
       </Sidebar>
 
       {/* SidebarInset: minHeight overridden so it doesn't grow past viewport */}
-      <SidebarInset style={{ minHeight: 0, overflow: "hidden" }} className="flex flex-col">
+      <SidebarInset
+        style={{ minHeight: 0, overflow: "hidden" }}
+        className="flex flex-col"
+      >
         {/* Fixed toolbar */}
         <header className="flex h-11 shrink-0 items-center justify-between gap-4 border-b bg-background px-4">
           <div className="flex items-center gap-2.5">
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="h-4" />
             <div>
-              <p className="text-[0.6rem] uppercase tracking-widest text-muted-foreground leading-none">Project</p>
-              <p className="mt-0.5 text-sm font-semibold leading-none">{activeProject?.name ?? "—"}</p>
+              <p className="text-[0.6rem] leading-none tracking-widest text-muted-foreground uppercase">
+                Project
+              </p>
+              <p className="mt-0.5 text-sm leading-none font-semibold">
+                {activeProject?.name ?? "—"}
+              </p>
             </div>
             {activeProject && (
               <>
-                <Separator orientation="vertical" className="hidden h-4 sm:block" />
+                <Separator
+                  orientation="vertical"
+                  className="hidden h-4 sm:block"
+                />
                 <div className="hidden min-w-0 sm:block">
-                  <p className="text-[0.6rem] uppercase tracking-widest text-muted-foreground leading-none">Path</p>
-                  <code className="mt-0.5 block max-w-[320px] truncate font-mono text-[0.65rem] text-muted-foreground">{activeProjectPath}</code>
+                  <p className="text-[0.6rem] leading-none tracking-widest text-muted-foreground uppercase">
+                    Path
+                  </p>
+                  <code className="mt-0.5 block max-w-[320px] truncate font-mono text-[0.65rem] text-muted-foreground">
+                    {activeProjectPath}
+                  </code>
                 </div>
               </>
             )}
@@ -269,8 +382,12 @@ export default function Page() {
               <>
                 <Separator orientation="vertical" className="h-4" />
                 <div>
-                  <p className="text-[0.6rem] uppercase tracking-widest text-muted-foreground leading-none">Analyzer</p>
-                  <p className="mt-0.5 text-sm font-semibold leading-none">{activeCommand.label}</p>
+                  <p className="text-[0.6rem] leading-none tracking-widest text-muted-foreground uppercase">
+                    Analyzer
+                  </p>
+                  <p className="mt-0.5 text-sm leading-none font-semibold">
+                    {activeCommand.label}
+                  </p>
                 </div>
               </>
             )}
@@ -279,12 +396,24 @@ export default function Page() {
           <div className="flex shrink-0 items-center gap-3">
             {payload?.debug && <DebugBar debug={payload.debug} />}
             <Separator orientation="vertical" className="h-4" />
-            <span className={cn(
-              "flex items-center gap-1 text-xs font-medium",
-              loadState === "error" ? "text-destructive" : "text-muted-foreground"
-            )}>
-              {loadState === "loading" && <IconLoader2 className="size-3 animate-spin" />}
-              {loadState === "loading" ? "Running…" : loadState === "error" ? "Error" : loadState === "done" ? "Ready" : "Idle"}
+            <span
+              className={cn(
+                "flex items-center gap-1 text-xs font-medium",
+                loadState === "error"
+                  ? "text-destructive"
+                  : "text-muted-foreground"
+              )}
+            >
+              {loadState === "loading" && (
+                <IconLoader2 className="size-3 animate-spin" />
+              )}
+              {loadState === "loading"
+                ? "Running…"
+                : loadState === "error"
+                  ? "Error"
+                  : loadState === "done"
+                    ? "Ready"
+                    : "Idle"}
             </span>
           </div>
         </header>
@@ -303,7 +432,9 @@ export default function Page() {
           {loadState === "error" && (
             <Alert variant="destructive">
               <IconAlertTriangle className="size-4" />
-              <AlertDescription className="font-mono text-xs">{error}</AlertDescription>
+              <AlertDescription className="font-mono text-xs">
+                {error}
+              </AlertDescription>
             </Alert>
           )}
           {loadState === "idle" && (
@@ -313,7 +444,12 @@ export default function Page() {
               </CardContent>
             </Card>
           )}
-          {loadState === "done" && payload && <ReportView key={`${payload.project}:${payload.command}`} payload={payload} />}
+          {loadState === "done" && payload && (
+            <ReportView
+              key={`${payload.project}:${payload.command}`}
+              payload={payload}
+            />
+          )}
         </div>
       </SidebarInset>
     </SidebarProvider>
@@ -322,17 +458,28 @@ export default function Page() {
 
 function ReportView({ payload }: { payload: Payload }) {
   switch (payload.command) {
-    case "route:list":     return <RoutesView payload={payload} sourceMode={false} />
-    case "route:sources":  return <RoutesView payload={payload} sourceMode={true} />
-    case "route:compare":  return <RouteCompareView payload={payload} />
-    case "middleware:list":return <MiddlewareView payload={payload} />
-    case "config:list":    return <ConfigView payload={payload} sourceMode={false} />
-    case "config:sources": return <ConfigView payload={payload} sourceMode={true} />
-    case "controller:list": return <ControllersView payload={payload} />
-    case "provider:list":  return <ProvidersView payload={payload} />
-    case "view:list":      return <ViewsView payload={payload} />
-    case "model:list":     return <ModelsView payload={payload} />
-    case "migration:list": return <MigrationsView payload={payload} />
+    case "route:list":
+      return <RoutesView payload={payload} sourceMode={false} />
+    case "route:sources":
+      return <RoutesView payload={payload} sourceMode={true} />
+    case "route:compare":
+      return <RouteCompareView payload={payload} />
+    case "middleware:list":
+      return <MiddlewareView payload={payload} />
+    case "config:list":
+      return <ConfigView payload={payload} sourceMode={false} />
+    case "config:sources":
+      return <ConfigView payload={payload} sourceMode={true} />
+    case "controller:list":
+      return <ControllersView payload={payload} />
+    case "provider:list":
+      return <ProvidersView payload={payload} />
+    case "view:list":
+      return <ViewsView payload={payload} />
+    case "model:list":
+      return <ModelsView payload={payload} />
+    case "migration:list":
+      return <MigrationsView payload={payload} />
     default:
       return (
         <Card>

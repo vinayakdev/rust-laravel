@@ -326,7 +326,15 @@ export type Payload = {
   root: string
   command: CommandId
   debug?: DebugInfo
-  report?: RoutesReport | MiddlewareReport | ConfigReport | ControllerReport | ProviderReport | ViewReport | ModelReport | MigrationReport
+  report?:
+    | RoutesReport
+    | MiddlewareReport
+    | ConfigReport
+    | ControllerReport
+    | ProviderReport
+    | ViewReport
+    | ModelReport
+    | MigrationReport
   comparison?: RouteComparison
   error?: string
 }

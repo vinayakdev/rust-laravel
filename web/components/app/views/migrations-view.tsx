@@ -4,7 +4,13 @@ import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TruncCell, relPath } from "@/components/app/cell"
-import type { ColumnEntry, IndexEntry, MigrationEntry, MigrationReport, Payload } from "@/lib/types"
+import type {
+  ColumnEntry,
+  IndexEntry,
+  MigrationEntry,
+  MigrationReport,
+  Payload,
+} from "@/lib/types"
 
 function EmptyValue() {
   return <span className="text-xs text-muted-foreground">—</span>
@@ -15,7 +21,11 @@ function TokenList({ values }: { values: string[] }) {
   return (
     <div className="flex flex-wrap gap-1">
       {values.map((value) => (
-        <Badge key={value} variant="outline" className="h-5 rounded-sm font-mono text-[0.65rem]">
+        <Badge
+          key={value}
+          variant="outline"
+          className="h-5 rounded-sm font-mono text-[0.65rem]"
+        >
           {value}
         </Badge>
       ))}
@@ -55,7 +65,7 @@ function ColumnRows({ columns }: { columns: ColumnEntry[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-[0.72rem]">
-        <thead className="border-b text-[0.64rem] uppercase tracking-wider text-muted-foreground">
+        <thead className="border-b text-[0.64rem] tracking-wider text-muted-foreground uppercase">
           <tr>
             <th className="px-2 py-2 font-semibold">Column</th>
             <th className="px-2 py-2 font-semibold">Type</th>
@@ -84,8 +94,16 @@ function ColumnRows({ columns }: { columns: ColumnEntry[] }) {
                     </div>
                   )}
                 </td>
-                <td className="px-2 py-2 align-top font-mono">{column.column_type}</td>
-                <td className="px-2 py-2 align-top">{column.default ? <TruncCell value={column.default} maxW="max-w-[180px]" /> : <EmptyValue />}</td>
+                <td className="px-2 py-2 align-top font-mono">
+                  {column.column_type}
+                </td>
+                <td className="px-2 py-2 align-top">
+                  {column.default ? (
+                    <TruncCell value={column.default} maxW="max-w-[180px]" />
+                  ) : (
+                    <EmptyValue />
+                  )}
+                </td>
                 <td className="px-2 py-2 align-top">
                   <TokenList values={flags} />
                 </td>
@@ -104,8 +122,13 @@ function IndexRows({ indexes }: { indexes: IndexEntry[] }) {
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       {indexes.map((index, idx) => (
-        <div key={`${index.index_type}:${idx}`} className="rounded-md border bg-muted/20 p-3">
-          <div className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">{index.index_type}</div>
+        <div
+          key={`${index.index_type}:${idx}`}
+          className="rounded-md border bg-muted/20 p-3"
+        >
+          <div className="text-[0.65rem] font-semibold tracking-wider text-muted-foreground uppercase">
+            {index.index_type}
+          </div>
           <div className="mt-2">
             <TokenList values={index.columns} />
           </div>
@@ -115,28 +138,45 @@ function IndexRows({ indexes }: { indexes: IndexEntry[] }) {
   )
 }
 
-function MigrationSummary({ migration, root }: { migration: MigrationEntry; root?: string }) {
+function MigrationSummary({
+  migration,
+  root,
+}: {
+  migration: MigrationEntry
+  root?: string
+}) {
   return (
     <Card className="gap-3">
       <CardHeader className="border-b">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <CardTitle>{migration.class_name}</CardTitle>
-            <div className="mt-1 font-mono text-[0.72rem] text-muted-foreground">{migration.timestamp}</div>
+            <div className="mt-1 font-mono text-[0.72rem] text-muted-foreground">
+              {migration.timestamp}
+            </div>
           </div>
-          <Badge variant="default" className="h-5 rounded-sm font-mono text-[0.65rem]">
+          <Badge
+            variant="default"
+            className="h-5 rounded-sm font-mono text-[0.65rem]"
+          >
             {migration.operation}
           </Badge>
         </div>
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <div className="rounded-md border bg-muted/20 p-3">
-          <div className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">Table</div>
+          <div className="text-[0.65rem] font-semibold tracking-wider text-muted-foreground uppercase">
+            Table
+          </div>
           <div className="mt-1 font-mono text-[0.75rem]">{migration.table}</div>
         </div>
         <div className="rounded-md border bg-muted/20 p-3 sm:col-span-2 xl:col-span-2">
-          <div className="text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">File</div>
-          <div className="mt-1 font-mono text-[0.72rem] text-muted-foreground">{relPath(migration.file, root)}</div>
+          <div className="text-[0.65rem] font-semibold tracking-wider text-muted-foreground uppercase">
+            File
+          </div>
+          <div className="mt-1 font-mono text-[0.72rem] text-muted-foreground">
+            {relPath(migration.file, root)}
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -147,12 +187,15 @@ export function MigrationsView({ payload }: { payload: Payload }) {
   const report = payload.report as MigrationReport
   const root = payload.root as string | undefined
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const migration = report.migrations[Math.min(selectedIndex, report.migrations.length - 1)]
+  const migration =
+    report.migrations[Math.min(selectedIndex, report.migrations.length - 1)]
 
   if (!report.migrations.length) {
     return (
       <Card>
-        <CardContent className="py-12 text-center text-sm text-muted-foreground">No migrations found.</CardContent>
+        <CardContent className="py-12 text-center text-sm text-muted-foreground">
+          No migrations found.
+        </CardContent>
       </Card>
     )
   }
@@ -182,14 +225,23 @@ export function MigrationsView({ payload }: { payload: Payload }) {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate font-medium">{entry.class_name}</div>
-                    <div className="mt-0.5 truncate font-mono text-[0.68rem] text-muted-foreground">{entry.table}</div>
+                    <div className="truncate font-medium">
+                      {entry.class_name}
+                    </div>
+                    <div className="mt-0.5 truncate font-mono text-[0.68rem] text-muted-foreground">
+                      {entry.table}
+                    </div>
                   </div>
-                  <Badge variant="outline" className="h-5 rounded-sm font-mono text-[0.6rem]">
+                  <Badge
+                    variant="outline"
+                    className="h-5 rounded-sm font-mono text-[0.6rem]"
+                  >
                     {entry.operation}
                   </Badge>
                 </div>
-                <div className="mt-2 text-[0.68rem] text-muted-foreground">{entry.timestamp}</div>
+                <div className="mt-2 text-[0.68rem] text-muted-foreground">
+                  {entry.timestamp}
+                </div>
               </button>
             ))}
           </div>
@@ -207,7 +259,10 @@ export function MigrationsView({ payload }: { payload: Payload }) {
           <IndexRows indexes={migration.indexes} />
         </SectionCard>
 
-        <SectionCard title="Dropped Columns" count={migration.dropped_columns.length}>
+        <SectionCard
+          title="Dropped Columns"
+          count={migration.dropped_columns.length}
+        >
           <TokenList values={migration.dropped_columns} />
         </SectionCard>
       </div>
