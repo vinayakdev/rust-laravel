@@ -5,7 +5,10 @@ mod parser;
 
 use collector::collect_registered_route_files;
 use context::{RouteContext, build_middleware_index};
-use parser::{collect_routes_from_source, reset_include_tracking};
+use parser::{
+    collect_routes_from_source, has_unsafe_string_adjacency, reset_include_tracking,
+    source_can_use_full_parse,
+};
 
 use crate::analyzers::{controllers, middleware};
 use crate::lsp::overrides::FileOverrides;
@@ -82,4 +85,16 @@ pub(crate) fn collect_registered_route_paths(
     }
 
     Ok(files)
+}
+
+pub(crate) fn reindex_guard_reason(source: &[u8]) -> Option<&'static str> {
+    if has_unsafe_string_adjacency(source) {
+        return Some("unsafe-string-adjacency");
+    }
+
+    if !source_can_use_full_parse(source) {
+        return Some("unbalanced-route-source");
+    }
+
+    None
 }

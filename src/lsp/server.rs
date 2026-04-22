@@ -4,6 +4,9 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use bumpalo::Bump;
+use php_parser::lexer::Lexer;
+use php_parser::parser::Parser;
 use serde_json::{Value, json};
 
 use super::context::{
@@ -13,6 +16,7 @@ use super::context::{
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
 use super::query;
+use crate::analyzers::routes;
 use crate::project;
 
 pub fn run_stdio() -> Result<(), String> {
@@ -41,6 +45,7 @@ struct ServerState {
     index: Option<ProjectIndex>,
     documents: HashMap<String, String>,
     dirty_documents: HashSet<String>,
+    parse_failed_documents: HashSet<String>,
     shutdown_requested: bool,
     exiting: bool,
 }
@@ -72,8 +77,15 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                 ) {
                     state.documents.insert(uri.to_string(), text.to_string());
                     state.dirty_documents.remove(uri);
+                    state.parse_failed_documents.remove(uri);
                     log_lsp_event(format!("didOpen uri={uri} bytes={}", text.len()));
-                    reindex_for_uri(state, uri);
+                    if uri_affects_index(state, uri) {
+                        if document_is_reindexable(state, uri) {
+                            reindex_for_uri(state, uri);
+                        } else if let Some(source) = state.documents.get(uri) {
+                            log_php_parse_errors(uri, source, "didOpen");
+                        }
+                    }
                 }
             }
             Ok(None)
@@ -87,6 +99,7 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                     {
                         state.documents.insert(uri.to_string(), text.to_string());
                         state.dirty_documents.insert(uri.to_string());
+                        state.parse_failed_documents.remove(uri);
                         log_lsp_event(format!(
                             "didChange uri={uri} bytes={} dirty=true reindex=deferred",
                             text.len()
@@ -103,7 +116,18 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
             {
                 state.dirty_documents.remove(uri);
                 log_lsp_event(format!("didSave uri={uri} dirty=false"));
-                reindex_for_uri(state, uri);
+                if !document_is_reindexable(state, uri) {
+                    state.parse_failed_documents.insert(uri.to_string());
+                    log_lsp_event(format!("didSave uri={uri} reindex=skipped reason=parse-error"));
+                    if let Some(source) = state.documents.get(uri) {
+                        log_php_parse_errors(uri, source, "didSave");
+                    }
+                } else {
+                    state.parse_failed_documents.remove(uri);
+                }
+                if uri_affects_index(state, uri) && !state.parse_failed_documents.contains(uri) {
+                    reindex_for_uri(state, uri);
+                }
             }
             Ok(None)
         }
@@ -112,10 +136,16 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                 .pointer("/params/textDocument/uri")
                 .and_then(Value::as_str)
             {
+                let parse_failed = state.parse_failed_documents.contains(uri);
                 state.documents.remove(uri);
                 state.dirty_documents.remove(uri);
+                state.parse_failed_documents.remove(uri);
                 log_lsp_event(format!("didClose uri={uri}"));
-                reindex_for_uri(state, uri);
+                if parse_failed {
+                    log_lsp_event(format!("didClose uri={uri} reindex=skipped reason=parse-error"));
+                } else if uri_affects_index(state, uri) {
+                    reindex_for_uri(state, uri);
+                }
             }
             Ok(None)
         }
@@ -293,6 +323,10 @@ fn diagnostic_result(state: &ServerState, params: Option<&Value>) -> Value {
     };
     if state.dirty_documents.contains(uri) {
         log_lsp_event(format!("diagnostics uri={uri} skipped=dirty items=0"));
+        return json!({ "kind": "full", "items": [] });
+    }
+    if state.parse_failed_documents.contains(uri) {
+        log_lsp_event(format!("diagnostics uri={uri} skipped=parse-error items=0"));
         return json!({ "kind": "full", "items": [] });
     }
     let Some(index) = &state.index else {
@@ -481,6 +515,84 @@ fn collect_overrides(state: &ServerState, root: &Path) -> FileOverrides {
     overrides
 }
 
+fn uri_affects_index(state: &ServerState, uri: &str) -> bool {
+    let Some(project) = state.project.as_ref() else {
+        return false;
+    };
+    let Some(path) = file_uri_to_path(uri) else {
+        return false;
+    };
+
+    path_affects_index(project.root.as_path(), &path)
+}
+
+fn document_is_reindexable(state: &ServerState, uri: &str) -> bool {
+    let Some(source) = state.documents.get(uri) else {
+        return true;
+    };
+
+    if let Some(reason) = route_reindex_guard_reason(uri, source) {
+        log_lsp_event(format!(
+            "reindex guard uri={uri} kind=route-parser reason={reason}"
+        ));
+        return false;
+    }
+
+    !php_document_has_parse_errors(uri, source)
+}
+
+fn route_reindex_guard_reason(uri: &str, source: &str) -> Option<&'static str> {
+    if !uri.ends_with(".php") || !uri.contains("/routes/") {
+        return None;
+    }
+
+    routes::reindex_guard_reason(source.as_bytes())
+}
+
+fn php_document_has_parse_errors(uri: &str, source: &str) -> bool {
+    !php_document_parse_errors(uri, source).is_empty()
+}
+
+fn php_document_parse_errors(uri: &str, source: &str) -> Vec<String> {
+    if !uri.ends_with(".php") || uri.ends_with(".blade.php") {
+        return Vec::new();
+    }
+
+    let arena = Bump::new();
+    let lexer = Lexer::new(source.as_bytes());
+    let mut parser = Parser::new(lexer, &arena);
+    let program = parser.parse_program();
+    let path = file_uri_to_path(uri)
+        .unwrap_or_else(|| PathBuf::from(uri))
+        .display()
+        .to_string();
+
+    program
+        .errors
+        .iter()
+        .map(|error| error.to_human_readable_with_path(source.as_bytes(), Some(&path)))
+        .collect()
+}
+
+fn log_php_parse_errors(uri: &str, source: &str, phase: &str) {
+    let errors = php_document_parse_errors(uri, source);
+    if errors.is_empty() {
+        return;
+    }
+
+    log_lsp_event(format!(
+        "parse-errors phase={phase} uri={uri} count={}",
+        errors.len()
+    ));
+    for (index, error) in errors.iter().enumerate() {
+        log_lsp_event(format!(
+            "parse-error phase={phase} uri={uri} index={} detail=\n{}",
+            index + 1,
+            error
+        ));
+    }
+}
+
 fn reindex_for_uri(state: &mut ServerState, _uri: &str) {
     let start = Instant::now();
     log_lsp_event(format!("reindex start uri={_uri}"));
@@ -521,7 +633,10 @@ mod tests {
     use crate::lsp::overrides::FileOverrides;
     use crate::project;
 
-    use super::{ServerState, completion_result, diagnostic_result};
+    use super::{
+        ServerState, completion_result, diagnostic_result, handle_message, path_affects_index,
+        php_document_has_parse_errors, php_document_parse_errors, route_reindex_guard_reason,
+    };
 
     fn sandbox_project() -> project::LaravelProject {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -548,6 +663,7 @@ mod tests {
             index: Some(index),
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::from([uri.clone()]),
+            parse_failed_documents: HashSet::new(),
             shutdown_requested: false,
             exiting: false,
         };
@@ -609,6 +725,7 @@ mod tests {
             index: Some(index),
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::new(),
+            parse_failed_documents: HashSet::new(),
             shutdown_requested: false,
             exiting: false,
         };
@@ -669,6 +786,7 @@ mod tests {
             index: Some(index),
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::new(),
+            parse_failed_documents: HashSet::new(),
             shutdown_requested: false,
             exiting: false,
         };
@@ -728,6 +846,7 @@ mod tests {
             index: Some(index),
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::new(),
+            parse_failed_documents: HashSet::new(),
             shutdown_requested: false,
             exiting: false,
         };
@@ -751,6 +870,106 @@ mod tests {
         assert!(labels.contains(&"$orders"));
         assert!(labels.contains(&"$filters"));
     }
+
+    #[test]
+    fn treats_blade_views_as_index_relevant() {
+        let root = Path::new("/tmp/example");
+
+        assert!(path_affects_index(
+            root,
+            &root.join("resources/views/home.blade.php")
+        ));
+        assert!(path_affects_index(
+            root,
+            &root.join("resources/views/vendor/app/layout.blade.php")
+        ));
+        assert!(!path_affects_index(root, &root.join("README.md")));
+    }
+
+    #[test]
+    fn detects_php_parse_errors_before_reindexing() {
+        assert!(php_document_has_parse_errors(
+            "file:///tmp/routes/web.php",
+            "<?php\nRoute::get('/', fn() => ;\n"
+        ));
+        let errors =
+            php_document_parse_errors("file:///tmp/routes/web.php", "<?php\nRoute::get('/', fn() => ;\n");
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("error:"));
+        assert!(errors[0].contains("/tmp/routes/web.php:2:"));
+        assert!(!php_document_has_parse_errors(
+            "file:///tmp/routes/web.php",
+            "<?php\nRoute::get('/', fn() => 'ok');\n"
+        ));
+        assert!(!php_document_has_parse_errors(
+            "file:///tmp/resources/views/home.blade.php",
+            "@if($x)\n<div>{{ $x }}</div>\n"
+        ));
+    }
+
+    #[test]
+    fn did_save_with_parse_errors_skips_reindex_and_diagnostics() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let uri = format!(
+            "file://{}",
+            project.root.join("routes/starter.php").display()
+        );
+        let broken = "<?php\nRoute::get('/', fn() => ;\n".to_string();
+
+        let mut state = ServerState {
+            project_root: Some(project.root.clone()),
+            project: Some(project),
+            index: Some(index),
+            documents: HashMap::from([(uri.clone(), broken)]),
+            dirty_documents: HashSet::from([uri.clone()]),
+            parse_failed_documents: HashSet::new(),
+            shutdown_requested: false,
+            exiting: false,
+        };
+
+        let response = handle_message(
+            &mut state,
+            json!({
+                "method": "textDocument/didSave",
+                "params": { "textDocument": { "uri": uri.clone() } }
+            }),
+        )
+        .expect("didSave should succeed");
+
+        assert!(response.is_none());
+        assert!(!state.dirty_documents.contains(&uri));
+        assert!(state.parse_failed_documents.contains(&uri));
+        assert!(state.index.is_some());
+
+        let diagnostics = diagnostic_result(
+            &state,
+            Some(&json!({
+                "textDocument": { "uri": uri }
+            })),
+        );
+
+        assert_eq!(
+            diagnostics
+                .pointer("/items")
+                .and_then(|value| value.as_array())
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn route_action_quote_wedge_is_blocked_before_reindex() {
+        let uri = "file:///tmp/project/routes/web.php";
+        let broken = "<?php\nRoute::get('/', [ManageOfficeController::class, 'sdsd'sd']);\n";
+
+        assert_eq!(
+            route_reindex_guard_reason(uri, broken),
+            Some("unsafe-string-adjacency")
+        );
+        assert!(php_document_has_parse_errors(uri, broken));
+    }
 }
 
 fn path_affects_index(root: &Path, path: &Path) -> bool {
@@ -767,6 +986,10 @@ fn path_affects_index(root: &Path, path: &Path) -> bool {
         || relative.starts_with("app")
         || relative.starts_with("packages")
     {
+        return path.extension().and_then(|ext| ext.to_str()) == Some("php");
+    }
+
+    if relative.starts_with(Path::new("resources/views")) {
         return path.extension().and_then(|ext| ext.to_str()) == Some("php");
     }
 

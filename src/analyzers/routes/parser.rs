@@ -953,7 +953,7 @@ fn count_newlines(bytes: &[u8]) -> usize {
     bytes.iter().filter(|&&b| b == b'\n').count()
 }
 
-fn has_unsafe_string_adjacency(source: &[u8]) -> bool {
+pub(crate) fn has_unsafe_string_adjacency(source: &[u8]) -> bool {
     let mut state = ScanState::default();
     let mut index = 0usize;
 
