@@ -1,6 +1,10 @@
 "use client"
 
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 /** Strip the project root prefix to show a relative path. */
 export function relPath(full: string, root?: string): string {
@@ -32,7 +36,7 @@ export function TruncCell({
       <TooltipTrigger asChild>
         <span
           className={[
-            "block truncate cursor-default",
+            "block cursor-default truncate",
             maxW,
             size,
             mono ? "font-mono" : "",
@@ -44,7 +48,7 @@ export function TruncCell({
       </TooltipTrigger>
       <TooltipContent
         side="bottom"
-        className="max-w-[600px] break-all font-mono text-xs"
+        className="max-w-[600px] font-mono text-xs break-all"
       >
         {value}
       </TooltipContent>
@@ -75,18 +79,31 @@ export function PlainCell({
 }
 
 /** loc = "file:line:col" — strips root prefix and shows full on hover. */
-export function LocCell({ file, line, col, root }: { file: string; line: number; col: number; root?: string }) {
-  const rel  = relPath(file, root)
+export function LocCell({
+  file,
+  line,
+  col,
+  root,
+}: {
+  file: string
+  line: number
+  col: number
+  root?: string
+}) {
+  const rel = relPath(file, root)
   const full = `${file}:${line}:${col}`
   const disp = `${rel}:${line}:${col}`
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <code className="block max-w-[240px] truncate cursor-default font-mono text-[0.68rem] text-muted-foreground">
+        <code className="block max-w-[240px] cursor-default truncate font-mono text-[0.68rem] text-muted-foreground">
           {disp}
         </code>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className="max-w-[600px] break-all font-mono text-xs">
+      <TooltipContent
+        side="bottom"
+        className="max-w-[600px] font-mono text-xs break-all"
+      >
         {full}
       </TooltipContent>
     </Tooltip>

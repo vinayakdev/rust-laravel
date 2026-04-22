@@ -13,6 +13,6 @@ kind = "Rust"
 version = "0.7.0"
 
 [language_servers.rust-php-lsp]
-language = "PHP"
-languages = ["Blade"]
+name = "rust-php-lsp"
+languages = ["PHP", "Blade"]
 language_ids = { PHP = "php", Blade = "blade" }

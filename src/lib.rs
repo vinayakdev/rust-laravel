@@ -1,12 +1,13 @@
 pub mod analyzers;
 mod benchmark;
 mod cli;
+pub mod core;
 mod debug;
 pub mod lsp;
 mod output;
-mod php;
-pub mod project;
 pub mod types;
+pub use rust_php_foundation::php;
+pub use rust_php_foundation::project;
 
 use cli::Command;
 

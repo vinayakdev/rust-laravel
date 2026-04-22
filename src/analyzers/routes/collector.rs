@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::analyzers::providers;
 use crate::analyzers::routes::chain::{ChainOp, flatten_route_chain};
+use crate::core::analysis::ProjectAnalysis;
 use crate::php::ast::{expr_name, expr_to_path, strip_root};
 use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
@@ -20,10 +20,10 @@ pub(crate) struct RegisteredRouteFile {
 }
 
 pub(crate) fn collect_registered_route_files(
-    project: &LaravelProject,
+    context: &ProjectAnalysis,
 ) -> Result<Vec<RegisteredRouteFile>, String> {
-    let direct_files = collect_direct_route_files(project)?;
-    let discovered = discover_provider_route_files(project)?;
+    let direct_files = collect_direct_route_files(context)?;
+    let discovered = discover_provider_route_files(context)?;
     let mut by_file: BTreeMap<PathBuf, Vec<RouteRegistration>> = BTreeMap::new();
 
     for registered in discovered {
@@ -49,7 +49,7 @@ pub(crate) fn collect_registered_route_files(
         } else {
             all_files.push(RegisteredRouteFile {
                 file: file.clone(),
-                registration: default_route_registration(&project.root, file),
+                registration: default_route_registration(&context.project().root, file),
             });
         }
     }
@@ -76,21 +76,21 @@ pub(crate) fn collect_registered_route_files(
     Ok(all_files)
 }
 
-fn has_explicit_route_registrations(project: &LaravelProject) -> Result<bool, String> {
-    let bootstrap_app = project.root.join("bootstrap/app.php");
+fn has_explicit_route_registrations(context: &ProjectAnalysis) -> Result<bool, String> {
+    let bootstrap_app = context.project().root.join("bootstrap/app.php");
     if bootstrap_app.is_file()
-        && !discover_bootstrap_route_files(project, &bootstrap_app)?.is_empty()
+        && !discover_bootstrap_route_files(context.project(), &bootstrap_app)?.is_empty()
     {
         return Ok(true);
     }
 
-    Ok(!discover_provider_route_files(project)?.is_empty())
+    Ok(!discover_provider_route_files(context)?.is_empty())
 }
 
-fn collect_direct_route_files(project: &LaravelProject) -> Result<Vec<PathBuf>, String> {
-    let bootstrap_app = project.root.join("bootstrap/app.php");
+fn collect_direct_route_files(context: &ProjectAnalysis) -> Result<Vec<PathBuf>, String> {
+    let bootstrap_app = context.project().root.join("bootstrap/app.php");
     if bootstrap_app.is_file() {
-        let bootstrap_files = discover_bootstrap_route_files(project, &bootstrap_app)?;
+        let bootstrap_files = discover_bootstrap_route_files(context.project(), &bootstrap_app)?;
         if !bootstrap_files.is_empty() {
             return Ok(bootstrap_files
                 .into_iter()
@@ -99,11 +99,11 @@ fn collect_direct_route_files(project: &LaravelProject) -> Result<Vec<PathBuf>, 
         }
     }
 
-    if has_explicit_route_registrations(project)? {
+    if has_explicit_route_registrations(context)? {
         return Ok(Vec::new());
     }
 
-    let routes_dir = project.root.join("routes");
+    let routes_dir = context.project().root.join("routes");
     Ok(collect_php_files(&routes_dir))
 }
 
@@ -138,13 +138,13 @@ fn discover_bootstrap_route_files(
 }
 
 fn discover_provider_route_files(
-    project: &LaravelProject,
+    context: &ProjectAnalysis,
 ) -> Result<Vec<RegisteredRouteFile>, String> {
-    let provider_report = providers::analyze(project)?;
+    let provider_report = context.providers()?;
     let mut files = Vec::new();
     let mut seen_sources = BTreeSet::new();
 
-    for provider in provider_report.providers {
+    for provider in &provider_report.providers {
         let Some(relative_source_file) = provider.source_file.as_ref() else {
             continue;
         };
@@ -158,12 +158,11 @@ fn discover_provider_route_files(
             continue;
         }
 
-        let source_file = project.root.join(relative_source_file);
-        let source = fs::read(&source_file)
-            .map_err(|e| format!("failed to read {}: {e}", source_file.display()))?;
+        let source_file = context.project().root.join(relative_source_file);
+        let source = context.read_bytes(&source_file)?;
 
         files.extend(extract_provider_route_files(
-            project,
+            context.project(),
             &provider,
             &source_file,
             &source,

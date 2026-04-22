@@ -49,11 +49,15 @@ function MethodVariables({
               className="h-4 rounded-sm text-[0.6rem]"
             >
               {variable.name}
-              <span className="ml-1 text-muted-foreground">[{variable.source_kind}]</span>
+              <span className="ml-1 text-muted-foreground">
+                [{variable.source_kind}]
+              </span>
             </Badge>
           ))
         ) : (
-          <span className="text-xs text-muted-foreground">No parameters or local assignments</span>
+          <span className="text-xs text-muted-foreground">
+            No parameters or local assignments
+          </span>
         )}
       </div>
     </div>
@@ -65,13 +69,22 @@ export function ControllersView({ payload }: { payload: Payload }) {
   const root = payload.root as string | undefined
 
   const rows = report.controllers.map((controller) => {
-    const callable = controller.methods.filter((method) => method.accessible_from_route)
-    const blocked = controller.methods.filter((method) => !method.accessible_from_route)
+    const callable = controller.methods.filter(
+      (method) => method.accessible_from_route
+    )
+    const blocked = controller.methods.filter(
+      (method) => !method.accessible_from_route
+    )
 
     return [
       <div className="flex min-w-[220px] flex-col gap-1">
         <TruncCell value={controller.fqn} maxW="max-w-[260px]" />
-        <LocCell file={controller.file} line={controller.line} col={1} root={root} />
+        <LocCell
+          file={controller.file}
+          line={controller.line}
+          col={1}
+          root={root}
+        />
       </div>,
 
       <div className="flex min-w-[180px] flex-col gap-1">
@@ -83,7 +96,11 @@ export function ControllersView({ payload }: { payload: Payload }) {
         <div className="flex flex-wrap gap-1">
           {controller.traits.length ? (
             controller.traits.map((traitName) => (
-              <Badge key={traitName} variant="outline" className="h-4 rounded-sm text-[0.6rem]">
+              <Badge
+                key={traitName}
+                variant="outline"
+                className="h-4 rounded-sm text-[0.6rem]"
+              >
                 {traitName.split("\\").pop()}
               </Badge>
             ))
@@ -96,10 +113,16 @@ export function ControllersView({ payload }: { payload: Payload }) {
       <div className="flex min-w-[220px] flex-wrap gap-1">
         {callable.length ? (
           callable.map((method) => (
-            <MethodBadge key={`${controller.fqn}:${method.name}`} label={method.name} callable />
+            <MethodBadge
+              key={`${controller.fqn}:${method.name}`}
+              label={method.name}
+              callable
+            />
           ))
         ) : (
-          <span className="text-xs text-muted-foreground">No public route-callable methods</span>
+          <span className="text-xs text-muted-foreground">
+            No public route-callable methods
+          </span>
         )}
       </div>,
 
@@ -113,7 +136,9 @@ export function ControllersView({ payload }: { payload: Payload }) {
             />
           ))
         ) : (
-          <span className="text-xs text-muted-foreground">No blocked methods</span>
+          <span className="text-xs text-muted-foreground">
+            No blocked methods
+          </span>
         )}
       </div>,
 

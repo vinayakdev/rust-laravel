@@ -1,7 +1,2 @@
-mod browser;
-mod command;
-mod reports;
-mod web;
-
-pub use browser::run as run_browse;
-pub use web::run as run_web;
+pub use rust_php_debug::run_browse;
+pub use rust_php_debug::run_web;

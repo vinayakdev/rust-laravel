@@ -1070,9 +1070,158 @@ dependencies = [
  "crossterm",
  "libc",
  "php-parser",
+ "rust-php-configs",
+ "rust-php-controllers",
+ "rust-php-debug",
+ "rust-php-foundation",
+ "rust-php-lsp",
+ "rust-php-middleware",
+ "rust-php-migrations",
+ "rust-php-models",
+ "rust-php-output",
+ "rust-php-routes",
+ "rust-php-views",
  "serde",
  "serde_json",
- "zed_extension_api",
+ "zed_extension_api 0.4.0",
+]
+
+[[package]]
+name = "rust-php-configs"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-foundation",
+ "serde",
+]
+
+[[package]]
+name = "rust-php-controllers"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-foundation",
+ "serde",
+]
+
+[[package]]
+name = "rust-php-debug"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "rust-php-configs",
+ "rust-php-controllers",
+ "rust-php-foundation",
+ "rust-php-middleware",
+ "rust-php-migrations",
+ "rust-php-models",
+ "rust-php-output",
+ "rust-php-routes",
+ "rust-php-views",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rust-php-foundation"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rust-php-lsp"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-configs",
+ "rust-php-controllers",
+ "rust-php-foundation",
+ "rust-php-middleware",
+ "rust-php-routes",
+ "rust-php-views",
+ "serde_json",
+]
+
+[[package]]
+name = "rust-php-middleware"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-foundation",
+ "serde",
+]
+
+[[package]]
+name = "rust-php-migrations"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-foundation",
+ "serde",
+]
+
+[[package]]
+name = "rust-php-models"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-foundation",
+ "rust-php-migrations",
+ "serde",
+]
+
+[[package]]
+name = "rust-php-output"
+version = "0.1.0"
+dependencies = [
+ "comfy-table",
+ "rust-php-configs",
+ "rust-php-controllers",
+ "rust-php-foundation",
+ "rust-php-middleware",
+ "rust-php-migrations",
+ "rust-php-models",
+ "rust-php-routes",
+ "rust-php-views",
+ "serde_json",
+]
+
+[[package]]
+name = "rust-php-routes"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-controllers",
+ "rust-php-foundation",
+ "serde",
+]
+
+[[package]]
+name = "rust-php-views"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-foundation",
+ "serde",
+]
+
+[[package]]
+name = "rust-php-zed"
+version = "0.1.0"
+dependencies = [
+ "zed_extension_api 0.7.0",
 ]
 
 [[package]]
@@ -1969,6 +2118,17 @@ name = "zed_extension_api"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5bc7f7867316e62864b4f0953e3ce1d05501ba7278cca4e5e5a9694d9182f5c7"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wit-bindgen 0.41.0",
+]
+
+[[package]]
+name = "zed_extension_api"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0729d50b4ca0a7e28e590bbe32e3ca0194d97ef654961451a424c661a366fca0"
 dependencies = [
  "serde",
  "serde_json",
