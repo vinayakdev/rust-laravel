@@ -12,8 +12,7 @@ class MetricPanel extends Component
         public string $title,
         public int|float|string $value,
         public ?string $trend = null,
-    ) {
-    }
+    ) {}
 
     public function hasTrend(): bool
     {
@@ -22,6 +21,7 @@ class MetricPanel extends Component
 
     public function render(): View|Closure|string
     {
-        return view('components.dashboard.metric-panel');
+        $ad = 'alan';
+        return view('components.dashboard.metric-panel', ['polamyre' => 'sds', 'ad' => $ad]);
     }
 }

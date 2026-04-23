@@ -20,16 +20,6 @@ It is designed for two uses:
 1. human debugging from the terminal
 2. machine-readable JSON for future extension/LSP work
 
-## Quick Links
-
-| File                                                                                | Purpose                                              |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| [README.md](/Users/hotdogb/Work/rust-php/README.md)                                 | Main guide and command reference                     |
-| [example.md](/Users/hotdogb/Work/rust-php/example.md)                               | Static input/output examples without running the CLI |
-| [project_structure.md](/Users/hotdogb/Work/rust-php/project_structure.md)           | Plain-English codebase map for Laravel developers    |
-| [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md)                                     | Roadmap and completed milestones                     |
-| [laravel-example/README.md](/Users/hotdogb/Work/rust-php/laravel-example/README.md) | How to place Laravel apps for analysis               |
-
 ## Where To Put Laravel Apps
 
 Put target Laravel projects under `laravel-example/`.
@@ -373,18 +363,3 @@ This separation matters because the CLI is just one frontend. The same reports c
 - go-to-definition
 - diagnostics
 - completions
-
-## Example Output
-
-See [example.md](/Users/hotdogb/Work/rust-php/example.md) for static examples of:
-
-- example project input
-- example commands
-- text output
-- JSON output
-
-## Roadmap
-
-See [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md).
-
-The next major step is optional runtime verification and diffing against Laravel itself when available, while keeping static analysis as the default baseline.
