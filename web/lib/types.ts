@@ -308,7 +308,30 @@ export type MigrationReport = {
   migrations: MigrationEntry[]
 }
 
+export type DashboardFeatureMetric = {
+  id: string
+  label: string
+  files_scanned: number
+  items_found: number
+  autocomplete_suggestions: number
+  scan_time_ms: number
+  rss_delta_kb?: number | null
+}
+
+export type DashboardSummary = {
+  feature_count: number
+  total_files_scanned: number
+  total_items_found: number
+  total_autocomplete_suggestions: number
+}
+
+export type DashboardReport = {
+  summary: DashboardSummary
+  features: DashboardFeatureMetric[]
+}
+
 export type CommandId =
+  | "dashboard"
   | "route:list"
   | "route:compare"
   | "route:sources"
@@ -327,6 +350,7 @@ export type Payload = {
   command: CommandId
   debug?: DebugInfo
   report?:
+    | DashboardReport
     | RoutesReport
     | MiddlewareReport
     | ConfigReport

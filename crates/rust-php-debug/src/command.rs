@@ -2,6 +2,7 @@ use crate::project::LaravelProject;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DebugCommand {
+    Dashboard,
     RouteList,
     RouteCompare,
     RouteSources,
@@ -31,6 +32,7 @@ pub(crate) const BROWSER_COMMANDS: [DebugCommand; 10] = [
 impl DebugCommand {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            DebugCommand::Dashboard => "dashboard",
             DebugCommand::RouteList => "route:list",
             DebugCommand::RouteCompare => "route:compare",
             DebugCommand::RouteSources => "route:sources",
@@ -47,6 +49,7 @@ impl DebugCommand {
 
     pub(crate) fn title(self) -> &'static str {
         match self {
+            DebugCommand::Dashboard => "Dashboard",
             DebugCommand::RouteList => "Routes",
             DebugCommand::RouteCompare => "Route Compare",
             DebugCommand::RouteSources => "Route Sources",
@@ -63,6 +66,7 @@ impl DebugCommand {
 
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
+            "dashboard" => Some(Self::Dashboard),
             "route:list" => Some(Self::RouteList),
             "route:compare" => Some(Self::RouteCompare),
             "route:sources" => Some(Self::RouteSources),

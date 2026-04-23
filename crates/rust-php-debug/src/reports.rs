@@ -1,7 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::time::Instant;
 
+use rust_php_configs::types::ConfigReport;
+use rust_php_controllers::types::ControllerReport;
+use rust_php_foundation::types::ProviderReport;
+use rust_php_middleware::types::MiddlewareReport;
+use rust_php_migrations::types::MigrationReport;
+use rust_php_models::types::ModelReport;
+use rust_php_routes::types::RouteReport;
+use rust_php_views::types::ViewReport;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -18,6 +27,10 @@ pub(crate) fn render_text_report(
     command: DebugCommand,
 ) -> Result<String, String> {
     match command {
+        DebugCommand::Dashboard => Err(
+            "dashboard is only available in the web debugger because it needs structured JSON output"
+                .to_string(),
+        ),
         DebugCommand::RouteList => {
             let report = analyzers::routes::analyze(project)?;
             Ok(text::routes::render_route_table(&report.routes))
@@ -72,60 +85,102 @@ pub(crate) fn render_json_report(
     let started_at = Instant::now();
     let rss_before_kb = current_rss_kb();
 
-    let payload = match command {
+    let (payload, parsed_file_count_override) = match command {
+        DebugCommand::Dashboard => {
+            let report = build_dashboard_report(project)?;
+            let parsed_file_count = report.summary.total_files_scanned;
+            (
+                json_payload(project, command, json!({ "report": report })),
+                Some(parsed_file_count),
+            )
+        }
         DebugCommand::RouteList => {
             let report = analyzers::routes::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::RouteSources => {
             let report = analyzers::routes::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::MiddlewareList => {
             let report = analyzers::middleware::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::ConfigList => {
             let report = analyzers::configs::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::ConfigSources => {
             let report = analyzers::configs::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::ControllerList => {
             let report = analyzers::controllers::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::ProviderList => {
             let report = analyzers::providers::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::ViewList => {
             let report = analyzers::views::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::ModelList => {
             let report = analyzers::models::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::MigrationList => {
             let report = analyzers::migrations::analyze(project)?;
-            json_payload(project, command, json!({ "report": report }))
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
         }
         DebugCommand::RouteCompare => {
             let report = analyzers::routes::analyze(project)?;
-            json_payload(
-                project,
-                command,
-                json!({ "comparison": compare_routes(project, &report.routes)? }),
+            (
+                json_payload(
+                    project,
+                    command,
+                    json!({ "comparison": compare_routes(project, &report.routes)? }),
+                ),
+                None,
             )
         }
     };
 
     let debug = DebugInfo {
         duration_ms: started_at.elapsed().as_millis(),
-        parsed_file_count: collect_debug_paths(&payload).len(),
+        parsed_file_count: parsed_file_count_override
+            .unwrap_or_else(|| collect_debug_paths(&payload).len()),
         rss_before_kb,
         rss_after_kb: current_rss_kb(),
     };
@@ -155,6 +210,360 @@ struct DebugInfo {
     parsed_file_count: usize,
     rss_before_kb: Option<u64>,
     rss_after_kb: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct DashboardReport {
+    summary: DashboardSummary,
+    features: Vec<DashboardFeature>,
+}
+
+#[derive(Debug, Serialize)]
+struct DashboardSummary {
+    feature_count: usize,
+    total_files_scanned: usize,
+    total_items_found: usize,
+    total_autocomplete_suggestions: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DashboardFeature {
+    id: &'static str,
+    label: &'static str,
+    files_scanned: usize,
+    items_found: usize,
+    autocomplete_suggestions: usize,
+    scan_time_ms: u128,
+    rss_delta_kb: Option<i64>,
+}
+
+fn build_dashboard_report(project: &LaravelProject) -> Result<DashboardReport, String> {
+    let mut total_files = BTreeSet::new();
+    let features = vec![
+        measure_feature("routes", "Routes", || {
+            analyzers::routes::analyze(project)
+                .map(|report| summarize_routes(&report, &mut total_files))
+        })?,
+        measure_feature("views", "Views", || {
+            analyzers::views::analyze(project)
+                .map(|report| summarize_views(&report, &mut total_files))
+        })?,
+        measure_feature("controllers", "Controllers", || {
+            analyzers::controllers::analyze(project)
+                .map(|report| summarize_controllers(&report, &mut total_files))
+        })?,
+        measure_feature("models", "Models", || {
+            analyzers::models::analyze(project)
+                .map(|report| summarize_models(&report, &mut total_files))
+        })?,
+        measure_feature("migrations", "Migrations", || {
+            analyzers::migrations::analyze(project)
+                .map(|report| summarize_migrations(&report, &mut total_files))
+        })?,
+        measure_feature("config", "Config", || {
+            analyzers::configs::analyze(project)
+                .map(|report| summarize_configs(&report, &mut total_files))
+        })?,
+        measure_feature("providers", "Providers", || {
+            analyzers::providers::analyze(project)
+                .map(|report| summarize_providers(&report, &mut total_files))
+        })?,
+        measure_feature("middleware", "Middleware", || {
+            analyzers::middleware::analyze(project)
+                .map(|report| summarize_middleware(&report, &mut total_files))
+        })?,
+    ];
+
+    let summary = DashboardSummary {
+        feature_count: features.len(),
+        total_files_scanned: total_files.len(),
+        total_items_found: features.iter().map(|feature| feature.items_found).sum(),
+        total_autocomplete_suggestions: features
+            .iter()
+            .map(|feature| feature.autocomplete_suggestions)
+            .sum(),
+    };
+
+    Ok(DashboardReport { summary, features })
+}
+
+fn measure_feature(
+    id: &'static str,
+    label: &'static str,
+    build: impl FnOnce() -> Result<DashboardFeatureCounts, String>,
+) -> Result<DashboardFeature, String> {
+    let rss_before_kb = current_rss_kb();
+    let started_at = Instant::now();
+    let counts = build()?;
+    let scan_time_ms = started_at.elapsed().as_millis();
+    let rss_after_kb = current_rss_kb();
+
+    Ok(DashboardFeature {
+        id,
+        label,
+        files_scanned: counts.files_scanned,
+        items_found: counts.items_found,
+        autocomplete_suggestions: counts.autocomplete_suggestions,
+        scan_time_ms,
+        rss_delta_kb: rss_after_kb
+            .zip(rss_before_kb)
+            .map(|(after, before)| after as i64 - before as i64),
+    })
+}
+
+struct DashboardFeatureCounts {
+    files_scanned: usize,
+    items_found: usize,
+    autocomplete_suggestions: usize,
+}
+
+fn summarize_routes(
+    report: &RouteReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+    let mut suggestions = 0usize;
+
+    for route in &report.routes {
+        add_path(&mut files, &route.file);
+        add_path(&mut files, &route.registration.declared_in);
+        if let Some(target) = &route.controller_target {
+            if let Some(path) = target.declared_in.as_ref() {
+                add_path(&mut files, path);
+            }
+            if let Some(path) = target.method_declared_in.as_ref() {
+                add_path(&mut files, path);
+            }
+        }
+
+        suggestions += 1;
+        suggestions += usize::from(route.name.is_some());
+        suggestions += usize::from(route.action.is_some());
+        suggestions += route.parameter_patterns.len();
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.route_count,
+        autocomplete_suggestions: suggestions,
+    }
+}
+
+fn summarize_views(
+    report: &ViewReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+    let mut suggestions = 0usize;
+
+    for view in &report.views {
+        add_path(&mut files, &view.file);
+        add_path(&mut files, &view.source.declared_in);
+        for usage in &view.usages {
+            add_path(&mut files, &usage.source.declared_in);
+        }
+
+        suggestions += 1 + view.props.len() + view.variables.len();
+    }
+
+    for component in &report.blade_components {
+        add_path(&mut files, &component.source.declared_in);
+        if let Some(path) = component.class_file.as_ref() {
+            add_path(&mut files, path);
+        }
+        if let Some(path) = component.view_file.as_ref() {
+            add_path(&mut files, path);
+        }
+
+        suggestions += 1 + component.props.len();
+    }
+
+    for component in &report.livewire_components {
+        add_path(&mut files, &component.source.declared_in);
+        if let Some(path) = component.class_file.as_ref() {
+            add_path(&mut files, path);
+        }
+        if let Some(path) = component.view_file.as_ref() {
+            add_path(&mut files, path);
+        }
+
+        suggestions += 1 + component.state.len();
+    }
+
+    for missing in &report.missing_views {
+        for usage in &missing.usages {
+            add_path(&mut files, &usage.source.declared_in);
+        }
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.view_count
+            + report.blade_component_count
+            + report.livewire_component_count,
+        autocomplete_suggestions: suggestions,
+    }
+}
+
+fn summarize_controllers(
+    report: &ControllerReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+    let mut suggestions = 0usize;
+
+    for controller in &report.controllers {
+        add_path(&mut files, &controller.file);
+        suggestions += 1;
+
+        for method in &controller.methods {
+            add_path(&mut files, &method.declared_in);
+            suggestions += 1 + method.variables.len();
+        }
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.controller_count,
+        autocomplete_suggestions: suggestions,
+    }
+}
+
+fn summarize_models(
+    report: &ModelReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+    let mut suggestions = 0usize;
+
+    for model in &report.models {
+        add_path(&mut files, &model.file);
+        suggestions += 1
+            + model.columns.len()
+            + model.relations.len()
+            + model.scopes.len()
+            + model.accessors.len()
+            + model.mutators.len();
+
+        for relation in &model.relations {
+            if let Some(path) = relation.related_model_file.as_ref() {
+                add_path(&mut files, path);
+            }
+        }
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.model_count,
+        autocomplete_suggestions: suggestions,
+    }
+}
+
+fn summarize_migrations(
+    report: &MigrationReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+    let mut suggestions = 0usize;
+
+    for migration in &report.migrations {
+        add_path(&mut files, &migration.file);
+        suggestions += usize::from(!migration.table.is_empty())
+            + migration.columns.len()
+            + migration.indexes.len();
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.migration_count,
+        autocomplete_suggestions: suggestions,
+    }
+}
+
+fn summarize_configs(
+    report: &ConfigReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+    let mut suggestions = 0usize;
+
+    for item in &report.items {
+        add_path(&mut files, &item.file);
+        add_path(&mut files, &item.source.declared_in);
+        suggestions += 1 + usize::from(item.env_key.is_some());
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.item_count,
+        autocomplete_suggestions: suggestions,
+    }
+}
+
+fn summarize_providers(
+    report: &ProviderReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+
+    for provider in &report.providers {
+        add_path(&mut files, &provider.declared_in);
+        if let Some(path) = provider.source_file.as_ref() {
+            add_path(&mut files, path);
+        }
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.provider_count,
+        autocomplete_suggestions: report.providers.len(),
+    }
+}
+
+fn summarize_middleware(
+    report: &MiddlewareReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+
+    for alias in &report.aliases {
+        add_path(&mut files, &alias.source.declared_in);
+    }
+    for group in &report.groups {
+        add_path(&mut files, &group.source.declared_in);
+    }
+    for pattern in &report.patterns {
+        add_path(&mut files, &pattern.source.declared_in);
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.alias_count + report.group_count + report.pattern_count,
+        autocomplete_suggestions: report.alias_count + report.group_count + report.pattern_count,
+    }
+}
+
+fn add_path(paths: &mut BTreeSet<String>, path: &Path) {
+    let text = path.display().to_string();
+    if !text.is_empty() {
+        paths.insert(text);
+    }
 }
 
 fn attach_debug(mut payload: Value, debug: DebugInfo) -> Value {
@@ -311,8 +720,10 @@ fn compare_routes(
     let runtime_routes: Vec<ArtisanRoute> = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("failed to parse artisan route:list --json output: {error}"))?;
 
-    let mut runtime_map: BTreeMap<String, ComparedRoute> = BTreeMap::new();
-    let mut analyzer_map: BTreeMap<String, ComparedRoute> = BTreeMap::new();
+    let mut runtime_map: std::collections::BTreeMap<String, ComparedRoute> =
+        std::collections::BTreeMap::new();
+    let mut analyzer_map: std::collections::BTreeMap<String, ComparedRoute> =
+        std::collections::BTreeMap::new();
 
     for route in runtime_routes {
         let compared = compared_from_runtime(route);

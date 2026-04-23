@@ -109,7 +109,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<State>) -> Result<(), Str
             if query.is_empty() {
                 if let Some(project_root) = state.initial_project_root.as_deref() {
                     let location =
-                        format!("/?project={}&command=route:list", url_encode(project_root));
+                        format!("/?project={}&command=dashboard", url_encode(project_root));
                     write_redirect(&mut stream, &location)?;
                 } else {
                     serve_web_asset(&mut stream, "index.html")?;

@@ -38,6 +38,7 @@ import { ProvidersView } from "@/components/app/views/providers-view"
 import { ViewsView } from "@/components/app/views/views-view"
 import { ModelsView } from "@/components/app/views/models-view"
 import { MigrationsView } from "@/components/app/views/migrations-view"
+import { DashboardView } from "@/components/app/views/dashboard-view"
 import type { CommandId, Payload, Project } from "@/lib/types"
 import {
   IconAlertTriangle,
@@ -66,6 +67,13 @@ type CommandDef = {
 }
 
 const COMMANDS: CommandDef[] = [
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    description: "Autocomplete counts by feature",
+    icon: IconTimeline,
+    group: "Overview",
+  },
   {
     id: "route:list",
     label: "Routes",
@@ -146,7 +154,7 @@ const COMMANDS: CommandDef[] = [
   },
 ]
 
-const GROUPS = ["Routing", "Application", "Data"]
+const GROUPS = ["Overview", "Routing", "Application", "Data"]
 type LoadState = "idle" | "loading" | "error" | "done"
 
 function isCommandId(value: string | null): value is CommandId {
@@ -154,9 +162,9 @@ function isCommandId(value: string | null): value is CommandId {
 }
 
 function initialCommand(): CommandId {
-  if (typeof window === "undefined") return "route:list"
+  if (typeof window === "undefined") return "dashboard"
   const value = new URLSearchParams(window.location.search).get("command")
-  return isCommandId(value) ? value : "route:list"
+  return isCommandId(value) ? value : "dashboard"
 }
 
 function initialProject(): string {
@@ -458,6 +466,8 @@ export default function Page() {
 
 function ReportView({ payload }: { payload: Payload }) {
   switch (payload.command) {
+    case "dashboard":
+      return <DashboardView payload={payload} />
     case "route:list":
       return <RoutesView payload={payload} sourceMode={false} />
     case "route:sources":
