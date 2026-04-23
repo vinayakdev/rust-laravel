@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::cmp::Reverse;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::context::{
     BladeVariableContext, HelperContext, HelperStyle, RouteActionContext, RouteActionKind,
@@ -35,6 +35,7 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
             .into_iter()
             .map(|view| view_completion(view, context, line))
             .collect(),
+        SymbolKind::Asset => Vec::new(),
     }
 }
 
@@ -167,6 +168,10 @@ pub fn definitions(index: &ProjectIndex, context: &SymbolContext, line: usize) -
                 )
             })
             .collect(),
+        SymbolKind::Asset => asset_location(index, &context.full_text)
+            .into_iter()
+            .map(|relative| location(&index.project_root, &relative, 1, 1))
+            .collect(),
     }
 }
 
@@ -262,6 +267,10 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Opti
                 "range": range,
             }))
         }
+        SymbolKind::Asset => Some(json!({
+            "contents": { "kind": "markdown", "value": asset_hover(index, &context.full_text) },
+            "range": range,
+        })),
     }
 }
 
@@ -353,6 +362,19 @@ pub fn route_action_code_actions(index: &ProjectIndex, diagnostics: &[Value]) ->
             create_missing_method_action(index, controller, method, diagnostic)
         })
         .collect()
+}
+
+pub fn asset_code_actions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> {
+    let Some(relative) = asset_location(index, &context.full_text) else {
+        return Vec::new();
+    };
+    let absolute = index.project_root.join(relative);
+
+    vec![json!({
+        "title": "Open asset in Zed",
+        "command": "rust-php.openAssetInZed",
+        "arguments": [absolute.display().to_string()],
+    })]
 }
 
 fn config_completion(item: &ConfigItem, context: &SymbolContext, line: usize) -> Value {
@@ -584,6 +606,27 @@ fn view_hover(view: &ViewEntry) -> String {
     lines.join("\n")
 }
 
+fn asset_hover(index: &ProjectIndex, asset_path: &str) -> String {
+    let mut lines = vec![format!("`{asset_path}`")];
+
+    if let Some(relative) = asset_relative_file(asset_path) {
+        lines.push(format!("- public file: `{}`", relative.display()));
+
+        let absolute = index.project_root.join(&relative);
+        if absolute.exists() {
+            lines.push(format!("- resolved: `{}`", absolute.display()));
+            lines.push(format!("- absolute path: {}", absolute.display()));
+            lines.push(format!("- link: [open file]({})", path_to_file_uri(&absolute)));
+        } else {
+            lines.push("- status: `missing`".to_string());
+        }
+    } else {
+        lines.push("- status: `unresolved`".to_string());
+    }
+
+    lines.join("\n")
+}
+
 fn env_hover(item: &EnvItem) -> String {
     [
         format!("`{}`", item.key),
@@ -709,6 +752,26 @@ fn controller_method_hover(controller: &ControllerEntry, method: &ControllerMeth
         ),
     ]
     .join("\n")
+}
+
+fn asset_location(index: &ProjectIndex, asset_path: &str) -> Option<PathBuf> {
+    let relative = asset_relative_file(asset_path)?;
+    let absolute = index.project_root.join(&relative);
+    absolute.exists().then_some(relative)
+}
+
+fn asset_relative_file(asset_path: &str) -> Option<PathBuf> {
+    let trimmed = asset_path.trim();
+    if trimmed.is_empty() || trimmed.contains("://") || trimmed.starts_with("//") {
+        return None;
+    }
+
+    let relative = trimmed.trim_start_matches('/');
+    if relative.is_empty() {
+        return None;
+    }
+
+    Some(Path::new("public").join(relative))
 }
 
 fn diagnostic_code(status: &str) -> &'static str {
@@ -1241,6 +1304,22 @@ fn location_link(
     })
 }
 
+fn location(
+    project_root: &std::path::Path,
+    relative_file: &std::path::Path,
+    target_line: usize,
+    target_column: usize,
+) -> Value {
+    let absolute = project_root.join(relative_file);
+    json!({
+        "uri": path_to_file_uri(&absolute),
+        "range": {
+            "start": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
+            "end": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
+        },
+    })
+}
+
 fn path_to_file_uri(path: &std::path::Path) -> String {
     let raw = path.to_string_lossy();
     let encoded = raw
@@ -1266,17 +1345,17 @@ mod tests {
     use serde_json::json;
 
     use crate::lsp::context::{
-        HelperContext, HelperStyle, detect_blade_variable_context, detect_route_action_context,
-        detect_symbol_context,
+        HelperContext, HelperStyle, SymbolKind, detect_blade_variable_context,
+        detect_route_action_context, detect_symbol_context,
     };
     use crate::lsp::index::ProjectIndex;
     use crate::lsp::overrides::FileOverrides;
     use crate::project;
 
     use super::{
-        complete_blade_view_variables, complete_route_actions, complete_view_data_variables,
-        definitions, helper_snippets, hover, route_action_code_actions, route_action_definitions,
-        route_diagnostics,
+        asset_code_actions, complete_blade_view_variables, complete_route_actions,
+        complete_view_data_variables, definitions, helper_snippets, hover,
+        route_action_code_actions, route_action_definitions, route_diagnostics,
     };
 
     fn sandbox_project() -> project::LaravelProject {
@@ -1389,6 +1468,32 @@ Route::get('/dashboard', function () {
     return 'ok';
 })->name('dashboard.home');
 "#,
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn asset_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(
+            &root,
+            "public/assets/images/virtual/centers-card-img.png",
+            "png",
         );
 
         project::from_root(root).expect("fixture project should resolve")
@@ -1654,6 +1759,50 @@ Route::get('/dashboard', function () {
                     .ends_with(target_suffix)
             );
         }
+    }
+
+    #[test]
+    fn asset_hover_and_definition_resolve_public_file() {
+        let project = asset_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "return secure_asset('assets/images/virtual/centers-card-img.png');";
+        let character = source.find("virtual").unwrap() + 2;
+        let context = detect_symbol_context(source, 0, character).expect("asset context");
+
+        assert_eq!(context.kind, SymbolKind::Asset);
+
+        let hover = hover(&index, &context, 0).expect("hover expected");
+        let hover_value = hover
+            .pointer("/contents/value")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        assert!(hover_value.contains("public/assets/images/virtual/centers-card-img.png"));
+        assert!(hover_value.contains("/public/assets/images/virtual/centers-card-img.png"));
+        assert!(hover_value.contains("[open file](file://"));
+
+        let definitions = definitions(&index, &context, 0);
+        let first = definitions.first().expect("definition expected");
+        assert!(
+            first
+                .pointer("/uri")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/public/assets/images/virtual/centers-card-img.png")
+        );
+
+        let actions = asset_code_actions(&index, &context);
+        let first = actions.first().expect("asset code action expected");
+        assert_eq!(
+            first.get("title").and_then(|value| value.as_str()),
+            Some("Open asset in Zed")
+        );
+        assert!(
+            first.pointer("/arguments/0")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/public/assets/images/virtual/centers-card-img.png")
+        );
     }
 
     #[test]

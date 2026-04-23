@@ -14,9 +14,10 @@ pub(crate) enum DebugCommand {
     ViewList,
     ModelList,
     MigrationList,
+    PublicList,
 }
 
-pub(crate) const BROWSER_COMMANDS: [DebugCommand; 10] = [
+pub(crate) const BROWSER_COMMANDS: [DebugCommand; 11] = [
     DebugCommand::RouteList,
     DebugCommand::RouteSources,
     DebugCommand::MiddlewareList,
@@ -27,6 +28,7 @@ pub(crate) const BROWSER_COMMANDS: [DebugCommand; 10] = [
     DebugCommand::ViewList,
     DebugCommand::ModelList,
     DebugCommand::MigrationList,
+    DebugCommand::PublicList,
 ];
 
 impl DebugCommand {
@@ -44,6 +46,7 @@ impl DebugCommand {
             DebugCommand::ViewList => "view:list",
             DebugCommand::ModelList => "model:list",
             DebugCommand::MigrationList => "migration:list",
+            DebugCommand::PublicList => "public:list",
         }
     }
 
@@ -61,6 +64,7 @@ impl DebugCommand {
             DebugCommand::ViewList => "Views",
             DebugCommand::ModelList => "Models",
             DebugCommand::MigrationList => "Migrations",
+            DebugCommand::PublicList => "Public Files",
         }
     }
 
@@ -78,6 +82,7 @@ impl DebugCommand {
             "view:list" => Some(Self::ViewList),
             "model:list" => Some(Self::ModelList),
             "migration:list" => Some(Self::MigrationList),
+            "public:list" => Some(Self::PublicList),
             _ => None,
         }
     }

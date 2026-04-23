@@ -308,6 +308,30 @@ export type MigrationReport = {
   migrations: MigrationEntry[]
 }
 
+export type PublicAssetUsage = {
+  helper: string
+  source_kind: string
+  file: string
+  line: number
+  column: number
+  raw_reference: string
+  asset_path: string
+}
+
+export type PublicAssetEntry = {
+  file: string
+  asset_path: string
+  extension?: string
+  size_bytes: number
+  usages: PublicAssetUsage[]
+}
+
+export type PublicAssetReport = {
+  file_count: number
+  usage_count: number
+  assets: PublicAssetEntry[]
+}
+
 export type DashboardFeatureMetric = {
   id: string
   label: string
@@ -343,6 +367,7 @@ export type CommandId =
   | "view:list"
   | "model:list"
   | "migration:list"
+  | "public:list"
 
 export type Payload = {
   project: string
@@ -359,6 +384,7 @@ export type Payload = {
     | ViewReport
     | ModelReport
     | MigrationReport
+    | PublicAssetReport
   comparison?: RouteComparison
   error?: string
 }

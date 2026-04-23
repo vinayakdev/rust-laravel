@@ -66,6 +66,11 @@ pub fn run() -> Result<(), String> {
             let report = analyzers::migrations::analyze(&project)?;
             output::print_migrations(&report, options.json)?;
         }
+        Command::PublicList => {
+            let project = project::resolve(options.project.as_deref())?;
+            let report = analyzers::public_assets::analyze(&project)?;
+            output::print_public_assets(&report, options.json)?;
+        }
         Command::Lsp => {
             lsp::run_stdio()?;
         }
