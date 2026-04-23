@@ -3,6 +3,7 @@ mod benchmark;
 mod cli;
 pub mod core;
 mod debug;
+mod export;
 pub mod lsp;
 mod output;
 pub mod types;
@@ -67,6 +68,9 @@ pub fn run() -> Result<(), String> {
         }
         Command::Lsp => {
             lsp::run_stdio()?;
+        }
+        Command::ExportLsp => {
+            export::run(&options.export)?;
         }
         Command::BenchmarkIndex => {
             let project = project::resolve(options.project.as_deref())?;

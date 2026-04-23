@@ -1,3 +1,4 @@
+use crate::export::{ExportOptions, PickerMode};
 use crate::types::OutputMode;
 
 #[derive(Clone, Copy)]
@@ -13,6 +14,7 @@ pub enum Command {
     ModelList,
     MigrationList,
     Lsp,
+    ExportLsp,
     BenchmarkIndex,
     DebugBrowse,
     DebugWeb,
@@ -22,6 +24,7 @@ pub struct CliOptions {
     pub command: Command,
     pub json: OutputMode,
     pub project: Option<String>,
+    pub export: ExportOptions,
 }
 
 pub fn parse<I>(args: I) -> Result<CliOptions, String>
@@ -31,6 +34,12 @@ where
     let mut command = Command::RouteList;
     let mut json = OutputMode::Text;
     let mut project = None;
+    let mut export = ExportOptions {
+        output_dir: "test/output".into(),
+        picker: PickerMode::Arrows,
+        projects: Vec::new(),
+        jobs: None,
+    };
     let mut iter = args.into_iter();
 
     while let Some(arg) = iter.next() {
@@ -46,6 +55,7 @@ where
             "model:list" => command = Command::ModelList,
             "migration:list" => command = Command::MigrationList,
             "lsp" => command = Command::Lsp,
+            "export:lsp" => command = Command::ExportLsp,
             "benchmark:index" => command = Command::BenchmarkIndex,
             "debug:browse" => command = Command::DebugBrowse,
             "debug:web" => command = Command::DebugWeb,
@@ -56,6 +66,41 @@ where
                     .ok_or_else(|| "--project expects a value".to_string())?;
                 project = Some(value);
             }
+            "--projects" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--projects expects a comma-separated value".to_string())?;
+                export.projects = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect();
+            }
+            "--out" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--out expects a directory path".to_string())?;
+                export.output_dir = value.into();
+            }
+            "--picker" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--picker expects a value".to_string())?;
+                export.picker = PickerMode::parse(&value)?;
+            }
+            "--jobs" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "--jobs expects a positive integer".to_string())?;
+                let jobs = value
+                    .parse::<usize>()
+                    .map_err(|_| "--jobs expects a positive integer".to_string())?;
+                if jobs == 0 {
+                    return Err("--jobs expects a positive integer".to_string());
+                }
+                export.jobs = Some(jobs);
+            }
             "--help" | "-h" | "help" => return Err(help_text()),
             other => return Err(format!("unknown argument: {other}\n\n{}", help_text())),
         }
@@ -65,6 +110,7 @@ where
         command,
         json,
         project,
+        export,
     })
 }
 
@@ -82,6 +128,7 @@ fn help_text() -> String {
         "  rust-php model:list [--project <path-or-name>] [--json]",
         "  rust-php migration:list [--project <path-or-name>] [--json]",
         "  rust-php lsp",
+        "  rust-php export:lsp [--projects <name,...>] [--picker <arrows|fuzzy>] [--out <dir>] [--jobs <n>]",
         "  rust-php benchmark:index [--project <path-or-name>] [--json]",
         "  rust-php debug:browse [--project <path-or-name>]",
         "  rust-php debug:web [--project <path-or-name>]",
@@ -103,6 +150,8 @@ fn help_text() -> String {
         "  cargo run -- model:list --project sandbox-app",
         "  cargo run -- migration:list --project sandbox-app",
         "  cargo run -- lsp",
+        "  cargo run -- export:lsp --picker arrows --out test/output",
+        "  cargo run -- export:lsp --projects sandbox-app,demo-app --jobs 4",
         "  cargo run -- benchmark:index --project sandbox-app",
         "  cargo run -- debug:browse",
         "  cargo run -- debug:web",
