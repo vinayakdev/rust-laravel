@@ -9,6 +9,7 @@ use rust_php_foundation::types::ProviderReport;
 use rust_php_middleware::types::MiddlewareReport;
 use rust_php_migrations::types::MigrationReport;
 use rust_php_models::types::ModelReport;
+use rust_php_public::types::PublicAssetReport;
 use rust_php_routes::types::RouteReport;
 use rust_php_views::types::ViewReport;
 use serde::Deserialize;
@@ -70,6 +71,10 @@ pub(crate) fn render_text_report(
         DebugCommand::MigrationList => {
             let report = analyzers::migrations::analyze(project)?;
             Ok(text::models::render_migration_report(&report))
+        }
+        DebugCommand::PublicList => {
+            let report = analyzers::public_assets::analyze(project)?;
+            Ok(text::public_assets::render_public_asset_report(&report))
         }
         DebugCommand::RouteCompare => Err(
             "route:compare is only available in the web debugger because it needs structured JSON output"
@@ -159,6 +164,13 @@ pub(crate) fn render_json_report(
         }
         DebugCommand::MigrationList => {
             let report = analyzers::migrations::analyze(project)?;
+            (
+                json_payload(project, command, json!({ "report": report })),
+                None,
+            )
+        }
+        DebugCommand::PublicList => {
+            let report = analyzers::public_assets::analyze(project)?;
             (
                 json_payload(project, command, json!({ "report": report })),
                 None,
@@ -271,6 +283,10 @@ fn build_dashboard_report(project: &LaravelProject) -> Result<DashboardReport, S
         measure_feature("middleware", "Middleware", || {
             analyzers::middleware::analyze(project)
                 .map(|report| summarize_middleware(&report, &mut total_files))
+        })?,
+        measure_feature("public", "Public Files", || {
+            analyzers::public_assets::analyze(project)
+                .map(|report| summarize_public_assets(&report, &mut total_files))
         })?,
     ];
 
@@ -556,6 +572,28 @@ fn summarize_middleware(
         files_scanned: files.len(),
         items_found: report.alias_count + report.group_count + report.pattern_count,
         autocomplete_suggestions: report.alias_count + report.group_count + report.pattern_count,
+    }
+}
+
+fn summarize_public_assets(
+    report: &PublicAssetReport,
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+
+    for asset in &report.assets {
+        add_path(&mut files, &asset.file);
+        for usage in &asset.usages {
+            add_path(&mut files, &usage.file);
+        }
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: report.file_count,
+        autocomplete_suggestions: report.file_count + report.usage_count,
     }
 }
 

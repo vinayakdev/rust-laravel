@@ -4,6 +4,7 @@ pub enum SymbolKind {
     Route,
     Env,
     View,
+    Asset,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -411,6 +412,13 @@ fn detect_kind(before: &str) -> Option<SymbolKind> {
 
     if compact.contains("Route::view(") && route_argument_index(before) >= 1 {
         return Some(SymbolKind::View);
+    }
+
+    if ["asset(", "secure_asset("]
+        .iter()
+        .any(|needle| compact.ends_with(needle))
+    {
+        return Some(SymbolKind::Asset);
     }
 
     None

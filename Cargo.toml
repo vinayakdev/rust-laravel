@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/rust-php-configs", "crates/rust-php-controllers", "crates/rust-php-debug", "crates/rust-php-editor", "crates/rust-php-foundation", "crates/rust-php-lsp", "crates/rust-php-middleware", "crates/rust-php-migrations", "crates/rust-php-models", "crates/rust-php-output", "crates/rust-php-routes", "crates/rust-php-views", "zed-extension"]
+members = [".", "crates/rust-php-configs", "crates/rust-php-controllers", "crates/rust-php-debug", "crates/rust-php-editor", "crates/rust-php-foundation", "crates/rust-php-lsp", "crates/rust-php-middleware", "crates/rust-php-migrations", "crates/rust-php-models", "crates/rust-php-output", "crates/rust-php-public", "crates/rust-php-routes", "crates/rust-php-views", "zed-extension"]
 resolver = "2"
 
 [package]
@@ -24,6 +24,7 @@ rust-php-middleware = { path = "crates/rust-php-middleware" }
 rust-php-migrations = { path = "crates/rust-php-migrations" }
 rust-php-models = { path = "crates/rust-php-models" }
 rust-php-output = { path = "crates/rust-php-output" }
+rust-php-public = { path = "crates/rust-php-public" }
 rust-php-routes = { path = "crates/rust-php-routes" }
 rust-php-views = { path = "crates/rust-php-views" }
 serde = { version = "1.0", features = ["derive"] }

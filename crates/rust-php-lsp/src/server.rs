@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Instant;
 
 use bumpalo::Bump;
@@ -168,6 +169,14 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
         }
         Some("textDocument/codeAction") => {
             Ok(id.map(|id| success(id, code_action_result(state, message.get("params")))))
+        }
+        Some("workspace/executeCommand") => {
+            Ok(id.map(
+                |id| match execute_command_result(state, message.get("params")) {
+                    Ok(result) => success(id, result),
+                    Err(message) => error(id, -32603, &message),
+                },
+            ))
         }
         Some(_) | None => {
             if let Some(id) = id {
@@ -385,16 +394,48 @@ fn code_action_result(state: &ServerState, params: Option<&Value>) -> Value {
     let Some(params) = params else {
         return Value::Array(Vec::new());
     };
+    let Some((_uri, source, line, character)) = source_and_position_from_range(state, Some(params))
+    else {
+        return Value::Array(Vec::new());
+    };
     let Some(index) = &state.index else {
         return Value::Array(Vec::new());
     };
-    let diagnostics = params
+    let mut actions = params
         .pointer("/context/diagnostics")
         .and_then(Value::as_array)
         .cloned()
+        .map(|diagnostics| query::route_action_code_actions(index, &diagnostics))
         .unwrap_or_default();
 
-    Value::Array(query::route_action_code_actions(index, &diagnostics))
+    if let Some(context) = detect_symbol_context(source, line, character) {
+        if context.kind == super::context::SymbolKind::Asset {
+            actions.extend(query::asset_code_actions(index, &context));
+        }
+    }
+
+    Value::Array(actions)
+}
+
+fn execute_command_result(_state: &ServerState, params: Option<&Value>) -> Result<Value, String> {
+    let Some(params) = params else {
+        return Ok(Value::Null);
+    };
+    let Some(command) = params.get("command").and_then(Value::as_str) else {
+        return Ok(Value::Null);
+    };
+
+    match command {
+        "rust-php.openAssetInZed" => {
+            let path = params
+                .pointer("/arguments/0")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing asset path argument".to_string())?;
+            open_in_zed(Path::new(path))?;
+            Ok(Value::Null)
+        }
+        _ => Ok(Value::Null),
+    }
 }
 
 fn source_and_position<'a>(
@@ -408,6 +449,27 @@ fn source_and_position<'a>(
     let line = params.pointer("/position/line").and_then(Value::as_u64)? as usize;
     let character = params
         .pointer("/position/character")
+        .and_then(Value::as_u64)? as usize;
+
+    state
+        .documents
+        .get(uri)
+        .map(|text| (uri, text.as_str(), line, character))
+}
+
+fn source_and_position_from_range<'a>(
+    state: &'a ServerState,
+    params: Option<&'a Value>,
+) -> Option<(&'a str, &'a str, usize, usize)> {
+    let params = params?;
+    let uri = params
+        .pointer("/textDocument/uri")
+        .and_then(Value::as_str)?;
+    let line = params
+        .pointer("/range/start/line")
+        .and_then(Value::as_u64)? as usize;
+    let character = params
+        .pointer("/range/start/character")
         .and_then(Value::as_u64)? as usize;
 
     state
@@ -431,6 +493,9 @@ fn initialize_result() -> Value {
             "definitionProvider": true,
             "hoverProvider": true,
             "codeActionProvider": true,
+            "executeCommandProvider": {
+                "commands": ["rust-php.openAssetInZed"]
+            },
             "diagnosticProvider": {
                 "interFileDependencies": true,
                 "workspaceDiagnostics": false
@@ -448,6 +513,17 @@ fn success(id: Value, result: Value) -> Value {
         "jsonrpc": "2.0",
         "id": id,
         "result": result,
+    })
+}
+
+fn error(id: Value, code: i64, message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message,
+        },
     })
 }
 
@@ -648,6 +724,58 @@ fn log_lsp_event(message: String) {
         return;
     };
     let _ = writeln!(file, "[rust-php:lsp] {message}");
+}
+
+fn open_in_zed(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        log_lsp_event(format!("openInZed missing path={}", path.display()));
+        return Err(format!("asset path does not exist: {}", path.display()));
+    }
+
+    log_lsp_event(format!(
+        "openInZed trying command=zed path={}",
+        path.display()
+    ));
+    match Command::new("zed").arg(path).spawn() {
+        Ok(_) => {
+            log_lsp_event(format!("openInZed ok command=zed path={}", path.display()));
+            return Ok(());
+        }
+        Err(error) => {
+            log_lsp_event(format!(
+                "openInZed failed command=zed path={} error={}",
+                path.display(),
+                error
+            ));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        log_lsp_event(format!(
+            "openInZed trying command=open -a Zed path={}",
+            path.display()
+        ));
+        if Command::new("open")
+            .args(["-a", "Zed"])
+            .arg(path)
+            .spawn()
+            .is_ok()
+        {
+            log_lsp_event(format!(
+                "openInZed ok command=open -a Zed path={}",
+                path.display()
+            ));
+            return Ok(());
+        }
+        log_lsp_event(format!(
+            "openInZed failed command=open -a Zed path={}",
+            path.display()
+        ));
+    }
+
+    log_lsp_event(format!("openInZed giving-up path={}", path.display()));
+    Err("failed to launch Zed for asset path".to_string())
 }
 
 #[cfg(test)]

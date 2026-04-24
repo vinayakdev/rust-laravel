@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::cmp::Reverse;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::context::{
     BladeComponentAttrContext, BladeComponentTagContext, BladeVariableContext, HelperContext,
@@ -36,6 +36,7 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
             .into_iter()
             .map(|view| view_completion(view, context, line))
             .collect(),
+        SymbolKind::Asset => Vec::new(),
     }
 }
 
@@ -267,6 +268,10 @@ pub fn definitions(index: &ProjectIndex, context: &SymbolContext, line: usize) -
                 )
             })
             .collect(),
+        SymbolKind::Asset => asset_location(index, &context.full_text)
+            .into_iter()
+            .map(|relative| location(&index.project_root, &relative, 1, 1))
+            .collect(),
     }
 }
 
@@ -362,6 +367,10 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Opti
                 "range": range,
             }))
         }
+        SymbolKind::Asset => Some(json!({
+            "contents": { "kind": "markdown", "value": asset_hover(index, &context.full_text) },
+            "range": range,
+        })),
     }
 }
 
@@ -453,6 +462,19 @@ pub fn route_action_code_actions(index: &ProjectIndex, diagnostics: &[Value]) ->
             create_missing_method_action(index, controller, method, diagnostic)
         })
         .collect()
+}
+
+pub fn asset_code_actions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> {
+    let Some(relative) = asset_location(index, &context.full_text) else {
+        return Vec::new();
+    };
+    let absolute = index.project_root.join(relative);
+
+    vec![json!({
+        "title": "Open asset in Zed",
+        "command": "rust-php.openAssetInZed",
+        "arguments": [absolute.display().to_string()],
+    })]
 }
 
 fn config_completion(item: &ConfigItem, context: &SymbolContext, line: usize) -> Value {
@@ -973,6 +995,47 @@ fn controller_method_hover(controller: &ControllerEntry, method: &ControllerMeth
         ),
     ]
     .join("\n")
+}
+
+fn asset_hover(index: &ProjectIndex, asset_path: &str) -> String {
+    let mut lines = vec![format!("`{asset_path}`")];
+
+    if let Some(relative) = asset_relative_file(asset_path) {
+        lines.push(format!("- public file: `{}`", relative.display()));
+
+        let absolute = index.project_root.join(&relative);
+        if absolute.exists() {
+            lines.push(format!("- resolved: `{}`", absolute.display()));
+            lines.push(format!("- absolute path: {}", absolute.display()));
+            lines.push(format!("- link: [open file]({})", path_to_file_uri(&absolute)));
+        } else {
+            lines.push("- status: `missing`".to_string());
+        }
+    } else {
+        lines.push("- status: `unresolved`".to_string());
+    }
+
+    lines.join("\n")
+}
+
+fn asset_location(index: &ProjectIndex, asset_path: &str) -> Option<PathBuf> {
+    let relative = asset_relative_file(asset_path)?;
+    let absolute = index.project_root.join(&relative);
+    absolute.exists().then_some(relative)
+}
+
+fn asset_relative_file(asset_path: &str) -> Option<PathBuf> {
+    let trimmed = asset_path.trim();
+    if trimmed.is_empty() || trimmed.contains("://") || trimmed.starts_with("//") {
+        return None;
+    }
+
+    let relative = trimmed.trim_start_matches('/');
+    if relative.is_empty() {
+        return None;
+    }
+
+    Some(Path::new("public").join(relative))
 }
 
 fn diagnostic_code(status: &str) -> &'static str {
@@ -1499,6 +1562,22 @@ fn location_link(
             "end": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
         },
         "targetSelectionRange": {
+            "start": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
+            "end": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
+        },
+    })
+}
+
+fn location(
+    project_root: &std::path::Path,
+    relative_file: &std::path::Path,
+    target_line: usize,
+    target_column: usize,
+) -> Value {
+    let absolute = project_root.join(relative_file);
+    json!({
+        "uri": path_to_file_uri(&absolute),
+        "range": {
             "start": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
             "end": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
         },

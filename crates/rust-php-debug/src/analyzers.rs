@@ -164,3 +164,13 @@ pub mod models {
         rust_php_models::analyze(project, &mappings, &migration_report.migrations)
     }
 }
+
+pub mod public_assets {
+    use super::*;
+
+    pub fn analyze(
+        project: &LaravelProject,
+    ) -> Result<rust_php_public::types::PublicAssetReport, String> {
+        rust_php_public::analyze(project)
+    }
+}

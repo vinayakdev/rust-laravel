@@ -1,6 +1,6 @@
 use crate::types::{
     ConfigReport, ControllerReport, MiddlewareReport, MigrationReport, ModelReport, OutputMode,
-    ProviderReport, RouteReport, ViewReport,
+    ProviderReport, PublicAssetReport, RouteReport, ViewReport,
 };
 
 #[allow(dead_code)]
@@ -106,6 +106,16 @@ pub fn print_migrations(report: &MigrationReport, mode: OutputMode) -> Result<()
         OutputMode::Json => rust_php_output::json::print_migrations(report),
         OutputMode::Text => {
             rust_php_output::text::models::print_migration_report(report);
+            Ok(())
+        }
+    }
+}
+
+pub fn print_public_assets(report: &PublicAssetReport, mode: OutputMode) -> Result<(), String> {
+    match mode {
+        OutputMode::Json => rust_php_output::json::print_public_assets(report),
+        OutputMode::Text => {
+            rust_php_output::text::public_assets::print_public_asset_report(report);
             Ok(())
         }
     }

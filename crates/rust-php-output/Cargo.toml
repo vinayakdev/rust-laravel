@@ -11,6 +11,7 @@ rust-php-foundation = { path = "../rust-php-foundation" }
 rust-php-middleware = { path = "../rust-php-middleware" }
 rust-php-migrations = { path = "../rust-php-migrations" }
 rust-php-models = { path = "../rust-php-models" }
+rust-php-public = { path = "../rust-php-public" }
 rust-php-routes = { path = "../rust-php-routes" }
 rust-php-views = { path = "../rust-php-views" }
 serde_json = "1.0"

@@ -3,6 +3,7 @@ pub mod controllers;
 pub mod middleware;
 pub mod models;
 pub mod providers;
+pub mod public_assets;
 pub mod routes;
 pub mod views;
 

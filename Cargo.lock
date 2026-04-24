@@ -1121,6 +1121,7 @@ dependencies = [
  "rust-php-migrations",
  "rust-php-models",
  "rust-php-output",
+ "rust-php-public",
  "rust-php-routes",
  "rust-php-views",
  "serde",
@@ -1161,6 +1162,7 @@ dependencies = [
  "rust-php-migrations",
  "rust-php-models",
  "rust-php-output",
+ "rust-php-public",
  "rust-php-routes",
  "rust-php-views",
  "serde",
@@ -1251,9 +1253,18 @@ dependencies = [
  "rust-php-middleware",
  "rust-php-migrations",
  "rust-php-models",
+ "rust-php-public",
  "rust-php-routes",
  "rust-php-views",
  "serde_json",
+]
+
+[[package]]
+name = "rust-php-public"
+version = "0.1.0"
+dependencies = [
+ "rust-php-foundation",
+ "serde",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 use crate::types::{
     ConfigReport, ControllerReport, MiddlewareReport, MigrationReport, ModelReport, ProviderReport,
-    RouteReport, ViewReport,
+    PublicAssetReport, RouteReport, ViewReport,
 };
 
 pub fn print_routes(report: &RouteReport) -> Result<(), String> {
@@ -60,6 +60,14 @@ pub fn print_models(report: &ModelReport) -> Result<(), String> {
 }
 
 pub fn print_migrations(report: &MigrationReport) -> Result<(), String> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(report).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
+pub fn print_public_assets(report: &PublicAssetReport) -> Result<(), String> {
     println!(
         "{}",
         serde_json::to_string_pretty(report).map_err(|e| e.to_string())?

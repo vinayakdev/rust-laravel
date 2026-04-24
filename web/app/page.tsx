@@ -38,6 +38,7 @@ import { ProvidersView } from "@/components/app/views/providers-view"
 import { ViewsView } from "@/components/app/views/views-view"
 import { ModelsView } from "@/components/app/views/models-view"
 import { MigrationsView } from "@/components/app/views/migrations-view"
+import { PublicFilesView } from "@/components/app/views/public-files-view"
 import { DashboardView } from "@/components/app/views/dashboard-view"
 import type { CommandId, Payload, Project } from "@/lib/types"
 import {
@@ -151,6 +152,13 @@ const COMMANDS: CommandDef[] = [
     description: "Database migration files and status",
     icon: IconTable,
     group: "Data",
+  },
+  {
+    id: "public:list",
+    label: "Public Files",
+    description: "Indexed public assets with PHP and Blade references",
+    icon: IconBox,
+    group: "Application",
   },
 ]
 
@@ -490,6 +498,8 @@ function ReportView({ payload }: { payload: Payload }) {
       return <ModelsView payload={payload} />
     case "migration:list":
       return <MigrationsView payload={payload} />
+    case "public:list":
+      return <PublicFilesView payload={payload} />
     default:
       return (
         <Card>

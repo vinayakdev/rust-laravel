@@ -4,6 +4,7 @@ pub mod middleware;
 pub mod migrations;
 pub mod models;
 pub mod providers;
+pub mod public_assets;
 pub mod routes;
 pub mod views;
 
