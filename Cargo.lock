@@ -1168,6 +1168,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-php-editor"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "php-parser",
+ "rust-php-configs",
+ "rust-php-controllers",
+ "rust-php-foundation",
+ "rust-php-middleware",
+ "rust-php-routes",
+ "rust-php-views",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rust-php-foundation"
 version = "0.1.0"
 dependencies = [
@@ -1185,6 +1201,7 @@ dependencies = [
  "php-parser",
  "rust-php-configs",
  "rust-php-controllers",
+ "rust-php-editor",
  "rust-php-foundation",
  "rust-php-middleware",
  "rust-php-routes",
