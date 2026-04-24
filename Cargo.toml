@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/rust-php-configs", "crates/rust-php-controllers", "crates/rust-php-debug", "crates/rust-php-foundation", "crates/rust-php-lsp", "crates/rust-php-middleware", "crates/rust-php-migrations", "crates/rust-php-models", "crates/rust-php-output", "crates/rust-php-routes", "crates/rust-php-views", "zed-extension"]
+members = [".", "crates/rust-php-configs", "crates/rust-php-controllers", "crates/rust-php-debug", "crates/rust-php-editor", "crates/rust-php-foundation", "crates/rust-php-lsp", "crates/rust-php-middleware", "crates/rust-php-migrations", "crates/rust-php-models", "crates/rust-php-output", "crates/rust-php-routes", "crates/rust-php-views", "zed-extension"]
 resolver = "2"
 
 [package]

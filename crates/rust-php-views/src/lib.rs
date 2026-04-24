@@ -1395,8 +1395,50 @@ fn parse_constructor_promoted_properties(source: &str) -> Vec<ViewVariable> {
     props
 }
 
+fn strip_line_comments(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+    let mut chars = body.char_indices().peekable();
+
+    while let Some((_, ch)) = chars.next() {
+        if escape {
+            escape = false;
+            out.push(ch);
+            continue;
+        }
+        if in_single {
+            if ch == '\\' { escape = true; }
+            else if ch == '\'' { in_single = false; }
+            out.push(ch);
+            continue;
+        }
+        if in_double {
+            if ch == '\\' { escape = true; }
+            else if ch == '"' { in_double = false; }
+            out.push(ch);
+            continue;
+        }
+        if ch == '\'' { in_single = true; out.push(ch); continue; }
+        if ch == '"' { in_double = true; out.push(ch); continue; }
+        if ch == '/' {
+            if chars.peek().map(|(_, c)| *c) == Some('/') {
+                // consume until end of line
+                for (_, c) in chars.by_ref() {
+                    if c == '\n' { out.push('\n'); break; }
+                }
+                continue;
+            }
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn parse_array_like_variables(body: &str) -> Vec<ViewVariable> {
-    split_top_level(body, ',')
+    let cleaned = strip_line_comments(body);
+    split_top_level(&cleaned, ',')
         .into_iter()
         .filter_map(|entry| {
             let trimmed = entry.trim();

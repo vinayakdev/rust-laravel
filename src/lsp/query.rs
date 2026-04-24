@@ -3,14 +3,15 @@ use std::cmp::Reverse;
 use std::path::Path;
 
 use super::context::{
-    BladeVariableContext, HelperContext, HelperStyle, RouteActionContext, RouteActionKind,
-    SymbolContext, SymbolKind, ViewDataContext, ViewDataKind,
+    BladeComponentAttrContext, BladeComponentTagContext, BladeVariableContext, HelperContext,
+    HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind, ViewDataContext,
+    ViewDataKind,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
 use crate::types::{
-    ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry, ViewEntry,
-    ViewVariable,
+    BladeComponentEntry, ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry,
+    ViewEntry, ViewVariable,
 };
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
@@ -103,6 +104,105 @@ pub fn complete_route_actions(
             })
             .collect(),
     }
+}
+
+pub fn complete_blade_components(
+    index: &ProjectIndex,
+    context: &BladeComponentTagContext,
+    line: usize,
+) -> Vec<Value> {
+    index
+        .blade_component_matches(&context.prefix)
+        .into_iter()
+        .map(|component| {
+            blade_component_tag_completion(component, context, line, &index.project_root)
+        })
+        .collect()
+}
+
+pub fn complete_blade_component_props(
+    index: &ProjectIndex,
+    context: &BladeComponentAttrContext,
+    line: usize,
+) -> Vec<Value> {
+    let Some(component) = index
+        .blade_component_definitions(&context.component)
+        .into_iter()
+        .next()
+    else {
+        return Vec::new();
+    };
+
+    let mut matches: Vec<_> = component
+        .props
+        .iter()
+        .filter(|prop| !context.already_present.contains(&prop.name))
+        .filter_map(|prop| {
+            let score = fuzzy_score(&prop.name, &context.prefix)?;
+            Some((score, prop.name.len(), prop.name.as_str(), prop))
+        })
+        .collect();
+
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, *label));
+    matches
+        .into_iter()
+        .map(|(_, _, _, prop)| blade_component_attr_completion(prop, context, line))
+        .collect()
+}
+
+pub fn blade_component_hover(
+    index: &ProjectIndex,
+    context: &BladeComponentTagContext,
+    line: usize,
+) -> Option<Value> {
+    let components = index.blade_component_definitions(&context.full_text);
+    if components.is_empty() {
+        return None;
+    }
+    let range = hover_range(
+        line,
+        blade_component_selection_start_character(context),
+        context.end_character,
+    );
+    Some(json!({
+        "contents": { "kind": "markdown", "value": blade_component_hover_text_all(&components, &index.project_root) },
+        "range": range,
+    }))
+}
+
+pub fn blade_component_definitions(
+    index: &ProjectIndex,
+    context: &BladeComponentTagContext,
+    line: usize,
+) -> Vec<Value> {
+    index
+        .blade_component_definitions(&context.full_text)
+        .into_iter()
+        .filter_map(|component| {
+            let file = component
+                .class_file
+                .as_ref()
+                .or(component.view_file.as_ref())?;
+            Some(json!({
+                "originSelectionRange": {
+                    "start": {
+                        "line": line,
+                        "character": blade_component_selection_start_character(context),
+                    },
+                    "end": { "line": line, "character": context.end_character },
+                },
+                "targetUri": path_to_file_uri(&index.project_root.join(file)),
+                "targetRange": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 0 },
+                },
+                "targetSelectionRange": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 0 },
+                },
+            }))
+        })
+        .collect()
 }
 
 pub fn definitions(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
@@ -581,6 +681,123 @@ fn view_hover(view: &ViewEntry) -> String {
         lines.push(format!("- props: `{prop_names}`"));
     }
 
+    lines.join("\n")
+}
+
+fn blade_component_selection_start_character(context: &BladeComponentTagContext) -> usize {
+    context.tag_start_character + 1
+}
+
+fn blade_component_tag_completion(
+    component: &BladeComponentEntry,
+    context: &BladeComponentTagContext,
+    line: usize,
+    project_root: &Path,
+) -> Value {
+    let name = &component.component;
+    let snippet = format!("{name} $1>\n\t$2\n</x-{name}>$0");
+    json!({
+        "label": format!("x-{name}"),
+        "kind": 10,
+        "detail": blade_component_detail(component),
+        "filterText": name,
+        "insertTextFormat": 2,
+        "documentation": { "kind": "markdown", "value": blade_component_hover_text(component, project_root) },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": snippet,
+        },
+        "additionalTextEdits": [],
+    })
+}
+
+fn blade_component_attr_completion(
+    prop: &ViewVariable,
+    context: &BladeComponentAttrContext,
+    line: usize,
+) -> Value {
+    let name = &prop.name;
+    let (new_text, detail) = if context.already_typed_colon {
+        (format!("{name}=\"${{1}}\""), format!(":{name}=\"...\""))
+    } else {
+        (format!("{name}=\"${{1}}\""), format!("{name}=\"...\""))
+    };
+    let doc = match &prop.default_value {
+        Some(v) => format!("`{name}` — default: `{v}`"),
+        None => format!("`{name}` — required prop"),
+    };
+    json!({
+        "label": name,
+        "kind": 5,
+        "detail": detail,
+        "documentation": { "kind": "markdown", "value": doc },
+        "insertTextFormat": 2,
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": new_text,
+        }
+    })
+}
+
+fn blade_component_detail(component: &BladeComponentEntry) -> String {
+    if let Some(class) = &component.class_name {
+        format!("{class} ({})", component.kind)
+    } else {
+        format!("Blade component ({})", component.kind)
+    }
+}
+
+fn blade_component_hover_text(component: &BladeComponentEntry, project_root: &Path) -> String {
+    blade_component_hover_text_all(&[component], project_root)
+}
+
+fn blade_component_hover_text_all(
+    components: &[&BladeComponentEntry],
+    project_root: &Path,
+) -> String {
+    let first = components[0];
+    let mut lines = vec![format!("`x-{}`", first.component)];
+
+    for component in components {
+        if let Some(class) = &component.class_name {
+            if let Some(class_file) = &component.class_file {
+                let absolute = project_root.join(class_file);
+                let uri = path_to_file_uri(&absolute);
+                lines.push(format!("- class: [`{class}`]({})", uri));
+            } else {
+                lines.push(format!("- class: `{class}`"));
+            }
+        }
+    }
+    let mut seen_files = std::collections::HashSet::new();
+    for component in components {
+        if let Some(view_file) = &component.view_file {
+            if seen_files.insert(view_file.clone()) {
+                let absolute = project_root.join(view_file);
+                let uri = path_to_file_uri(&absolute);
+                lines.push(format!("- blade file: [{}]({})", view_file.display(), uri));
+            }
+        }
+    }
+    let mut seen_props = std::collections::HashSet::new();
+    let props: Vec<String> = components
+        .iter()
+        .flat_map(|component| component.props.iter())
+        .filter(|prop| seen_props.insert(prop.name.clone()))
+        .map(|prop| match &prop.default_value {
+            Some(v) => format!("{} = {v}", prop.name),
+            None => prop.name.clone(),
+        })
+        .collect();
+    if !props.is_empty() {
+        lines.push(format!("- props: `{}`", props.join(", ")));
+    }
     lines.join("\n")
 }
 
@@ -1266,17 +1483,17 @@ mod tests {
     use serde_json::json;
 
     use crate::lsp::context::{
-        HelperContext, HelperStyle, detect_blade_variable_context, detect_route_action_context,
-        detect_symbol_context,
+        HelperContext, HelperStyle, detect_blade_component_tag_context,
+        detect_blade_variable_context, detect_route_action_context, detect_symbol_context,
     };
     use crate::lsp::index::ProjectIndex;
     use crate::lsp::overrides::FileOverrides;
     use crate::project;
 
     use super::{
-        complete_blade_view_variables, complete_route_actions, complete_view_data_variables,
-        definitions, helper_snippets, hover, route_action_code_actions, route_action_definitions,
-        route_diagnostics,
+        blade_component_definitions, complete_blade_view_variables, complete_route_actions,
+        complete_view_data_variables, definitions, helper_snippets, hover,
+        route_action_code_actions, route_action_definitions, route_diagnostics,
     };
 
     fn sandbox_project() -> project::LaravelProject {
@@ -1342,6 +1559,38 @@ class ViewController
             &root,
             "resources/views/admin/users/index.blade.php",
             "<div>{{ $title }}</div>\n",
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn blade_component_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(&root, "app/View/Components/ProfileCard.php", "<?php\n");
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(
+            &root,
+            "resources/views/components/profile-card.blade.php",
+            "<div>Card</div>\n",
+        );
+        write_file(
+            &root,
+            "resources/views/pages/workspaces/virtual-office/index.blade.php",
+            "<x-profile-card />\n",
         );
 
         project::from_root(root).expect("fixture project should resolve")
@@ -1605,6 +1854,46 @@ Route::get('/dashboard', function () {
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .ends_with("/resources/views/admin/users/index.blade.php")
+        );
+    }
+
+    #[test]
+    fn blade_component_definition_uses_x_prefixed_origin_selection_range() {
+        let project = blade_component_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<x-profile-card />\n";
+        let character = source.find("profile-card").unwrap() + 3;
+        let context = detect_blade_component_tag_context(
+            "file:///tmp/resources/views/pages/workspaces/virtual-office/index.blade.php",
+            source,
+            0,
+            character,
+        )
+        .expect("blade component context");
+
+        let definitions = blade_component_definitions(&index, &context, 0);
+        assert!(!definitions.is_empty());
+        let first = definitions.first().expect("definition expected");
+
+        assert_eq!(
+            first
+                .pointer("/originSelectionRange/start/character")
+                .and_then(|value| value.as_u64()),
+            Some(source.find("x-profile-card").unwrap() as u64)
+        );
+        assert_eq!(
+            first
+                .pointer("/originSelectionRange/end/character")
+                .and_then(|value| value.as_u64()),
+            Some((source.find("x-profile-card").unwrap() + "x-profile-card".len()) as u64)
+        );
+        assert!(
+            first
+                .pointer("/targetUri")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/app/View/Components/ProfileCard.php")
         );
     }
 
