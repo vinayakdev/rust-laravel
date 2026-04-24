@@ -12,8 +12,9 @@ use serde_json::{Value, json};
 
 use super::context::{
     detect_blade_component_attr_context, detect_blade_component_tag_context,
-    detect_blade_variable_context, detect_helper_context, detect_route_action_context,
-    detect_symbol_context, detect_view_data_context,
+    detect_blade_variable_context, detect_helper_context, detect_livewire_component_tag_context,
+    detect_livewire_directive_value_context, detect_route_action_context, detect_symbol_context,
+    detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -228,8 +229,17 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
     };
 
     let (items, is_incomplete) = if let Some(context) =
-        detect_blade_component_tag_context(uri, source, line, character)
+        detect_livewire_component_tag_context(uri, source, line, character)
     {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=livewire-component-tag prefix={:?}",
+            line, character, context.prefix
+        ));
+        (
+            query::complete_livewire_components(index, &context, line),
+            true,
+        )
+    } else if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=blade-component-tag prefix={:?}",
             line, character, context.prefix
@@ -274,6 +284,25 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
                 .unwrap_or_default(),
             true,
         )
+    } else if let Some(context) =
+        detect_livewire_directive_value_context(uri, source, line, character)
+    {
+        let relative = file_uri_to_path(uri).and_then(|path| {
+            path.strip_prefix(&index.project_root)
+                .ok()
+                .map(PathBuf::from)
+        });
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=livewire-directive directive={} prefix={:?}",
+            line, character, context.directive, context.prefix
+        ));
+        (
+            relative
+                .as_deref()
+                .map(|file| query::complete_livewire_directive_values(index, file, &context, line))
+                .unwrap_or_default(),
+            true,
+        )
     } else if let Some(context) = detect_symbol_context(source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=symbol prefix={:?}",
@@ -314,16 +343,19 @@ fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
         return Value::Null;
     };
 
-    let definitions =
-        if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
-            query::blade_component_definitions(index, &context, line)
-        } else if let Some(context) = detect_symbol_context(source, line, character) {
-            query::definitions(index, &context, line)
-        } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
-            query::route_action_definitions(index, &context, line)
-        } else {
-            Vec::new()
-        };
+    let definitions = if let Some(context) =
+        detect_livewire_component_tag_context(uri, source, line, character)
+    {
+        query::livewire_component_definitions(index, &context, line)
+    } else if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
+        query::blade_component_definitions(index, &context, line)
+    } else if let Some(context) = detect_symbol_context(source, line, character) {
+        query::definitions(index, &context, line)
+    } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
+        query::route_action_definitions(index, &context, line)
+    } else {
+        Vec::new()
+    };
 
     if definitions.is_empty() {
         Value::Null
@@ -340,6 +372,9 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
         return Value::Null;
     };
 
+    if let Some(context) = detect_livewire_component_tag_context(uri, source, line, character) {
+        return query::livewire_component_hover(index, &context, line).unwrap_or(Value::Null);
+    }
     if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
         return query::blade_component_hover(index, &context, line).unwrap_or(Value::Null);
     }
@@ -783,7 +818,7 @@ fn open_in_zed(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use serde_json::json;
 
@@ -796,10 +831,16 @@ mod tests {
         php_document_has_parse_errors, php_document_parse_errors, route_reindex_guard_reason,
     };
 
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("lsp crate should be under crates/")
+            .to_path_buf()
+    }
+
     fn sandbox_project() -> project::LaravelProject {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("laravel-example")
-            .join("sandbox-app");
+        let root = workspace_root().join("laravel-example").join("sandbox-app");
         project::from_root(root).expect("sandbox project should resolve")
     }
 

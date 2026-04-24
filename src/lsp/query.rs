@@ -4,14 +4,16 @@ use std::path::{Path, PathBuf};
 
 use super::context::{
     BladeComponentAttrContext, BladeComponentTagContext, BladeVariableContext, HelperContext,
-    HelperStyle, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind, ViewDataContext,
-    ViewDataKind,
+    HelperStyle, LivewireComponentTagContext, LivewireDirectiveValueContext,
+    LivewireDirectiveValueKind, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
+    ViewDataContext, ViewDataKind,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
 use crate::types::{
     BladeComponentEntry, ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem,
-    PublicAssetEntry, RouteEntry, ViewEntry, ViewVariable,
+    LivewireActionEntry, LivewireComponentEntry, PublicAssetEntry, RouteEntry, ViewEntry,
+    ViewVariable,
 };
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
@@ -36,10 +38,47 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
             .into_iter()
             .map(|view| view_completion(view, context, line))
             .collect(),
+        SymbolKind::Livewire => index
+            .livewire_component_matches(&context.prefix)
+            .into_iter()
+            .map(|component| livewire_symbol_completion(component, context, line))
+            .collect(),
         SymbolKind::Asset => index
             .public_asset_matches(&context.prefix)
             .into_iter()
             .map(|asset| asset_completion(asset, context, line))
+            .collect(),
+    }
+}
+
+pub fn complete_livewire_components(
+    index: &ProjectIndex,
+    context: &LivewireComponentTagContext,
+    line: usize,
+) -> Vec<Value> {
+    index
+        .livewire_component_matches(&context.prefix)
+        .into_iter()
+        .map(|component| livewire_tag_completion(component, context, line))
+        .collect()
+}
+
+pub fn complete_livewire_directive_values(
+    index: &ProjectIndex,
+    file: &Path,
+    context: &LivewireDirectiveValueContext,
+    line: usize,
+) -> Vec<Value> {
+    match context.kind {
+        LivewireDirectiveValueKind::Property => index
+            .livewire_state_for_file(file, &context.prefix)
+            .into_iter()
+            .map(|variable| livewire_property_completion(variable, context, line))
+            .collect(),
+        LivewireDirectiveValueKind::Action => index
+            .livewire_actions_for_file(file, &context.prefix)
+            .into_iter()
+            .map(|action| livewire_action_completion(action, context, line))
             .collect(),
     }
 }
@@ -272,11 +311,32 @@ pub fn definitions(index: &ProjectIndex, context: &SymbolContext, line: usize) -
                 )
             })
             .collect(),
+        SymbolKind::Livewire => livewire_component_locations(
+            index,
+            &context.full_text,
+            line,
+            context.start_character,
+            context.end_character,
+        ),
         SymbolKind::Asset => asset_location(index, &context.full_text)
             .into_iter()
             .map(|relative| location(&index.project_root, &relative, 1, 1))
             .collect(),
     }
+}
+
+pub fn livewire_component_definitions(
+    index: &ProjectIndex,
+    context: &LivewireComponentTagContext,
+    line: usize,
+) -> Vec<Value> {
+    livewire_component_locations(
+        index,
+        &context.full_text,
+        line,
+        livewire_component_selection_start_character(context),
+        context.end_character,
+    )
 }
 
 pub fn route_action_definitions(
@@ -371,11 +431,25 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Opti
                 "range": range,
             }))
         }
+        SymbolKind::Livewire => livewire_symbol_hover(index, &context.full_text, range),
         SymbolKind::Asset => Some(json!({
             "contents": { "kind": "markdown", "value": asset_hover(index, &context.full_text) },
             "range": range,
         })),
     }
+}
+
+pub fn livewire_component_hover(
+    index: &ProjectIndex,
+    context: &LivewireComponentTagContext,
+    line: usize,
+) -> Option<Value> {
+    let range = hover_range(
+        line,
+        livewire_component_selection_start_character(context),
+        context.end_character,
+    );
+    livewire_symbol_hover(index, &context.full_text, range)
 }
 
 pub fn route_action_hover(
@@ -701,6 +775,99 @@ fn view_completion(view: &ViewEntry, context: &SymbolContext, line: usize) -> Va
     })
 }
 
+fn livewire_symbol_completion(
+    component: &LivewireComponentEntry,
+    context: &SymbolContext,
+    line: usize,
+) -> Value {
+    json!({
+        "label": component.component,
+        "kind": 7,
+        "detail": livewire_component_detail(component),
+        "documentation": {
+            "kind": "markdown",
+            "value": livewire_component_hover_text(component),
+        },
+        "textEdit": replacement_edit(context, line, &component.component),
+    })
+}
+
+fn livewire_tag_completion(
+    component: &LivewireComponentEntry,
+    context: &LivewireComponentTagContext,
+    line: usize,
+) -> Value {
+    json!({
+        "label": format!("livewire:{}", component.component),
+        "kind": 7,
+        "detail": livewire_component_detail(component),
+        "filterText": component.component,
+        "documentation": {
+            "kind": "markdown",
+            "value": livewire_component_hover_text(component),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": component.component,
+        }
+    })
+}
+
+fn livewire_property_completion(
+    variable: &ViewVariable,
+    context: &LivewireDirectiveValueContext,
+    line: usize,
+) -> Value {
+    let detail = variable
+        .default_value
+        .as_ref()
+        .map(|value| format!("Livewire property = {value}"))
+        .unwrap_or_else(|| "Livewire property".to_string());
+
+    json!({
+        "label": variable.name,
+        "kind": 6,
+        "detail": detail,
+        "documentation": {
+            "kind": "markdown",
+            "value": format!("`${}`\n- available on current Livewire component", variable.name),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": variable.name,
+        }
+    })
+}
+
+fn livewire_action_completion(
+    action: &LivewireActionEntry,
+    context: &LivewireDirectiveValueContext,
+    line: usize,
+) -> Value {
+    json!({
+        "label": action.name,
+        "kind": 2,
+        "detail": format!("Livewire action · {}", context.directive),
+        "documentation": {
+            "kind": "markdown",
+            "value": format!("`{}`\n- public method on current Livewire component", action.name),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": action.name,
+        }
+    })
+}
+
 fn view_hover(view: &ViewEntry) -> String {
     let mut lines = vec![
         format!("`{}`", view.name),
@@ -722,6 +889,95 @@ fn view_hover(view: &ViewEntry) -> String {
     }
 
     lines.join("\n")
+}
+
+fn livewire_component_selection_start_character(context: &LivewireComponentTagContext) -> usize {
+    context.tag_start_character + 1
+}
+
+fn livewire_component_detail(component: &LivewireComponentEntry) -> String {
+    component
+        .class_name
+        .as_ref()
+        .map(|class| format!("{class} ({})", component.kind))
+        .unwrap_or_else(|| format!("Livewire component ({})", component.kind))
+}
+
+fn livewire_component_hover_text(component: &LivewireComponentEntry) -> String {
+    let mut lines = vec![format!("`{}`", component.component)];
+    lines.push(format!("- kind: `{}`", component.kind));
+
+    if let Some(class) = &component.class_name {
+        lines.push(format!("- class: `{class}`"));
+    }
+    if let Some(class_file) = &component.class_file {
+        lines.push(format!("- class file: `{}`", class_file.display()));
+    }
+    if let Some(view_name) = &component.view_name {
+        lines.push(format!("- view: `{view_name}`"));
+    }
+    if let Some(view_file) = &component.view_file {
+        lines.push(format!("- view file: `{}`", view_file.display()));
+    }
+    if !component.state.is_empty() {
+        let state = component
+            .state
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("- public properties: `{state}`"));
+    }
+    if !component.actions.is_empty() {
+        let actions = component
+            .actions
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("- actions: `{actions}`"));
+    }
+
+    lines.join("\n")
+}
+
+fn livewire_symbol_hover(index: &ProjectIndex, name: &str, range: Value) -> Option<Value> {
+    let component = index
+        .livewire_component_definitions(name)
+        .into_iter()
+        .next()?;
+    Some(json!({
+        "contents": { "kind": "markdown", "value": livewire_component_hover_text(component) },
+        "range": range,
+    }))
+}
+
+fn livewire_component_locations(
+    index: &ProjectIndex,
+    name: &str,
+    line: usize,
+    start_character: usize,
+    end_character: usize,
+) -> Vec<Value> {
+    index
+        .livewire_component_definitions(name)
+        .into_iter()
+        .filter_map(|component| {
+            let file = component
+                .class_file
+                .as_ref()
+                .or(component.view_file.as_ref())?;
+            Some(location_link(
+                &index.project_root,
+                file,
+                component.source.line,
+                component.source.column,
+                line,
+                start_character,
+                end_character,
+            ))
+        })
+        .collect()
 }
 
 fn blade_component_selection_start_character(context: &BladeComponentTagContext) -> usize {
@@ -1615,6 +1871,7 @@ mod tests {
 
     use crate::lsp::context::{
         detect_blade_component_tag_context, detect_blade_variable_context,
+        detect_livewire_component_tag_context, detect_livewire_directive_value_context,
         detect_route_action_context, detect_symbol_context, HelperContext, HelperStyle,
         SymbolKind,
     };
@@ -1624,14 +1881,18 @@ mod tests {
 
     use super::{
         asset_code_actions, blade_component_definitions, complete, complete_blade_view_variables,
-        complete_route_actions, complete_view_data_variables, definitions, helper_snippets, hover,
-        route_action_code_actions, route_action_definitions, route_diagnostics,
+        complete_livewire_components, complete_livewire_directive_values, complete_route_actions,
+        complete_view_data_variables, definitions, helper_snippets, hover,
+        livewire_component_definitions, route_action_code_actions, route_action_definitions,
+        route_diagnostics,
     };
 
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+    }
+
     fn sandbox_project() -> project::LaravelProject {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("laravel-example")
-            .join("sandbox-app");
+        let root = workspace_root().join("laravel-example").join("sandbox-app");
         project::from_root(root).expect("sandbox project should resolve")
     }
 
@@ -1796,6 +2057,62 @@ Route::get('/dashboard', function () {
             &root,
             "public/assets/images/virtual/centers-card-img.png",
             "png",
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn livewire_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(
+            &root,
+            "app/Livewire/ContactForm.php",
+            r#"<?php
+
+namespace App\Livewire;
+
+use Livewire\Component;
+
+class ContactForm extends Component
+{
+    public $email = '';
+    public string $message = '';
+
+    public function submit()
+    {
+    }
+
+    public function render()
+    {
+        return view('livewire.contact-form')->layout('components.layouts.app');
+    }
+}
+"#,
+        );
+        write_file(
+            &root,
+            "resources/views/livewire/contact-form.blade.php",
+            "<form wire:submit=\"submit\"><input wire:model=\"email\">{{ $email }}</form>\n",
+        );
+        write_file(
+            &root,
+            "resources/views/components/layouts/app.blade.php",
+            "<main>{{ $slot }}</main>\n",
         );
 
         project::from_root(root).expect("fixture project should resolve")
@@ -2012,6 +2329,135 @@ Route::get('/dashboard', function () {
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .ends_with("/resources/views/admin/users/index.blade.php")
+        );
+    }
+
+    #[test]
+    fn chained_livewire_layout_uses_view_completion_and_navigation() {
+        let project = livewire_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "return view('livewire.contact-form')->layout('components.layouts.app');";
+        let character = source.find("layouts").unwrap() + 3;
+        let context = detect_symbol_context(source, 0, character).expect("layout view context");
+
+        assert_eq!(context.kind, SymbolKind::View);
+
+        let completions = complete(&index, &context, 0);
+        assert!(
+            completions
+                .iter()
+                .any(|item| item.get("label").and_then(|value| value.as_str())
+                    == Some("components.layouts.app"))
+        );
+
+        let definitions = definitions(&index, &context, 0);
+        let first = definitions.first().expect("definition expected");
+        assert!(
+            first
+                .pointer("/targetUri")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/resources/views/components/layouts/app.blade.php")
+        );
+    }
+
+    #[test]
+    fn completes_and_navigates_livewire_component_tags() {
+        let project = livewire_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<livewire:contact-form />\n";
+        let character = source.find("contact-form").unwrap() + "contact".len();
+        let context = detect_livewire_component_tag_context(
+            "file:///tmp/resources/views/welcome.blade.php",
+            source,
+            0,
+            character,
+        )
+        .expect("livewire component context");
+
+        let completions = complete_livewire_components(&index, &context, 0);
+        assert!(
+            completions
+                .iter()
+                .any(|item| item.get("filterText").and_then(|value| value.as_str())
+                    == Some("contact-form"))
+        );
+
+        let definitions = livewire_component_definitions(&index, &context, 0);
+        let first = definitions.first().expect("definition expected");
+        assert!(
+            first
+                .pointer("/targetUri")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/app/Livewire/ContactForm.php")
+        );
+    }
+
+    #[test]
+    fn livewire_public_properties_are_available_in_component_blade() {
+        let project = livewire_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let file = Path::new("resources/views/livewire/contact-form.blade.php");
+        let source = "{{ $ema }}";
+        let character = source.find("ema").unwrap() + "ema".len();
+        let context = detect_blade_variable_context(
+            "file:///tmp/resources/views/livewire/contact-form.blade.php",
+            source,
+            0,
+            character,
+        )
+        .expect("blade variable context");
+
+        let items = complete_blade_view_variables(&index, file, &context, 0);
+        assert!(
+            items
+                .iter()
+                .any(|item| item.get("filterText").and_then(|value| value.as_str())
+                    == Some("email"))
+        );
+    }
+
+    #[test]
+    fn livewire_wire_directive_values_complete_component_members() {
+        let project = livewire_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let file = Path::new("resources/views/livewire/contact-form.blade.php");
+
+        let model_source = r#"<input wire:model="ema">"#;
+        let model_character = model_source.find("ema").unwrap() + "ema".len();
+        let model_context = detect_livewire_directive_value_context(
+            "file:///tmp/resources/views/livewire/contact-form.blade.php",
+            model_source,
+            0,
+            model_character,
+        )
+        .expect("wire:model context");
+        let model_items = complete_livewire_directive_values(&index, file, &model_context, 0);
+        assert!(
+            model_items
+                .iter()
+                .any(|item| item.get("label").and_then(|value| value.as_str()) == Some("email"))
+        );
+
+        let click_source = r#"<button wire:click="sub">"#;
+        let click_character = click_source.find("sub").unwrap() + "sub".len();
+        let click_context = detect_livewire_directive_value_context(
+            "file:///tmp/resources/views/livewire/contact-form.blade.php",
+            click_source,
+            0,
+            click_character,
+        )
+        .expect("wire:click context");
+        let click_items = complete_livewire_directive_values(&index, file, &click_context, 0);
+        assert!(
+            click_items
+                .iter()
+                .any(|item| item.get("label").and_then(|value| value.as_str()) == Some("submit"))
         );
     }
 

@@ -55,7 +55,15 @@ pub struct LivewireComponentEntry {
     pub view_name: Option<String>,
     pub view_file: Option<PathBuf>,
     pub state: Vec<ViewVariable>,
+    pub actions: Vec<LivewireActionEntry>,
     pub source: ViewSource,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LivewireActionEntry {
+    pub name: String,
+    pub line: usize,
+    pub column: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

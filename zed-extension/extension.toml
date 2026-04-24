@@ -1,12 +1,12 @@
 id = "rust-laravel"
 name = "Rust Laravel"
-version = "0.1.0"
+version = "0.1.1"
 schema_version = 1
 authors = ["vinayakdev"]
 description = "Laravel route/config navigation and completion powered by rust-php."
 repository = "https://github.com/vinayakdev/rust-laravel"
-languages = []
-capabilities = []
+languages = ["PHP", "Blade"]
+snippets = ["./snippets/php.json", "./snippets/blade.json"]
 
 [lib]
 kind = "Rust"
@@ -16,3 +16,22 @@ version = "0.7.0"
 name = "rust-php-lsp"
 languages = ["PHP", "Blade"]
 language_ids = { PHP = "php", Blade = "blade" }
+
+[bracket_pairs]
+PHP = [
+  { open = "{", close = "}" },
+  { open = "[", close = "]" },
+  { open = "(", close = ")" },
+  { open = "\"", close = "\"" },
+  { open = "'", close = "'" }
+]
+
+Blade = [
+  { open = "{", close = "}" },
+  { open = "[", close = "]" },
+  { open = "(", close = ")" },
+  { open = "\"", close = "\"" },
+  { open = "'", close = "'" },
+  { open = "{{", close = "}}" },
+  { open = "{!!", close = "!!}" }
+]

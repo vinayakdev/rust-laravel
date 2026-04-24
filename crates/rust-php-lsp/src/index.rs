@@ -7,7 +7,8 @@ use crate::php::env::load_env_entries_with;
 use crate::project::LaravelProject;
 use crate::types::{
     BladeComponentEntry, ConfigItem, ConfigReport, ControllerEntry, ControllerMethodEntry,
-    ControllerReport, EnvItem, RouteEntry, RouteReport, ViewEntry, ViewReport, ViewVariable,
+    ControllerReport, EnvItem, LivewireActionEntry, LivewireComponentEntry, RouteEntry,
+    RouteReport, ViewEntry, ViewReport, ViewVariable,
 };
 use rust_php_public::types::{PublicAssetEntry, PublicAssetReport};
 
@@ -26,6 +27,7 @@ pub struct ProjectIndex {
     env_by_key: BTreeMap<String, Vec<usize>>,
     view_by_name: BTreeMap<String, Vec<usize>>,
     blade_component_by_name: BTreeMap<String, Vec<usize>>,
+    livewire_component_by_name: BTreeMap<String, Vec<usize>>,
     public_asset_by_path: BTreeMap<String, Vec<usize>>,
 }
 
@@ -111,6 +113,16 @@ impl ProjectIndex {
                 }
             });
         }
+        let mut livewire_component_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, component) in view_report.livewire_components.iter().enumerate() {
+            livewire_component_by_name
+                .entry(component.component.clone())
+                .or_default()
+                .push(index);
+        }
+        for indices in livewire_component_by_name.values_mut() {
+            indices.sort_by_key(|&idx| livewire_component_rank(&view_report.livewire_components[idx]));
+        }
 
         Ok(Self {
             project_root: project.root.clone(),
@@ -125,6 +137,7 @@ impl ProjectIndex {
             env_by_key,
             view_by_name,
             blade_component_by_name,
+            livewire_component_by_name,
             public_asset_by_path,
         })
     }
@@ -294,6 +307,30 @@ impl ProjectIndex {
             .collect()
     }
 
+    pub fn livewire_component_matches<'a>(
+        &'a self,
+        prefix: &str,
+    ) -> Vec<&'a LivewireComponentEntry> {
+        ranked_index_matches(self.livewire_component_by_name.iter(), prefix, |index| {
+            &self.view_report.livewire_components[index]
+        })
+    }
+
+    pub fn livewire_component_definitions<'a>(
+        &'a self,
+        name: &str,
+    ) -> Vec<&'a LivewireComponentEntry> {
+        self.livewire_component_by_name
+            .get(name)
+            .into_iter()
+            .flat_map(|indices| {
+                indices
+                    .iter()
+                    .map(|index| &self.view_report.livewire_components[*index])
+            })
+            .collect()
+    }
+
     pub fn public_asset_matches<'a>(&'a self, prefix: &str) -> Vec<&'a PublicAssetEntry> {
         ranked_index_matches(self.public_asset_by_path.iter(), prefix, |index| {
             &self.public_asset_report.assets[index]
@@ -323,6 +360,13 @@ impl ProjectIndex {
             .iter()
             .filter(|view| view.file == file)
             .flat_map(|view| view.props.iter().chain(view.variables.iter()))
+            .chain(
+                self.view_report
+                    .livewire_components
+                    .iter()
+                    .filter(|component| component.view_file.as_deref() == Some(file))
+                    .flat_map(|component| component.state.iter()),
+            )
             .filter_map(|variable| {
                 let score = fuzzy_score(&variable.name, prefix)?;
                 Some((score, variable.name.len(), variable.name.as_str(), variable))
@@ -337,12 +381,64 @@ impl ProjectIndex {
             .collect()
     }
 
+    pub fn livewire_state_for_file<'a>(
+        &'a self,
+        file: &std::path::Path,
+        prefix: &str,
+    ) -> Vec<&'a ViewVariable> {
+        ranked_livewire_file_items(
+            self.view_report
+                .livewire_components
+                .iter()
+                .filter(|component| component.view_file.as_deref() == Some(file))
+                .flat_map(|component| component.state.iter()),
+            prefix,
+            |variable| variable.name.as_str(),
+        )
+    }
+
+    pub fn livewire_actions_for_file<'a>(
+        &'a self,
+        file: &std::path::Path,
+        prefix: &str,
+    ) -> Vec<&'a LivewireActionEntry> {
+        ranked_livewire_file_items(
+            self.view_report
+                .livewire_components
+                .iter()
+                .filter(|component| component.view_file.as_deref() == Some(file))
+                .flat_map(|component| component.actions.iter()),
+            prefix,
+            |action| action.name.as_str(),
+        )
+    }
+
+    pub fn livewire_component_for_view_file<'a>(
+        &'a self,
+        file: &std::path::Path,
+    ) -> Option<&'a LivewireComponentEntry> {
+        self.view_report
+            .livewire_components
+            .iter()
+            .find(|component| component.view_file.as_deref() == Some(file))
+    }
+
     pub fn routes_for_file<'a>(&'a self, file: &std::path::Path) -> Vec<&'a RouteEntry> {
         self.route_report
             .routes
             .iter()
             .filter(|route| route.file == file)
             .collect()
+    }
+}
+
+fn livewire_component_rank(component: &LivewireComponentEntry) -> usize {
+    if component.kind.contains("class") {
+        0
+    } else if component.kind.contains("multi-file") {
+        1
+    } else {
+        2
     }
 }
 
@@ -399,6 +495,27 @@ where
         .into_iter()
         .flat_map(|(_, _, _, indices)| indices.iter().copied())
         .map(resolve)
+        .collect()
+}
+
+fn ranked_livewire_file_items<'a, T>(
+    items: impl Iterator<Item = &'a T>,
+    query: &str,
+    label: impl Fn(&T) -> &str,
+) -> Vec<&'a T> {
+    let mut matches = items
+        .filter_map(|item| {
+            let item_label = label(item);
+            let score = fuzzy_score(item_label, query)?;
+            Some((score, item_label.len(), item_label.to_string(), item))
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by_key(|(score, len, item_label, _)| (Reverse(*score), *len, item_label.clone()));
+    matches.dedup_by(|left, right| left.2 == right.2);
+    matches
+        .into_iter()
+        .map(|(_, _, _, item)| item)
         .collect()
 }
 

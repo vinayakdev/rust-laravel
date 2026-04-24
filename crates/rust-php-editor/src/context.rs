@@ -4,6 +4,7 @@ pub enum SymbolKind {
     Route,
     Env,
     View,
+    Livewire,
     Asset,
 }
 
@@ -90,6 +91,31 @@ pub struct BladeComponentAttrContext {
     pub already_typed_colon: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct LivewireComponentTagContext {
+    pub full_text: String,
+    pub prefix: String,
+    pub tag_start_character: usize,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LivewireDirectiveValueKind {
+    Property,
+    Action,
+}
+
+#[derive(Clone, Debug)]
+pub struct LivewireDirectiveValueContext {
+    pub kind: LivewireDirectiveValueKind,
+    pub directive: String,
+    pub full_text: String,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
 pub fn detect_blade_component_tag_context(
     uri: &str,
     source: &str,
@@ -132,6 +158,44 @@ pub fn detect_blade_component_tag_context(
         has_x_dash,
         tag_start_character: line_text[..tag_start].chars().count(),
         start_character: line_text[..replace_start].chars().count(),
+        end_character: line_text[..name_end].chars().count(),
+    })
+}
+
+pub fn detect_livewire_component_tag_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<LivewireComponentTagContext> {
+    if !uri.ends_with(".blade.php") {
+        return None;
+    }
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let before = &line_text[..cursor];
+
+    let tag_start = find_last_open_livewire_tag_start(before)?;
+    let name_start = tag_start + "<livewire:".len();
+    let between = &before[name_start..];
+
+    if between.chars().any(|c| c.is_whitespace()) {
+        return None;
+    }
+
+    let mut name_end = cursor;
+    while name_end < line_text.len() {
+        match line_text[name_end..].chars().next() {
+            Some(c) if is_livewire_component_name_char(c) => name_end += c.len_utf8(),
+            _ => break,
+        }
+    }
+
+    Some(LivewireComponentTagContext {
+        full_text: line_text[name_start..name_end].to_string(),
+        prefix: between.to_string(),
+        tag_start_character: line_text[..tag_start].chars().count(),
+        start_character: line_text[..name_start].chars().count(),
         end_character: line_text[..name_end].chars().count(),
     })
 }
@@ -243,8 +307,34 @@ fn find_last_open_x_tag_start(before: &str) -> Option<usize> {
     find_last_open_x_tag(before).map(|(start, _)| start)
 }
 
+fn find_last_open_livewire_tag_start(before: &str) -> Option<usize> {
+    let mut last = None;
+    let mut i = 0;
+    while i < before.len() {
+        if before[i..].starts_with("<livewire:") {
+            last = Some(i);
+            i += "<livewire:".len();
+        } else {
+            i += before[i..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1);
+        }
+    }
+    let start = last?;
+    if before[start..].contains('>') {
+        return None;
+    }
+    Some(start)
+}
+
 fn is_component_name_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '-' || ch == '.'
+}
+
+fn is_livewire_component_name_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.' | ':')
 }
 
 fn parse_existing_attributes(attr_area: &str) -> Vec<String> {
@@ -430,8 +520,31 @@ fn detect_kind(before: &str) -> Option<SymbolKind> {
         return Some(SymbolKind::View);
     }
 
+    if [
+        "->layout(",
+        "->extends(",
+        "View::exists(",
+        "view()->exists(",
+    ]
+    .iter()
+    .any(|needle| compact.ends_with(needle))
+    {
+        return Some(SymbolKind::View);
+    }
+
     if compact.contains("Route::view(") && route_argument_index(before) >= 1 {
         return Some(SymbolKind::View);
+    }
+
+    if ["@livewire(", "Livewire::component("]
+        .iter()
+        .any(|needle| compact.ends_with(needle))
+    {
+        return Some(SymbolKind::Livewire);
+    }
+
+    if compact.contains("Route::livewire(") && route_argument_index(before) >= 1 {
+        return Some(SymbolKind::Livewire);
     }
 
     if ["asset(", "secure_asset("]
@@ -442,6 +555,72 @@ fn detect_kind(before: &str) -> Option<SymbolKind> {
     }
 
     None
+}
+
+pub fn detect_livewire_directive_value_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<LivewireDirectiveValueContext> {
+    if !uri.ends_with(".blade.php") {
+        return None;
+    }
+
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let (quote_start, quote_char) = find_quote_start(line_text, cursor)?;
+    let quote_end = find_quote_end(line_text, quote_start + quote_char.len_utf8(), quote_char)?;
+    let inner_start = quote_start + quote_char.len_utf8();
+    let inner_end = quote_end;
+
+    if cursor < inner_start || cursor > inner_end {
+        return None;
+    }
+
+    let before_quote = &line_text[..quote_start];
+    let directive = directive_before_quote(before_quote)?;
+    let kind = livewire_directive_value_kind(&directive)?;
+
+    Some(LivewireDirectiveValueContext {
+        kind,
+        directive,
+        full_text: line_text[inner_start..inner_end].to_string(),
+        prefix: line_text[inner_start..cursor.min(inner_end)].to_string(),
+        start_character: line_text[..inner_start].chars().count(),
+        end_character: line_text[..inner_end].chars().count(),
+    })
+}
+
+fn directive_before_quote(before_quote: &str) -> Option<String> {
+    let eq_index = before_quote.rfind('=')?;
+    if !before_quote[eq_index + 1..].trim().is_empty() {
+        return None;
+    }
+
+    let before_eq = before_quote[..eq_index].trim_end();
+    let start = before_eq
+        .rfind(|ch: char| ch.is_whitespace() || ch == '<')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let directive = before_eq[start..].trim();
+    directive
+        .starts_with("wire:")
+        .then(|| directive.to_string())
+}
+
+fn livewire_directive_value_kind(directive: &str) -> Option<LivewireDirectiveValueKind> {
+    let name = directive
+        .strip_prefix("wire:")?
+        .split('.')
+        .next()
+        .unwrap_or_default();
+    match name {
+        "model" | "target" => Some(LivewireDirectiveValueKind::Property),
+        "click" | "submit" | "init" | "poll" | "keydown" | "keyup" | "change" | "blur"
+        | "input" | "mouseenter" | "mouseleave" => Some(LivewireDirectiveValueKind::Action),
+        _ => None,
+    }
 }
 
 pub fn detect_helper_context(

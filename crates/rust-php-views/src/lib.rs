@@ -10,8 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::types::{
-    BladeComponentEntry, LivewireComponentEntry, MissingViewEntry, ViewEntry, ViewReport,
-    ViewSource, ViewUsage, ViewVariable,
+    BladeComponentEntry, LivewireActionEntry, LivewireComponentEntry, MissingViewEntry, ViewEntry,
+    ViewReport, ViewSource, ViewUsage, ViewVariable,
 };
 use rust_php_foundation::overrides::FileOverrides;
 use rust_php_foundation::php::ast::{
@@ -37,6 +37,7 @@ pub fn analyze(
         collect_default_blade_components(project, mappings, &view_namespaces)?;
     let mut livewire_components =
         collect_conventional_livewire_components(project, mappings, &view_namespaces)?;
+    livewire_components.extend(collect_view_backed_livewire_components(project)?);
 
     let registrations = collect_provider_registrations(project, providers, mappings, overrides)?;
     view_namespaces.extend(registrations.view_namespaces);
@@ -197,6 +198,7 @@ fn collect_conventional_livewire_components(
                 view_name,
                 view_file,
                 state: parse_livewire_state(&file),
+                actions: parse_livewire_actions(&file),
                 source: ViewSource {
                     declared_in: strip_root(&project.root, &file),
                     line: 1,
@@ -208,6 +210,118 @@ fn collect_conventional_livewire_components(
     }
 
     Ok(entries)
+}
+
+fn collect_view_backed_livewire_components(
+    project: &LaravelProject,
+) -> Result<Vec<LivewireComponentEntry>, String> {
+    let mut entries = Vec::new();
+
+    for (root, namespace) in [
+        (project.root.join("resources/views/components"), None),
+        (project.root.join("resources/views/pages"), Some("pages")),
+    ] {
+        if !root.is_dir() {
+            continue;
+        }
+
+        for file in collect_blade_files(&root) {
+            let Some((component, component_path)) =
+                livewire_view_component_name(&root, &file, namespace)
+            else {
+                continue;
+            };
+            let class_file = livewire_view_component_class_file(&component_path, &file);
+            let state_file = class_file.as_deref().unwrap_or(file.as_path());
+            let kind = if class_file.is_some() {
+                "livewire-view-multi-file"
+            } else {
+                "livewire-view-single-file"
+            };
+
+            entries.push(LivewireComponentEntry {
+                component,
+                kind: kind.to_string(),
+                class_name: None,
+                class_file: class_file
+                    .as_ref()
+                    .map(|class_file| strip_root(&project.root, class_file)),
+                view_name: Some(blade_view_name(
+                    &project.root.join("resources/views"),
+                    &file,
+                    None,
+                )),
+                view_file: Some(strip_root(&project.root, &file)),
+                state: parse_livewire_state(state_file),
+                actions: parse_livewire_actions(state_file),
+                source: ViewSource {
+                    declared_in: strip_root(&project.root, &file),
+                    line: 1,
+                    column: 1,
+                    provider_class: None,
+                },
+            });
+        }
+    }
+
+    Ok(entries)
+}
+
+fn livewire_view_component_name(
+    root: &Path,
+    file: &Path,
+    namespace: Option<&str>,
+) -> Option<(String, PathBuf)> {
+    let relative = file.strip_prefix(root).ok()?;
+    let file_stem = file.file_stem()?.to_str()?;
+
+    if let Some(name) = strip_livewire_marker(file_stem) {
+        let mut component_path = relative.with_file_name(name);
+        component_path.set_extension("");
+        return Some((
+            format_livewire_component_name(&component_path, namespace),
+            component_path,
+        ));
+    }
+
+    let parent = file.parent()?;
+    let parent_name = parent.file_name()?.to_str()?;
+    let component_dir = strip_livewire_marker(parent_name)?;
+    if file_stem != component_dir {
+        return None;
+    }
+
+    let parent_relative = parent.strip_prefix(root).ok()?;
+    let mut component_path = parent_relative.to_path_buf();
+    component_path.set_file_name(component_dir);
+    Some((
+        format_livewire_component_name(&component_path, namespace),
+        component_path,
+    ))
+}
+
+fn strip_livewire_marker(name: &str) -> Option<&str> {
+    name.strip_prefix('\u{26a1}')
+}
+
+fn format_livewire_component_name(path: &Path, namespace: Option<&str>) -> String {
+    let dotted = path_to_dot(&path.to_string_lossy())
+        .trim_end_matches(".php")
+        .to_string();
+    namespace
+        .map(|namespace| format!("{namespace}::{dotted}"))
+        .unwrap_or(dotted)
+}
+
+fn livewire_view_component_class_file(component_path: &Path, view_file: &Path) -> Option<PathBuf> {
+    let parent = view_file.parent()?;
+    let component_name = component_path.file_name()?.to_str()?;
+    let candidates = [
+        parent.join(format!("{component_name}.php")),
+        parent.join("component.php"),
+    ];
+
+    candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 fn collect_provider_registrations(
@@ -644,6 +758,10 @@ fn build_livewire_component_from_class(
     let view_file = view_name
         .as_ref()
         .and_then(|name| resolve_view_file(project, view_namespaces, name));
+    let actions = class_file
+        .as_ref()
+        .map(|relative| parse_livewire_actions(&project.root.join(relative)))
+        .unwrap_or_default();
 
     LivewireComponentEntry {
         component: component.to_string(),
@@ -654,6 +772,7 @@ fn build_livewire_component_from_class(
         view_file,
         source: source.clone(),
         state,
+        actions,
     }
 }
 
@@ -1323,6 +1442,67 @@ fn parse_livewire_state(file: &Path) -> Vec<ViewVariable> {
     let mut props = parse_public_properties(&source);
     dedup_variables(&mut props);
     props
+}
+
+fn parse_livewire_actions(file: &Path) -> Vec<LivewireActionEntry> {
+    let Ok(source) = fs::read_to_string(file) else {
+        return Vec::new();
+    };
+
+    let mut actions = source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| parse_livewire_action_line(line, index + 1))
+        .collect::<Vec<_>>();
+    actions.sort_by(|left, right| left.name.cmp(&right.name).then(left.line.cmp(&right.line)));
+    actions.dedup_by(|left, right| left.name == right.name);
+    actions
+}
+
+fn parse_livewire_action_line(line: &str, line_number: usize) -> Option<LivewireActionEntry> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("public ") {
+        return None;
+    }
+
+    let function_index = trimmed.find("function ")?;
+    if trimmed[..function_index].contains("static") {
+        return None;
+    }
+
+    let name_start = function_index + "function ".len();
+    let after_function = &trimmed[name_start..];
+    let name: String = after_function
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .collect();
+    if name.is_empty() || is_livewire_internal_method(&name) {
+        return None;
+    }
+
+    let column = line.find(&name).map(|index| index + 1).unwrap_or(1);
+    Some(LivewireActionEntry {
+        name,
+        line: line_number,
+        column,
+    })
+}
+
+fn is_livewire_internal_method(name: &str) -> bool {
+    name.starts_with("__")
+        || matches!(
+            name,
+            "render"
+                | "mount"
+                | "boot"
+                | "booted"
+                | "hydrate"
+                | "dehydrate"
+                | "updating"
+                | "updated"
+                | "rendering"
+                | "rendered"
+        )
 }
 
 fn parse_public_properties(source: &str) -> Vec<ViewVariable> {

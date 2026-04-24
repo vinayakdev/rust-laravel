@@ -1,0 +1,158 @@
+{
+  "name": "Blade",
+  "scope": "source.blade",
+  "file_extensions": ["blade.php"],
+  "character_escapes": {
+    "\"": "\\\"",
+    "\\": "\\\\"
+  },
+  "word_characters": "[a-zA-Z_\\x7f-\\xff][a-zA-Z0-9_\\x7f-\\xff]*",
+  "keywords": [
+    "if",
+    "else",
+    "elseif",
+    "endif",
+    "foreach",
+    "endforeach",
+    "forelse",
+    "endforelse",
+    "for",
+    "endfor",
+    "while",
+    "endwhile",
+    "switch",
+    "endswitch",
+    "case",
+    "default",
+    "break",
+    "component",
+    "endcomponent",
+    "slot",
+    "endslot",
+    "section",
+    "endsection",
+    "yield",
+    "extends",
+    "include",
+    "includeIf",
+    "includeWhen",
+    "includeLast",
+    "auth",
+    "endauth",
+    "guest",
+    "endguest",
+    "isset",
+    "endisset",
+    "empty",
+    "endempty",
+    "error",
+    "enderror",
+    "can",
+    "endcan",
+    "cannot",
+    "endcannot",
+    "env",
+    "endenv",
+    "production",
+    "endproduction",
+    "props",
+    "csrf",
+    "method",
+    "push",
+    "endpush",
+    "prepend",
+    "endprepend",
+    "stack",
+    "php",
+    "endphp",
+    "once",
+    "endonce",
+    "formOpen",
+    "formClose",
+    "formMethod",
+    "formModel",
+    "formModelId"
+  ],
+  "patterns": [
+    {
+      "name": "comment.line.blade",
+      "match": "\\{\\{--[^-]*--(?:[^-][^-]*--)*\\}\\}",
+      "captures": {
+        "0": {
+          "name": "comment.line.blade"
+        }
+      }
+    },
+    {
+      "name": "meta.embedded.blade-directive",
+      "match": "(?:^\\s*)?@([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.blade"
+        }
+      }
+    },
+    {
+      "name": "meta.embedded.blade-echo",
+      "match": "\\{\\{\\s*(.+?)\\s*\\}\\}",
+      "captures": {
+        "0": {
+          "name": "string.quoted.blade"
+        },
+        "1": {
+          "name": "variable.other.blade"
+        }
+      }
+    },
+    {
+      "name": "meta.embedded.blade-raw-echo",
+      "match": "\\{!!!\\s*(.+?)\\s*!!!\\}",
+      "captures": {
+        "0": {
+          "name": "string.quoted.blade"
+        },
+        "1": {
+          "name": "variable.other.blade"
+        }
+      }
+    },
+    {
+      "name": "meta.embedded.blade-raw-echo-alt",
+      "match": "\\{!!\\s*(.+?)\\s*!!\\}",
+      "captures": {
+        "0": {
+          "name": "string.quoted.blade"
+        },
+        "1": {
+          "name": "variable.other.blade"
+        }
+      }
+    },
+    {
+      "name": "variable.other.blade",
+      "match": "\\$[a-zA-Z_][a-zA-Z0-9_]*(?:->(?:[a-zA-Z_][a-zA-Z0-9_]*))*"
+    },
+    {
+      "name": "string.quoted.double",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "string.quoted.single",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape",
+          "match": "\\\\."
+        }
+      ]
+    }
+  ]
+}

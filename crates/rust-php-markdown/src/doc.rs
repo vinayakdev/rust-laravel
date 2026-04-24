@@ -148,7 +148,11 @@ mod tests {
             .blank()
             .field("Path", "public/assets/logo.svg")
             .blank()
-            .link_field("File", "assets/logo.svg", "file:///tmp/public/assets/logo.svg");
+            .link_field(
+                "File",
+                "assets/logo.svg",
+                "file:///tmp/public/assets/logo.svg",
+            );
 
         assert_eq!(
             doc.render(MarkdownFormat::Markdown),

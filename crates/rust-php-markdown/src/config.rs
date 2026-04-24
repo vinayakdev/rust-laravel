@@ -12,7 +12,11 @@ pub struct ConfigHoverInput {
 }
 
 pub fn build(input: ConfigHoverInput) -> DocBundle {
-    let mut doc = MarkdownDoc::new().title(&input.key).blank().separator().blank();
+    let mut doc = MarkdownDoc::new()
+        .title(&input.key)
+        .blank()
+        .separator()
+        .blank();
 
     if let Some(current_value) = input.current_value.as_deref() {
         doc = doc.field("Current value", current_value).blank();

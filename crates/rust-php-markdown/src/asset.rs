@@ -34,7 +34,11 @@ pub fn build(input: AssetHoverInput) -> DocBundle {
 
     let hover = match input.status {
         AssetStatus::Resolved => {
-            let mut doc = MarkdownDoc::new().title(title.clone()).blank().separator().blank();
+            let mut doc = MarkdownDoc::new()
+                .title(title.clone())
+                .blank()
+                .separator()
+                .blank();
 
             if let Some(size_display) = size_display.clone() {
                 doc = doc.field("Size", size_display).blank();
