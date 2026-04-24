@@ -29,7 +29,7 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
         SymbolKind::Route => index
             .route_matches(&context.prefix)
             .into_iter()
-            .map(|route| route_completion(route, context, line))
+            .map(|route| route_completion(index, route, context, line))
             .collect(),
         SymbolKind::Env => index
             .env_matches(&context.prefix)
@@ -352,7 +352,7 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Opti
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": { "kind": "markdown", "value": route_hover(route) },
+                "contents": { "kind": "markdown", "value": route_hover(index, route) },
                 "range": range,
             }))
         }
@@ -510,7 +510,12 @@ fn config_completion(item: &ConfigItem, context: &SymbolContext, line: usize) ->
     })
 }
 
-fn route_completion(route: &RouteEntry, context: &SymbolContext, line: usize) -> Value {
+fn route_completion(
+    index: &ProjectIndex,
+    route: &RouteEntry,
+    context: &SymbolContext,
+    line: usize,
+) -> Value {
     let name = route.name.as_deref().unwrap_or_default();
     let detail = format!("{} {}", route.methods.join("|"), route.uri);
     let parameter_patterns = route
@@ -526,10 +531,9 @@ fn route_completion(route: &RouteEntry, context: &SymbolContext, line: usize) ->
         resolved_middleware: route.resolved_middleware.clone(),
         parameter_patterns,
         source: route.file.display().to_string(),
+        source_uri: Some(path_to_file_uri(&index.project_root.join(&route.file))),
         line: route.line,
         column: route.column,
-        registration_kind: route.registration.kind.clone(),
-        registration_declared_in: route.registration.declared_in.display().to_string(),
         detail: Some(detail.clone()),
     });
 
@@ -1023,7 +1027,7 @@ fn minify_completion_value(value: &str) -> String {
     }
 }
 
-fn route_hover(route: &RouteEntry) -> String {
+fn route_hover(index: &ProjectIndex, route: &RouteEntry) -> String {
     let parameter_patterns = route
         .parameter_patterns
         .iter()
@@ -1037,10 +1041,9 @@ fn route_hover(route: &RouteEntry) -> String {
         resolved_middleware: route.resolved_middleware.clone(),
         parameter_patterns,
         source: route.file.display().to_string(),
+        source_uri: Some(path_to_file_uri(&index.project_root.join(&route.file))),
         line: route.line,
         column: route.column,
-        registration_kind: route.registration.kind.clone(),
-        registration_declared_in: route.registration.declared_in.display().to_string(),
         detail: None,
     })
     .hover_markdown()

@@ -85,9 +85,7 @@ Middleware: `web`
 
 Parameter patterns: `id=[0-9]+`
 
-Source: `routes/web.php:12:1`
-
-Registration: `Route::get` from `routes/web.php`
+Source: [routes/web.php:15:13](file:///Users/you/project/routes/web.php)
 ```
 
 ## Env Hover

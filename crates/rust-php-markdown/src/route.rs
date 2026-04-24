@@ -10,10 +10,9 @@ pub struct RouteHoverInput {
     pub resolved_middleware: Vec<String>,
     pub parameter_patterns: Vec<(String, String)>,
     pub source: String,
+    pub source_uri: Option<String>,
     pub line: usize,
     pub column: usize,
-    pub registration_kind: String,
-    pub registration_declared_in: String,
     pub detail: Option<String>,
 }
 
@@ -44,14 +43,15 @@ pub fn build(input: RouteHoverInput) -> DocBundle {
             .join(", ");
         doc = doc.field("Parameter patterns", patterns).blank();
     }
-    doc = doc.field("Source", format!("{}:{}:{}", input.source, input.line, input.column));
-    doc = doc.blank().field(
-        "Registration",
-        format!(
-            "{} from {}",
-            input.registration_kind, input.registration_declared_in
-        ),
-    );
+    if let Some(source_uri) = input.source_uri.as_deref() {
+        doc = doc.link_field(
+            "Source",
+            format!("{}:{}:{}", input.source, input.line, input.column),
+            source_uri,
+        );
+    } else {
+        doc = doc.field("Source", format!("{}:{}:{}", input.source, input.line, input.column));
+    }
 
     DocBundle::new(input.name, doc).with_detail(input.detail.unwrap_or_default())
 }
