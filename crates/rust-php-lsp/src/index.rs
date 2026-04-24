@@ -6,8 +6,8 @@ use crate::analyzers::{configs, controllers, routes, views};
 use crate::php::env::load_env_entries_with;
 use crate::project::LaravelProject;
 use crate::types::{
-    ConfigItem, ConfigReport, ControllerEntry, ControllerMethodEntry, ControllerReport, EnvItem,
-    RouteEntry, RouteReport, ViewEntry, ViewReport, ViewVariable,
+    BladeComponentEntry, ConfigItem, ConfigReport, ControllerEntry, ControllerMethodEntry,
+    ControllerReport, EnvItem, RouteEntry, RouteReport, ViewEntry, ViewReport, ViewVariable,
 };
 
 use super::overrides::FileOverrides;
@@ -23,6 +23,7 @@ pub struct ProjectIndex {
     route_by_name: BTreeMap<String, Vec<usize>>,
     env_by_key: BTreeMap<String, Vec<usize>>,
     view_by_name: BTreeMap<String, Vec<usize>>,
+    blade_component_by_name: BTreeMap<String, Vec<usize>>,
 }
 
 impl ProjectIndex {
@@ -75,6 +76,23 @@ impl ProjectIndex {
                 .push(index);
         }
 
+        let mut blade_component_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, component) in view_report.blade_components.iter().enumerate() {
+            blade_component_by_name
+                .entry(component.component.clone())
+                .or_default()
+                .push(index);
+        }
+        for indices in blade_component_by_name.values_mut() {
+            indices.sort_by_key(|&idx| {
+                if view_report.blade_components[idx].kind.contains("class") {
+                    0usize
+                } else {
+                    1usize
+                }
+            });
+        }
+
         Ok(Self {
             project_root: project.root.clone(),
             config_report,
@@ -86,6 +104,7 @@ impl ProjectIndex {
             route_by_name,
             env_by_key,
             view_by_name,
+            blade_component_by_name,
         })
     }
 
@@ -233,6 +252,24 @@ impl ProjectIndex {
             .get(name)
             .into_iter()
             .flat_map(|indices| indices.iter().map(|index| &self.view_report.views[*index]))
+            .collect()
+    }
+
+    pub fn blade_component_matches<'a>(&'a self, prefix: &str) -> Vec<&'a BladeComponentEntry> {
+        ranked_index_matches(self.blade_component_by_name.iter(), prefix, |index| {
+            &self.view_report.blade_components[index]
+        })
+    }
+
+    pub fn blade_component_definitions<'a>(&'a self, name: &str) -> Vec<&'a BladeComponentEntry> {
+        self.blade_component_by_name
+            .get(name)
+            .into_iter()
+            .flat_map(|indices| {
+                indices
+                    .iter()
+                    .map(|index| &self.view_report.blade_components[*index])
+            })
             .collect()
     }
 

@@ -69,6 +69,223 @@ pub struct RouteActionContext {
     pub end_character: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct BladeComponentTagContext {
+    pub full_text: String,
+    pub prefix: String,
+    pub has_x_dash: bool,
+    pub tag_start_character: usize,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct BladeComponentAttrContext {
+    pub component: String,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+    pub already_present: Vec<String>,
+    pub already_typed_colon: bool,
+}
+
+pub fn detect_blade_component_tag_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<BladeComponentTagContext> {
+    if !uri.ends_with(".blade.php") {
+        return None;
+    }
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let before = &line_text[..cursor];
+
+    let (tag_start, has_x_dash) = find_last_open_x_tag(before)?;
+    let name_start = tag_start + if has_x_dash { 3 } else { 2 };
+    let between = &before[name_start..];
+
+    if between.chars().any(|c| c.is_whitespace()) {
+        return None;
+    }
+
+    let mut name_end = cursor;
+    while name_end < line_text.len() {
+        match line_text[name_end..].chars().next() {
+            Some(c) if is_component_name_char(c) => name_end += c.len_utf8(),
+            _ => break,
+        }
+    }
+
+    // For completion replacement: when no dash yet, replace from `x` so newText can be `x-name`
+    let replace_start = if has_x_dash { name_start } else { tag_start + 1 };
+
+    Some(BladeComponentTagContext {
+        full_text: line_text[name_start..name_end].to_string(),
+        prefix: between.to_string(),
+        has_x_dash,
+        tag_start_character: line_text[..tag_start].chars().count(),
+        start_character: line_text[..replace_start].chars().count(),
+        end_character: line_text[..name_end].chars().count(),
+    })
+}
+
+pub fn detect_blade_component_attr_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<BladeComponentAttrContext> {
+    if !uri.ends_with(".blade.php") {
+        return None;
+    }
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let before = &line_text[..cursor];
+
+    let tag_start = find_last_open_x_tag_start(before)?;
+    let name_start = tag_start + 3;
+
+    let component_name_len = before[name_start..].find(|c: char| !is_component_name_char(c))?;
+    let name_end = name_start + component_name_len;
+    let component = before[name_start..name_end].to_string();
+    if component.is_empty() {
+        return None;
+    }
+
+    if !before[name_end..].starts_with(|c: char| c.is_whitespace()) {
+        return None;
+    }
+
+    // Find current token start first so attr_area excludes the token being typed
+    let mut tok_start = cursor;
+    while tok_start > 0 {
+        let prev = line_text[..tok_start].chars().next_back()?;
+        if prev.is_whitespace() || prev == '<' || prev == '>' || prev == '=' || prev == '"' || prev == '\'' {
+            break;
+        }
+        tok_start -= prev.len_utf8();
+    }
+
+    let attr_area = &before[name_end..tok_start];
+    let already_present = parse_existing_attributes(attr_area);
+
+    let already_typed_colon =
+        tok_start < line_text.len() && line_text[tok_start..].starts_with(':');
+    let name_token_start = if already_typed_colon { tok_start + 1 } else { tok_start };
+
+    let mut tok_end = cursor;
+    while tok_end < line_text.len() {
+        match line_text[tok_end..].chars().next() {
+            Some(c) if is_identifier_char(c) || c == '-' => tok_end += c.len_utf8(),
+            _ => break,
+        }
+    }
+
+    Some(BladeComponentAttrContext {
+        component,
+        prefix: line_text[name_token_start..cursor.min(tok_end)].to_string(),
+        start_character: line_text[..tok_start].chars().count(),
+        end_character: line_text[..tok_end].chars().count(),
+        already_present,
+        already_typed_colon,
+    })
+}
+
+fn find_last_open_x_tag(before: &str) -> Option<(usize, bool)> {
+    let mut last: Option<(usize, bool)> = None;
+    let mut i = 0;
+    while i < before.len() {
+        if before[i..].starts_with("<x-") {
+            last = Some((i, true));
+            i += 3;
+        } else if before[i..].starts_with("<x") {
+            let next = before[i + 2..].chars().next();
+            let ok = next.map(|c| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(true);
+            if ok {
+                last = Some((i, false));
+            }
+            i += 2;
+        } else {
+            i += before[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        }
+    }
+    let (start, has_dash) = last?;
+    if before[start..].contains('>') {
+        return None;
+    }
+    Some((start, has_dash))
+}
+
+fn find_last_open_x_tag_start(before: &str) -> Option<usize> {
+    find_last_open_x_tag(before).map(|(start, _)| start)
+}
+
+fn is_component_name_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '-' || ch == '.'
+}
+
+fn parse_existing_attributes(attr_area: &str) -> Vec<String> {
+    let mut attrs = Vec::new();
+    let mut i = 0;
+    let bytes = attr_area.as_bytes();
+
+    while i < bytes.len() {
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] == b'>' || bytes[i] == b'/' {
+            break;
+        }
+        if bytes[i] == b':' {
+            i += 1;
+        }
+        let name_start = i;
+        while i < bytes.len() {
+            match attr_area[i..].chars().next() {
+                Some(c) if c.is_ascii_alphanumeric() || c == '-' || c == '_' => {
+                    i += c.len_utf8();
+                }
+                _ => break,
+            }
+        }
+        let name_end = i;
+        if name_end > name_start {
+            let attr_name = &attr_area[name_start..name_end];
+            if !attr_name.contains(|c: char| c == '/' || c == '>') {
+                attrs.push(attr_name.to_string());
+            }
+        } else if i < bytes.len() {
+            i += 1;
+            continue;
+        }
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'=' {
+            i += 1;
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            if i < bytes.len() {
+                let quote = bytes[i];
+                if quote == b'"' || quote == b'\'' {
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != quote {
+                        i += 1;
+                    }
+                    if i < bytes.len() {
+                        i += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    attrs
+}
+
 pub fn detect_symbol_context(source: &str, line: usize, character: usize) -> Option<SymbolContext> {
     let line_text = source.lines().nth(line)?;
     let cursor = character_to_byte_index(line_text, character)?;
