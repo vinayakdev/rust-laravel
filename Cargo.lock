@@ -1178,7 +1178,9 @@ dependencies = [
  "rust-php-configs",
  "rust-php-controllers",
  "rust-php-foundation",
+ "rust-php-markdown",
  "rust-php-middleware",
+ "rust-php-public",
  "rust-php-routes",
  "rust-php-views",
  "serde",
@@ -1206,10 +1208,15 @@ dependencies = [
  "rust-php-editor",
  "rust-php-foundation",
  "rust-php-middleware",
+ "rust-php-public",
  "rust-php-routes",
  "rust-php-views",
  "serde_json",
 ]
+
+[[package]]
+name = "rust-php-markdown"
+version = "0.1.0"
 
 [[package]]
 name = "rust-php-middleware"

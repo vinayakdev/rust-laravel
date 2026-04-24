@@ -234,18 +234,21 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
             "completion uri={uri} line={} char={} context=blade-component-tag prefix={:?}",
             line, character, context.prefix
         ));
-        (query::complete_blade_components(index, &context, line), true)
-    } else if let Some(context) =
-        detect_blade_component_attr_context(uri, source, line, character)
+        (
+            query::complete_blade_components(index, &context, line),
+            true,
+        )
+    } else if let Some(context) = detect_blade_component_attr_context(uri, source, line, character)
     {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=blade-component-attr component={:?} prefix={:?}",
             line, character, context.component, context.prefix
         ));
-        (query::complete_blade_component_props(index, &context, line), true)
-    } else if let Some(context) =
-        detect_view_data_context(uri, source, line, character)
-    {
+        (
+            query::complete_blade_component_props(index, &context, line),
+            true,
+        )
+    } else if let Some(context) = detect_view_data_context(uri, source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=view-data prefix={:?}",
             line, character, context.prefix
@@ -311,17 +314,16 @@ fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
         return Value::Null;
     };
 
-    let definitions = if let Some(context) =
-        detect_blade_component_tag_context(uri, source, line, character)
-    {
-        query::blade_component_definitions(index, &context, line)
-    } else if let Some(context) = detect_symbol_context(source, line, character) {
-        query::definitions(index, &context, line)
-    } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
-        query::route_action_definitions(index, &context, line)
-    } else {
-        Vec::new()
-    };
+    let definitions =
+        if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
+            query::blade_component_definitions(index, &context, line)
+        } else if let Some(context) = detect_symbol_context(source, line, character) {
+            query::definitions(index, &context, line)
+        } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
+            query::route_action_definitions(index, &context, line)
+        } else {
+            Vec::new()
+        };
 
     if definitions.is_empty() {
         Value::Null

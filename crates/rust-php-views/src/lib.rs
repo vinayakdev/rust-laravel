@@ -1409,24 +1409,41 @@ fn strip_line_comments(body: &str) -> String {
             continue;
         }
         if in_single {
-            if ch == '\\' { escape = true; }
-            else if ch == '\'' { in_single = false; }
+            if ch == '\\' {
+                escape = true;
+            } else if ch == '\'' {
+                in_single = false;
+            }
             out.push(ch);
             continue;
         }
         if in_double {
-            if ch == '\\' { escape = true; }
-            else if ch == '"' { in_double = false; }
+            if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_double = false;
+            }
             out.push(ch);
             continue;
         }
-        if ch == '\'' { in_single = true; out.push(ch); continue; }
-        if ch == '"' { in_double = true; out.push(ch); continue; }
+        if ch == '\'' {
+            in_single = true;
+            out.push(ch);
+            continue;
+        }
+        if ch == '"' {
+            in_double = true;
+            out.push(ch);
+            continue;
+        }
         if ch == '/' {
             if chars.peek().map(|(_, c)| *c) == Some('/') {
                 // consume until end of line
                 for (_, c) in chars.by_ref() {
-                    if c == '\n' { out.push('\n'); break; }
+                    if c == '\n' {
+                        out.push('\n');
+                        break;
+                    }
                 }
                 continue;
             }

@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use std::cmp::Reverse;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::context::{
@@ -10,8 +11,12 @@ use super::context::{
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
 use crate::types::{
-    BladeComponentEntry, ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry,
-    ViewEntry, ViewVariable,
+    BladeComponentEntry, ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem,
+    PublicAssetEntry, RouteEntry, ViewEntry, ViewVariable,
+};
+use rust_php_markdown::{
+    asset::{self, AssetHoverInput},
+    config, controller, env, route, view, DocBundle, MarkdownDoc,
 };
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
@@ -36,7 +41,11 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
             .into_iter()
             .map(|view| view_completion(view, context, line))
             .collect(),
-        SymbolKind::Asset => Vec::new(),
+        SymbolKind::Asset => index
+            .public_asset_matches(&context.prefix)
+            .into_iter()
+            .map(|asset| asset_completion(asset, context, line))
+            .collect(),
     }
 }
 
@@ -480,14 +489,22 @@ pub fn asset_code_actions(index: &ProjectIndex, context: &SymbolContext) -> Vec<
 fn config_completion(item: &ConfigItem, context: &SymbolContext, line: usize) -> Value {
     let current_value = config_current_value(item);
     let summary = current_value.map(minify_completion_value);
+    let docs = config::build(config::ConfigHoverInput {
+        key: item.key.clone(),
+        current_value: current_value.map(ToOwned::to_owned),
+        env_key: item.env_key.clone(),
+        default_value: item.default_value.clone(),
+        env_value: item.env_value.clone(),
+        detail: summary.clone(),
+    });
 
     json!({
         "label": item.key,
         "kind": 10,
-        "detail": summary,
+        "detail": docs.detail.clone().or(summary),
         "documentation": {
             "kind": "markdown",
-            "value": config_hover(item),
+            "value": docs.completion_markdown(),
         },
         "textEdit": replacement_edit(context, line, &item.key),
     })
@@ -496,33 +513,82 @@ fn config_completion(item: &ConfigItem, context: &SymbolContext, line: usize) ->
 fn route_completion(route: &RouteEntry, context: &SymbolContext, line: usize) -> Value {
     let name = route.name.as_deref().unwrap_or_default();
     let detail = format!("{} {}", route.methods.join("|"), route.uri);
+    let parameter_patterns = route
+        .parameter_patterns
+        .iter()
+        .map(|(name, pattern)| (name.clone(), pattern.clone()))
+        .collect::<Vec<_>>();
+    let docs = route::build(route::RouteHoverInput {
+        name: name.to_string(),
+        methods: route.methods.clone(),
+        uri: route.uri.clone(),
+        action: route.action.clone(),
+        resolved_middleware: route.resolved_middleware.clone(),
+        parameter_patterns,
+        source: route.file.display().to_string(),
+        line: route.line,
+        column: route.column,
+        registration_kind: route.registration.kind.clone(),
+        registration_declared_in: route.registration.declared_in.display().to_string(),
+        detail: Some(detail.clone()),
+    });
 
     json!({
         "label": name,
         "kind": 18,
-        "detail": detail,
+        "detail": docs.detail.clone().unwrap_or(detail),
         "documentation": {
             "kind": "markdown",
-            "value": route_hover(route),
+            "value": docs.completion_markdown(),
         },
         "textEdit": replacement_edit(context, line, name),
     })
 }
 
 fn env_completion(item: &EnvItem, context: &SymbolContext, line: usize) -> Value {
+    let docs = env::build(env::EnvHoverInput {
+        key: item.key.clone(),
+        value: item.value.clone(),
+        source: item.file.display().to_string(),
+        line: item.line,
+        column: item.column,
+        detail: Some(minify_completion_value(&item.value)),
+    });
+
     json!({
         "label": item.key,
         "kind": 21,
-        "detail": minify_completion_value(&item.value),
+        "detail": docs.detail.clone().unwrap_or_default(),
         "documentation": {
             "kind": "markdown",
-            "value": env_hover(item),
+            "value": docs.completion_markdown(),
         },
         "textEdit": replacement_edit(context, line, &item.key),
     })
 }
 
+fn asset_completion(asset: &PublicAssetEntry, context: &SymbolContext, line: usize) -> Value {
+    let docs = asset_docs_from_entry(asset);
+    json!({
+        "label": asset.asset_path,
+        "kind": 17,
+        "detail": docs.detail.clone().unwrap_or_default(),
+        "filterText": asset.asset_path,
+        "documentation": {
+            "kind": "markdown",
+            "value": asset_completion_hover(asset),
+        },
+        "textEdit": replacement_edit(context, line, &asset.asset_path),
+    })
+}
+
 fn helper_completion(helper: &HelperSpec, context: &HelperContext, line: usize) -> Value {
+    let doc = MarkdownDoc::new()
+        .title(helper.name)
+        .blank()
+        .separator()
+        .blank()
+        .line(helper.documentation);
     let mut item = json!({
         "label": helper.name,
         "kind": 3,
@@ -531,7 +597,7 @@ fn helper_completion(helper: &HelperSpec, context: &HelperContext, line: usize) 
         "filterText": helper.name,
         "documentation": {
             "kind": "markdown",
-            "value": helper.documentation,
+            "value": doc.finish_markdown(),
         },
         "textEdit": {
             "range": {
@@ -553,13 +619,19 @@ fn helper_completion(helper: &HelperSpec, context: &HelperContext, line: usize) 
 }
 
 fn view_data_variable_completion(name: &str, context: &ViewDataContext, line: usize) -> Value {
+    let doc = MarkdownDoc::new()
+        .title(name)
+        .blank()
+        .separator()
+        .blank()
+        .line("Available as a local variable in the current controller method");
     json!({
         "label": name,
         "kind": 6,
         "detail": "Local variable in current function",
         "documentation": {
             "kind": "markdown",
-            "value": format!("`{name}`\n- available as a local variable in the current controller method"),
+            "value": doc.finish_markdown(),
         },
         "textEdit": {
             "range": {
@@ -581,6 +653,12 @@ fn blade_view_variable_completion(
         .as_ref()
         .map(|value| format!("Blade view variable = {value}"))
         .unwrap_or_else(|| "Blade view variable".to_string());
+    let doc = MarkdownDoc::new()
+        .title(format!("${}", variable.name))
+        .blank()
+        .separator()
+        .blank()
+        .line("Available in the current Blade view");
     json!({
         "label": format!("${}", variable.name),
         "filterText": variable.name,
@@ -588,7 +666,7 @@ fn blade_view_variable_completion(
         "detail": detail,
         "documentation": {
             "kind": "markdown",
-            "value": format!("`${}`\n- available in the current Blade view", variable.name),
+            "value": doc.finish_markdown(),
         },
         "textEdit": {
             "range": {
@@ -606,13 +684,24 @@ fn controller_completion(
     line: usize,
 ) -> Value {
     let insert = controller.class_name.as_str();
+    let docs = controller::build(controller::ControllerHoverInput {
+        label: controller.class_name.clone(),
+        fqn: controller.fqn.clone(),
+        callable_methods: controller.callable_method_count,
+        total_methods: controller.method_count,
+        source: controller.file.display().to_string(),
+        line: controller.line,
+        extends: controller.extends.clone(),
+        traits: controller.traits.clone(),
+        detail: Some(controller.fqn.clone()),
+    });
     json!({
         "label": controller.class_name,
         "kind": 7,
-        "detail": controller.fqn,
+        "detail": docs.detail.clone().unwrap_or_else(|| controller.fqn.clone()),
         "documentation": {
             "kind": "markdown",
-            "value": controller_hover(controller),
+            "value": docs.completion_markdown(),
         },
         "textEdit": {
             "range": {
@@ -634,6 +723,17 @@ fn controller_method_completion(
         RouteActionKind::LegacyMethodString => method.name.clone(),
         _ => method.name.clone(),
     };
+    let docs = controller::build_method(controller::ControllerMethodHoverInput {
+        label: format!("{}::{}", controller.class_name, method.name),
+        controller_fqn: controller.fqn.clone(),
+        route_callable: method.accessible_from_route,
+        visibility: method.visibility.clone(),
+        source_kind: method.source_kind.clone(),
+        notes: method.accessibility.clone(),
+        source: method.declared_in.display().to_string(),
+        line: method.line,
+        detail: Some(format!("{} {}", controller.class_name, method.accessibility)),
+    });
 
     json!({
         "label": method.name,
@@ -641,7 +741,7 @@ fn controller_method_completion(
         "detail": format!("{} {}", controller.class_name, method.accessibility),
         "documentation": {
             "kind": "markdown",
-            "value": controller_method_hover(controller, method),
+            "value": docs.completion_markdown(),
         },
         "textEdit": {
             "range": {
@@ -675,39 +775,37 @@ fn replacement_edit(context: &SymbolContext, line: usize, new_text: &str) -> Val
 }
 
 fn view_completion(view: &ViewEntry, context: &SymbolContext, line: usize) -> Value {
+    let docs = view::build(view::ViewHoverInput {
+        name: view.name.clone(),
+        kind: view.kind.clone(),
+        file: view.file.display().to_string(),
+        usages: view.usages.len(),
+        props: view.props.iter().map(|p| p.name.clone()).collect(),
+        detail: Some(view.file.display().to_string()),
+    });
+
     json!({
         "label": view.name,
         "kind": 17,
-        "detail": view.file.display().to_string(),
+        "detail": docs.detail.clone().unwrap_or_else(|| view.file.display().to_string()),
         "documentation": {
             "kind": "markdown",
-            "value": view_hover(view),
+            "value": docs.completion_markdown(),
         },
         "textEdit": replacement_edit(context, line, &view.name),
     })
 }
 
 fn view_hover(view: &ViewEntry) -> String {
-    let mut lines = vec![
-        format!("`{}`", view.name),
-        format!("- kind: `{}`", view.kind),
-        format!("- file: `{}`", view.file.display()),
-    ];
-
-    if !view.usages.is_empty() {
-        lines.push(format!("- usages: `{}`", view.usages.len()));
-    }
-    if !view.props.is_empty() {
-        let prop_names = view
-            .props
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("- props: `{prop_names}`"));
-    }
-
-    lines.join("\n")
+    view::build(view::ViewHoverInput {
+        name: view.name.clone(),
+        kind: view.kind.clone(),
+        file: view.file.display().to_string(),
+        usages: view.usages.len(),
+        props: view.props.iter().map(|p| p.name.clone()).collect(),
+        detail: None,
+    })
+    .hover_markdown()
 }
 
 fn blade_component_tag_completion(
@@ -786,14 +884,24 @@ fn blade_component_attr_completion(
         (format!("{name}=\"${{1}}\""), format!("{name}=\"...\""))
     };
     let doc = match &prop.default_value {
-        Some(v) => format!("`{name}` — default: `{v}`"),
-        None => format!("`{name}` — required prop"),
+        Some(v) => MarkdownDoc::new()
+            .title(name)
+            .blank()
+            .separator()
+            .blank()
+            .field("Default", v),
+        None => MarkdownDoc::new()
+            .title(name)
+            .blank()
+            .separator()
+            .blank()
+            .field("Status", "required"),
     };
     json!({
         "label": name,
         "kind": 5,
         "detail": detail,
-        "documentation": { "kind": "markdown", "value": doc },
+        "documentation": { "kind": "markdown", "value": doc.finish_markdown() },
         "insertTextFormat": 2,
         "textEdit": {
             "range": {
@@ -822,16 +930,20 @@ fn blade_component_hover_text_all(
     project_root: &Path,
 ) -> String {
     let first = components[0];
-    let mut lines = vec![format!("`x-{}`", first.component)];
+    let mut doc = MarkdownDoc::new()
+        .title(format!("x-{}", first.component))
+        .blank()
+        .separator()
+        .blank();
 
     for c in components {
         if let Some(class) = &c.class_name {
             if let Some(class_file) = &c.class_file {
                 let absolute = project_root.join(class_file);
                 let uri = path_to_file_uri(&absolute);
-                lines.push(format!("- class: [`{class}`]({})", uri));
+                doc = doc.link_field("Class", class, uri).blank();
             } else {
-                lines.push(format!("- class: `{class}`"));
+                doc = doc.field("Class", class).blank();
             }
         }
     }
@@ -848,7 +960,9 @@ fn blade_component_hover_text_all(
             if seen_files.insert(file.clone()) {
                 let absolute = project_root.join(file);
                 let uri = path_to_file_uri(&absolute);
-                lines.push(format!("- blade file: [{}]({})", file.display(), uri));
+                doc = doc
+                    .link_field("Blade file", file.display().to_string(), uri)
+                    .blank();
             }
         }
     }
@@ -864,43 +978,34 @@ fn blade_component_hover_text_all(
         })
         .collect();
     if !props.is_empty() {
-        lines.push(format!("- props: `{}`", props.join(", ")));
+        doc = doc.field("Props", props.join(", "));
     }
 
-    lines.join("\n")
+    doc.finish_markdown()
 }
 
 fn env_hover(item: &EnvItem) -> String {
-    [
-        format!("`{}`", item.key),
-        format!("- value: `{}`", item.value),
-        format!(
-            "- source: `{}`:{}:{}",
-            item.file.display(),
-            item.line,
-            item.column
-        ),
-    ]
-    .join("\n")
+    env::build(env::EnvHoverInput {
+        key: item.key.clone(),
+        value: item.value.clone(),
+        source: item.file.display().to_string(),
+        line: item.line,
+        column: item.column,
+        detail: None,
+    })
+    .hover_markdown()
 }
 
 fn config_hover(item: &ConfigItem) -> String {
-    let mut lines = vec![format!("`{}`", item.key)];
-
-    if let Some(current_value) = config_current_value(item) {
-        lines.push(format!("- current value: `{current_value}`"));
-    }
-    if let Some(env_key) = &item.env_key {
-        lines.push(format!("- env key: `{env_key}`"));
-    }
-    if let Some(default_value) = &item.default_value {
-        lines.push(format!("- default: `{default_value}`"));
-    }
-    if let Some(env_value) = &item.env_value {
-        lines.push(format!("- resolved env: `{env_value}`"));
-    }
-
-    lines.join("\n")
+    config::build(config::ConfigHoverInput {
+        key: item.key.clone(),
+        current_value: config_current_value(item).map(ToOwned::to_owned),
+        env_key: item.env_key.clone(),
+        default_value: item.default_value.clone(),
+        env_value: item.env_value.clone(),
+        detail: None,
+    })
+    .hover_markdown()
 }
 
 fn config_current_value(item: &ConfigItem) -> Option<&str> {
@@ -919,103 +1024,162 @@ fn minify_completion_value(value: &str) -> String {
 }
 
 fn route_hover(route: &RouteEntry) -> String {
-    let mut lines = vec![
-        format!("`{}`", route.name.as_deref().unwrap_or("<unnamed-route>")),
-        format!("- methods: `{}`", route.methods.join(", ")),
-        format!("- uri: `{}`", route.uri),
-    ];
-
-    if let Some(action) = &route.action {
-        lines.push(format!("- action: `{action}`"));
-    }
-    if !route.resolved_middleware.is_empty() {
-        lines.push(format!(
-            "- middleware: `{}`",
-            route.resolved_middleware.join(", ")
-        ));
-    }
-    if !route.parameter_patterns.is_empty() {
-        let patterns = route
-            .parameter_patterns
-            .iter()
-            .map(|(name, pattern)| format!("{name}={pattern}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("- parameter patterns: `{patterns}`"));
-    }
-    lines.push(format!(
-        "- source: `{}`:{}:{}",
-        route.file.display(),
-        route.line,
-        route.column
-    ));
-    lines.push(format!(
-        "- registration: `{}` from `{}`",
-        route.registration.kind,
-        route.registration.declared_in.display()
-    ));
-
-    lines.join("\n")
+    let parameter_patterns = route
+        .parameter_patterns
+        .iter()
+        .map(|(name, pattern)| (name.clone(), pattern.clone()))
+        .collect::<Vec<_>>();
+    route::build(route::RouteHoverInput {
+        name: route.name.as_deref().unwrap_or("<unnamed-route>").to_string(),
+        methods: route.methods.clone(),
+        uri: route.uri.clone(),
+        action: route.action.clone(),
+        resolved_middleware: route.resolved_middleware.clone(),
+        parameter_patterns,
+        source: route.file.display().to_string(),
+        line: route.line,
+        column: route.column,
+        registration_kind: route.registration.kind.clone(),
+        registration_declared_in: route.registration.declared_in.display().to_string(),
+        detail: None,
+    })
+    .hover_markdown()
 }
 
 fn controller_hover(controller: &ControllerEntry) -> String {
-    let mut lines = vec![
-        format!("`{}`", controller.fqn),
-        format!("- callable methods: `{}`", controller.callable_method_count),
-        format!("- total methods: `{}`", controller.method_count),
-        format!(
-            "- source: `{}`:{}",
-            controller.file.display(),
-            controller.line
-        ),
-    ];
-
-    if let Some(parent) = &controller.extends {
-        lines.push(format!("- extends: `{parent}`"));
-    }
-    if !controller.traits.is_empty() {
-        lines.push(format!("- traits: `{}`", controller.traits.join(", ")));
-    }
-
-    lines.join("\n")
+    controller::build(controller::ControllerHoverInput {
+        label: controller.class_name.clone(),
+        fqn: controller.fqn.clone(),
+        callable_methods: controller.callable_method_count,
+        total_methods: controller.method_count,
+        source: controller.file.display().to_string(),
+        line: controller.line,
+        extends: controller.extends.clone(),
+        traits: controller.traits.clone(),
+        detail: None,
+    })
+    .hover_markdown()
 }
 
 fn controller_method_hover(controller: &ControllerEntry, method: &ControllerMethodEntry) -> String {
-    [
-        format!("`{}::{}`", controller.class_name, method.name),
-        format!("- controller: `{}`", controller.fqn),
-        format!("- route callable: `{}`", method.accessible_from_route),
-        format!("- visibility: `{}`", method.visibility),
-        format!("- source kind: `{}`", method.source_kind),
-        format!("- notes: `{}`", method.accessibility),
-        format!(
-            "- source: `{}`:{}",
-            method.declared_in.display(),
-            method.line
-        ),
-    ]
-    .join("\n")
+    controller::build_method(controller::ControllerMethodHoverInput {
+        label: format!("{}::{}", controller.class_name, method.name),
+        controller_fqn: controller.fqn.clone(),
+        route_callable: method.accessible_from_route,
+        visibility: method.visibility.clone(),
+        source_kind: method.source_kind.clone(),
+        notes: method.accessibility.clone(),
+        source: method.declared_in.display().to_string(),
+        line: method.line,
+        detail: None,
+    })
+    .hover_markdown()
 }
 
 fn asset_hover(index: &ProjectIndex, asset_path: &str) -> String {
-    let mut lines = vec![format!("`{asset_path}`")];
+    asset_docs(index, asset_path, false).hover_markdown()
+}
 
-    if let Some(relative) = asset_relative_file(asset_path) {
-        lines.push(format!("- public file: `{}`", relative.display()));
+fn asset_completion_hover(asset: &PublicAssetEntry) -> String {
+    asset_docs_from_entry(asset).completion_markdown()
+}
 
-        let absolute = index.project_root.join(&relative);
-        if absolute.exists() {
-            lines.push(format!("- resolved: `{}`", absolute.display()));
-            lines.push(format!("- absolute path: {}", absolute.display()));
-            lines.push(format!("- link: [open file]({})", path_to_file_uri(&absolute)));
+fn asset_docs(index: &ProjectIndex, asset_path: &str, for_completion: bool) -> DocBundle {
+    let (file_name, size_display, file_uri, status) =
+        if let Some(relative) = asset_relative_file(asset_path) {
+            let absolute = index.project_root.join(&relative);
+            if absolute.exists() {
+                let file_name = absolute
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string());
+                let size_display = if for_completion {
+                    fs::metadata(&absolute)
+                        .ok()
+                        .map(|metadata| format_size(metadata.len()))
+                } else {
+                    fs::metadata(&absolute)
+                        .ok()
+                        .map(|metadata| format_size(metadata.len()))
+                };
+                (
+                    file_name,
+                    size_display,
+                    Some(path_to_file_uri(&absolute)),
+                    asset::AssetStatus::Resolved,
+                )
+            } else {
+                (None, None, None, asset::AssetStatus::Missing)
+            }
         } else {
-            lines.push("- status: `missing`".to_string());
-        }
-    } else {
-        lines.push("- status: `unresolved`".to_string());
+            (None, None, None, asset::AssetStatus::Unresolved)
+        };
+
+    rust_php_markdown::asset::build(AssetHoverInput {
+        asset_path: asset_path.to_string(),
+        file_name,
+        file_uri,
+        size_display,
+        extension: None,
+        usages: 0,
+        status,
+        completion_detail: asset_completion_detail_for_path(asset_path, for_completion),
+    })
+}
+
+fn asset_docs_from_entry(asset: &PublicAssetEntry) -> DocBundle {
+    let file_name = std::path::Path::new(&asset.asset_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string());
+
+    rust_php_markdown::asset::build(AssetHoverInput {
+        asset_path: asset.asset_path.clone(),
+        file_name,
+        file_uri: None,
+        size_display: Some(format_size(asset.size_bytes as u64)),
+        extension: asset.extension.clone(),
+        usages: asset.usages.len(),
+        status: asset::AssetStatus::Resolved,
+        completion_detail: asset_completion_detail(asset),
+    })
+}
+
+fn asset_completion_detail(asset: &PublicAssetEntry) -> String {
+    let mut detail = format!("public/{}", asset.asset_path);
+
+    if let Some(extension) = &asset.extension {
+        detail.push_str(&format!(" · .{extension}"));
+    }
+    if asset.size_bytes > 0 {
+        detail.push_str(&format!(" · {} bytes", asset.size_bytes));
+    }
+    if !asset.usages.is_empty() {
+        detail.push_str(&format!(" · {} uses", asset.usages.len()));
     }
 
-    lines.join("\n")
+    detail
+}
+
+fn asset_completion_detail_for_path(asset_path: &str, for_completion: bool) -> String {
+    if for_completion {
+        format!("public/{}", asset_path)
+    } else {
+        format!("public/{}", asset_path)
+    }
+}
+
+fn format_size(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+
+    if bytes >= MIB {
+        format!("{:.2} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.2} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 fn asset_location(index: &ProjectIndex, asset_path: &str) -> Option<PathBuf> {
@@ -1609,7 +1773,7 @@ mod tests {
     use serde_json::json;
 
     use crate::lsp::context::{
-        HelperContext, HelperStyle, detect_blade_component_tag_context,
+        HelperContext, HelperStyle, SymbolKind, detect_blade_component_tag_context,
         detect_blade_variable_context, detect_route_action_context, detect_symbol_context,
     };
     use crate::lsp::index::ProjectIndex;
@@ -1617,8 +1781,8 @@ mod tests {
     use crate::project;
 
     use super::{
-        blade_component_definitions, complete_blade_view_variables, complete_route_actions,
-        complete_view_data_variables, definitions, helper_snippets, hover,
+        blade_component_definitions, complete, complete_blade_view_variables,
+        complete_route_actions, complete_view_data_variables, definitions, helper_snippets, hover,
         route_action_code_actions, route_action_definitions, route_diagnostics,
     };
 
@@ -1764,6 +1928,32 @@ Route::get('/dashboard', function () {
     return 'ok';
 })->name('dashboard.home');
 "#,
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn asset_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(
+            &root,
+            "public/assets/images/virtual/centers-card-img.png",
+            "png",
         );
 
         project::from_root(root).expect("fixture project should resolve")
@@ -2069,6 +2259,62 @@ Route::get('/dashboard', function () {
                     .ends_with(target_suffix)
             );
         }
+    }
+
+    #[test]
+    fn asset_hover_definition_and_completion_resolve_public_file() {
+        let project = asset_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "return secure_asset('assets/images/virtual/centers-card-img.png');";
+        let character = source.find("virtual").unwrap() + 2;
+        let context = detect_symbol_context(source, 0, character).expect("asset context");
+
+        assert_eq!(context.kind, SymbolKind::Asset);
+
+        let hover = hover(&index, &context, 0).expect("hover expected");
+        let hover_value = hover
+            .pointer("/contents/value")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        assert!(hover_value.contains("public/assets/images/virtual/centers-card-img.png"));
+        assert!(hover_value.contains("/public/assets/images/virtual/centers-card-img.png"));
+        assert!(hover_value.contains("[open file](file://"));
+
+        let definitions = definitions(&index, &context, 0);
+        let first = definitions.first().expect("definition expected");
+        assert!(
+            first
+                .pointer("/uri")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .ends_with("/public/assets/images/virtual/centers-card-img.png")
+        );
+
+        let completions = complete(&index, &context, 0);
+        let labels = completions
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"assets/images/virtual/centers-card-img.png"));
+    }
+
+    #[test]
+    fn asset_completion_matches_partial_fuzzy_queries() {
+        let project = asset_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "return asset('assets/images/vir');";
+        let character = source.find("vir").unwrap() + 3;
+        let context = detect_symbol_context(source, 0, character).expect("asset context");
+
+        let completions = complete(&index, &context, 0);
+        let labels = completions
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"assets/images/virtual/centers-card-img.png"));
     }
 
     #[test]

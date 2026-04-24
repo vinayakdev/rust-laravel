@@ -10,8 +10,8 @@ use super::context::{
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
 use crate::types::{
-    BladeComponentEntry, ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem, RouteEntry,
-    ViewEntry, ViewVariable,
+    BladeComponentEntry, ConfigItem, ControllerEntry, ControllerMethodEntry, EnvItem,
+    PublicAssetEntry, RouteEntry, ViewEntry, ViewVariable,
 };
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
@@ -36,7 +36,11 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
             .into_iter()
             .map(|view| view_completion(view, context, line))
             .collect(),
-        SymbolKind::Asset => Vec::new(),
+        SymbolKind::Asset => index
+            .public_asset_matches(&context.prefix)
+            .into_iter()
+            .map(|asset| asset_completion(asset, context, line))
+            .collect(),
     }
 }
 
@@ -522,6 +526,20 @@ fn env_completion(item: &EnvItem, context: &SymbolContext, line: usize) -> Value
     })
 }
 
+fn asset_completion(asset: &PublicAssetEntry, context: &SymbolContext, line: usize) -> Value {
+    json!({
+        "label": asset.asset_path,
+        "kind": 17,
+        "detail": asset_completion_detail(asset),
+        "filterText": asset.asset_path,
+        "documentation": {
+            "kind": "markdown",
+            "value": asset_completion_hover(asset),
+        },
+        "textEdit": replacement_edit(context, line, &asset.asset_path),
+    })
+}
+
 fn helper_completion(helper: &HelperSpec, context: &HelperContext, line: usize) -> Value {
     let mut item = json!({
         "label": helper.name,
@@ -848,6 +866,39 @@ fn asset_hover(index: &ProjectIndex, asset_path: &str) -> String {
         }
     } else {
         lines.push("- status: `unresolved`".to_string());
+    }
+
+    lines.join("\n")
+}
+
+fn asset_completion_detail(asset: &PublicAssetEntry) -> String {
+    let mut detail = format!("public/{}", asset.asset_path);
+
+    if let Some(extension) = &asset.extension {
+        detail.push_str(&format!(" · .{extension}"));
+    }
+    if asset.size_bytes > 0 {
+        detail.push_str(&format!(" · {} bytes", asset.size_bytes));
+    }
+    if !asset.usages.is_empty() {
+        detail.push_str(&format!(" · {} uses", asset.usages.len()));
+    }
+
+    detail
+}
+
+fn asset_completion_hover(asset: &PublicAssetEntry) -> String {
+    let mut lines = vec![
+        format!("`{}`", asset.asset_path),
+        format!("- public file: `public/{}`", asset.asset_path),
+    ];
+
+    if let Some(extension) = &asset.extension {
+        lines.push(format!("- extension: `.{extension}`"));
+    }
+    lines.push(format!("- size: `{}` bytes", asset.size_bytes));
+    if !asset.usages.is_empty() {
+        lines.push(format!("- usages: `{}`", asset.usages.len()));
     }
 
     lines.join("\n")
@@ -1580,7 +1631,7 @@ mod tests {
     use crate::project;
 
     use super::{
-        asset_code_actions, blade_component_definitions, complete_blade_view_variables,
+        asset_code_actions, blade_component_definitions, complete, complete_blade_view_variables,
         complete_route_actions, complete_view_data_variables, definitions, helper_snippets, hover,
         route_action_code_actions, route_action_definitions, route_diagnostics,
     };
@@ -2103,6 +2154,31 @@ Route::get('/dashboard', function () {
                 .unwrap_or_default()
                 .ends_with("/public/assets/images/virtual/centers-card-img.png")
         );
+
+        let completions = complete(&index, &context, 0);
+        let labels = completions
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"assets/images/virtual/centers-card-img.png"));
+    }
+
+    #[test]
+    fn asset_completion_matches_partial_fuzzy_queries() {
+        let project = asset_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "return asset('assets/images/vir');";
+        let character = source.find("vir").unwrap() + 3;
+        let context = detect_symbol_context(source, 0, character).expect("asset context");
+
+        let completions = complete(&index, &context, 0);
+        let labels = completions
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"assets/images/virtual/centers-card-img.png"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::types::{
     ConfigItem, ConfigReport, ControllerEntry, ControllerMethodEntry, ControllerReport, EnvItem,
     RouteEntry, RouteReport, ViewEntry, ViewReport, ViewVariable,
 };
+use rust_php_public::types::{PublicAssetEntry, PublicAssetReport};
 
 use super::overrides::FileOverrides;
 
@@ -19,10 +20,12 @@ pub struct ProjectIndex {
     route_report: RouteReport,
     env_items: Vec<EnvItem>,
     view_report: ViewReport,
+    public_asset_report: PublicAssetReport,
     config_by_key: BTreeMap<String, Vec<usize>>,
     route_by_name: BTreeMap<String, Vec<usize>>,
     env_by_key: BTreeMap<String, Vec<usize>>,
     view_by_name: BTreeMap<String, Vec<usize>>,
+    public_asset_by_path: BTreeMap<String, Vec<usize>>,
 }
 
 impl ProjectIndex {
@@ -46,10 +49,20 @@ impl ProjectIndex {
             livewire_components: Vec::new(),
             missing_views: Vec::new(),
         });
+        let public_asset_report = rust_php_public::analyze(project).unwrap_or_else(|_| {
+            PublicAssetReport {
+                project_name: project.name.clone(),
+                project_root: project.root.clone(),
+                file_count: 0,
+                usage_count: 0,
+                assets: Vec::new(),
+            }
+        });
         let mut config_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut route_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut env_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut view_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut public_asset_by_path: BTreeMap<String, Vec<usize>> = BTreeMap::new();
 
         for (index, item) in config_report.items.iter().enumerate() {
             config_by_key
@@ -74,6 +87,12 @@ impl ProjectIndex {
                 .or_default()
                 .push(index);
         }
+        for (index, asset) in public_asset_report.assets.iter().enumerate() {
+            public_asset_by_path
+                .entry(asset.asset_path.clone())
+                .or_default()
+                .push(index);
+        }
 
         Ok(Self {
             project_root: project.root.clone(),
@@ -82,10 +101,12 @@ impl ProjectIndex {
             route_report,
             env_items,
             view_report,
+            public_asset_report,
             config_by_key,
             route_by_name,
             env_by_key,
             view_by_name,
+            public_asset_by_path,
         })
     }
 
@@ -136,6 +157,24 @@ impl ProjectIndex {
             .get(key)
             .into_iter()
             .flat_map(|indices| indices.iter().map(|index| &self.env_items[*index]))
+            .collect()
+    }
+
+    pub fn public_asset_matches<'a>(&'a self, prefix: &str) -> Vec<&'a PublicAssetEntry> {
+        ranked_index_matches(self.public_asset_by_path.iter(), prefix, |index| {
+            &self.public_asset_report.assets[index]
+        })
+    }
+
+    pub fn public_asset_definitions<'a>(&'a self, asset_path: &str) -> Vec<&'a PublicAssetEntry> {
+        self.public_asset_by_path
+            .get(asset_path)
+            .into_iter()
+            .flat_map(|indices| {
+                indices
+                    .iter()
+                    .map(|index| &self.public_asset_report.assets[*index])
+            })
             .collect()
     }
 

@@ -120,7 +120,11 @@ pub fn detect_blade_component_tag_context(
     }
 
     // For completion replacement: when no dash yet, replace from `x` so newText can be `x-name`
-    let replace_start = if has_x_dash { name_start } else { tag_start + 1 };
+    let replace_start = if has_x_dash {
+        name_start
+    } else {
+        tag_start + 1
+    };
 
     Some(BladeComponentTagContext {
         full_text: line_text[name_start..name_end].to_string(),
@@ -163,7 +167,13 @@ pub fn detect_blade_component_attr_context(
     let mut tok_start = cursor;
     while tok_start > 0 {
         let prev = line_text[..tok_start].chars().next_back()?;
-        if prev.is_whitespace() || prev == '<' || prev == '>' || prev == '=' || prev == '"' || prev == '\'' {
+        if prev.is_whitespace()
+            || prev == '<'
+            || prev == '>'
+            || prev == '='
+            || prev == '"'
+            || prev == '\''
+        {
             break;
         }
         tok_start -= prev.len_utf8();
@@ -174,7 +184,11 @@ pub fn detect_blade_component_attr_context(
 
     let already_typed_colon =
         tok_start < line_text.len() && line_text[tok_start..].starts_with(':');
-    let name_token_start = if already_typed_colon { tok_start + 1 } else { tok_start };
+    let name_token_start = if already_typed_colon {
+        tok_start + 1
+    } else {
+        tok_start
+    };
 
     let mut tok_end = cursor;
     while tok_end < line_text.len() {
@@ -203,13 +217,19 @@ fn find_last_open_x_tag(before: &str) -> Option<(usize, bool)> {
             i += 3;
         } else if before[i..].starts_with("<x") {
             let next = before[i + 2..].chars().next();
-            let ok = next.map(|c| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(true);
+            let ok = next
+                .map(|c| !c.is_ascii_alphanumeric() && c != '_')
+                .unwrap_or(true);
             if ok {
                 last = Some((i, false));
             }
             i += 2;
         } else {
-            i += before[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            i += before[i..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1);
         }
     }
     let (start, has_dash) = last?;
