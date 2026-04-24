@@ -6,6 +6,7 @@ pub struct ViewHoverInput {
     pub name: String,
     pub kind: String,
     pub file: String,
+    pub file_uri: Option<String>,
     pub usages: usize,
     pub props: Vec<String>,
     pub detail: Option<String>,
@@ -18,8 +19,13 @@ pub fn build(input: ViewHoverInput) -> DocBundle {
         .separator()
         .blank()
         .field("Kind", input.kind)
-        .blank()
-        .field("File", input.file);
+        .blank();
+
+    if let Some(file_uri) = input.file_uri.as_deref() {
+        doc = doc.link_field("File", input.file, file_uri);
+    } else {
+        doc = doc.field("File", input.file);
+    }
 
     if input.usages > 0 {
         doc = doc.field("Usages", input.usages.to_string()).blank();

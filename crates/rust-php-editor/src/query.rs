@@ -34,17 +34,17 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
         SymbolKind::Env => index
             .env_matches(&context.prefix)
             .into_iter()
-            .map(|item| env_completion(item, context, line))
+            .map(|item| env_completion(index, item, context, line))
             .collect(),
         SymbolKind::View => index
             .view_matches(&context.prefix)
             .into_iter()
-            .map(|view| view_completion(view, context, line))
+            .map(|view| view_completion(index, view, context, line))
             .collect(),
         SymbolKind::Asset => index
             .public_asset_matches(&context.prefix)
             .into_iter()
-            .map(|asset| asset_completion(asset, context, line))
+            .map(|asset| asset_completion(index, asset, context, line))
             .collect(),
     }
 }
@@ -102,7 +102,7 @@ pub fn complete_route_actions(
         RouteActionKind::ControllerClass | RouteActionKind::LegacyControllerString => index
             .controller_matches(&context.prefix)
             .into_iter()
-            .map(|controller| controller_completion(controller, context, line))
+            .map(|controller| controller_completion(index, controller, context, line))
             .collect(),
         RouteActionKind::ControllerMethodArray | RouteActionKind::LegacyMethodString => context
             .controller
@@ -110,7 +110,7 @@ pub fn complete_route_actions(
             .into_iter()
             .flat_map(|controller| index.controller_methods(controller, &context.prefix))
             .map(|(controller, method)| {
-                controller_method_completion(controller, method, context, line)
+                controller_method_completion(index, controller, method, context, line)
             })
             .collect(),
     }
@@ -362,7 +362,7 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Opti
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": { "kind": "markdown", "value": env_hover(item) },
+                "contents": { "kind": "markdown", "value": env_hover(index, item) },
                 "range": range,
             }))
         }
@@ -372,7 +372,7 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Opti
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": { "kind": "markdown", "value": view_hover(view) },
+                "contents": { "kind": "markdown", "value": view_hover(index, view) },
                 "range": range,
             }))
         }
@@ -397,7 +397,7 @@ pub fn route_action_hover(
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": { "kind": "markdown", "value": controller_hover(item) },
+                "contents": { "kind": "markdown", "value": controller_hover(index, item) },
                 "range": range,
             }))
         }
@@ -408,7 +408,7 @@ pub fn route_action_hover(
                 .into_iter()
                 .next()?;
             Some(json!({
-                "contents": { "kind": "markdown", "value": controller_method_hover(owner, method) },
+                "contents": { "kind": "markdown", "value": controller_method_hover(index, owner, method) },
                 "range": range,
             }))
         }
@@ -549,11 +549,12 @@ fn route_completion(
     })
 }
 
-fn env_completion(item: &EnvItem, context: &SymbolContext, line: usize) -> Value {
+fn env_completion(index: &ProjectIndex, item: &EnvItem, context: &SymbolContext, line: usize) -> Value {
     let docs = env::build(env::EnvHoverInput {
         key: item.key.clone(),
         value: item.value.clone(),
         source: item.file.display().to_string(),
+        source_uri: Some(path_to_file_uri(&index.project_root.join(&item.file))),
         line: item.line,
         column: item.column,
         detail: Some(minify_completion_value(&item.value)),
@@ -571,8 +572,8 @@ fn env_completion(item: &EnvItem, context: &SymbolContext, line: usize) -> Value
     })
 }
 
-fn asset_completion(asset: &PublicAssetEntry, context: &SymbolContext, line: usize) -> Value {
-    let docs = asset_docs_from_entry(asset);
+fn asset_completion(index: &ProjectIndex, asset: &PublicAssetEntry, context: &SymbolContext, line: usize) -> Value {
+    let docs = asset_docs_from_entry(index, asset);
     json!({
         "label": asset.asset_path,
         "kind": 17,
@@ -580,7 +581,7 @@ fn asset_completion(asset: &PublicAssetEntry, context: &SymbolContext, line: usi
         "filterText": asset.asset_path,
         "documentation": {
             "kind": "markdown",
-            "value": asset_completion_hover(asset),
+            "value": asset_completion_hover(index, asset),
         },
         "textEdit": replacement_edit(context, line, &asset.asset_path),
     })
@@ -683,6 +684,7 @@ fn blade_view_variable_completion(
 }
 
 fn controller_completion(
+    index: &ProjectIndex,
     controller: &ControllerEntry,
     context: &RouteActionContext,
     line: usize,
@@ -694,6 +696,7 @@ fn controller_completion(
         callable_methods: controller.callable_method_count,
         total_methods: controller.method_count,
         source: controller.file.display().to_string(),
+        source_uri: Some(path_to_file_uri(&index.project_root.join(&controller.file))),
         line: controller.line,
         extends: controller.extends.clone(),
         traits: controller.traits.clone(),
@@ -718,6 +721,7 @@ fn controller_completion(
 }
 
 fn controller_method_completion(
+    index: &ProjectIndex,
     controller: &ControllerEntry,
     method: &ControllerMethodEntry,
     context: &RouteActionContext,
@@ -735,6 +739,7 @@ fn controller_method_completion(
         source_kind: method.source_kind.clone(),
         notes: method.accessibility.clone(),
         source: method.declared_in.display().to_string(),
+        source_uri: Some(path_to_file_uri(&index.project_root.join(&method.declared_in))),
         line: method.line,
         detail: Some(format!("{} {}", controller.class_name, method.accessibility)),
     });
@@ -778,11 +783,12 @@ fn replacement_edit(context: &SymbolContext, line: usize, new_text: &str) -> Val
     })
 }
 
-fn view_completion(view: &ViewEntry, context: &SymbolContext, line: usize) -> Value {
+fn view_completion(index: &ProjectIndex, view: &ViewEntry, context: &SymbolContext, line: usize) -> Value {
     let docs = view::build(view::ViewHoverInput {
         name: view.name.clone(),
         kind: view.kind.clone(),
         file: view.file.display().to_string(),
+        file_uri: Some(path_to_file_uri(&index.project_root.join(&view.file))),
         usages: view.usages.len(),
         props: view.props.iter().map(|p| p.name.clone()).collect(),
         detail: Some(view.file.display().to_string()),
@@ -800,11 +806,12 @@ fn view_completion(view: &ViewEntry, context: &SymbolContext, line: usize) -> Va
     })
 }
 
-fn view_hover(view: &ViewEntry) -> String {
+fn view_hover(index: &ProjectIndex, view: &ViewEntry) -> String {
     view::build(view::ViewHoverInput {
         name: view.name.clone(),
         kind: view.kind.clone(),
         file: view.file.display().to_string(),
+        file_uri: Some(path_to_file_uri(&index.project_root.join(&view.file))),
         usages: view.usages.len(),
         props: view.props.iter().map(|p| p.name.clone()).collect(),
         detail: None,
@@ -988,11 +995,12 @@ fn blade_component_hover_text_all(
     doc.finish_markdown()
 }
 
-fn env_hover(item: &EnvItem) -> String {
+fn env_hover(index: &ProjectIndex, item: &EnvItem) -> String {
     env::build(env::EnvHoverInput {
         key: item.key.clone(),
         value: item.value.clone(),
         source: item.file.display().to_string(),
+        source_uri: Some(path_to_file_uri(&index.project_root.join(&item.file))),
         line: item.line,
         column: item.column,
         detail: None,
@@ -1049,13 +1057,14 @@ fn route_hover(index: &ProjectIndex, route: &RouteEntry) -> String {
     .hover_markdown()
 }
 
-fn controller_hover(controller: &ControllerEntry) -> String {
+fn controller_hover(index: &ProjectIndex, controller: &ControllerEntry) -> String {
     controller::build(controller::ControllerHoverInput {
         label: controller.class_name.clone(),
         fqn: controller.fqn.clone(),
         callable_methods: controller.callable_method_count,
         total_methods: controller.method_count,
         source: controller.file.display().to_string(),
+        source_uri: Some(path_to_file_uri(&index.project_root.join(&controller.file))),
         line: controller.line,
         extends: controller.extends.clone(),
         traits: controller.traits.clone(),
@@ -1064,7 +1073,11 @@ fn controller_hover(controller: &ControllerEntry) -> String {
     .hover_markdown()
 }
 
-fn controller_method_hover(controller: &ControllerEntry, method: &ControllerMethodEntry) -> String {
+fn controller_method_hover(
+    index: &ProjectIndex,
+    controller: &ControllerEntry,
+    method: &ControllerMethodEntry,
+) -> String {
     controller::build_method(controller::ControllerMethodHoverInput {
         label: format!("{}::{}", controller.class_name, method.name),
         controller_fqn: controller.fqn.clone(),
@@ -1073,6 +1086,7 @@ fn controller_method_hover(controller: &ControllerEntry, method: &ControllerMeth
         source_kind: method.source_kind.clone(),
         notes: method.accessibility.clone(),
         source: method.declared_in.display().to_string(),
+        source_uri: Some(path_to_file_uri(&index.project_root.join(&method.declared_in))),
         line: method.line,
         detail: None,
     })
@@ -1083,8 +1097,8 @@ fn asset_hover(index: &ProjectIndex, asset_path: &str) -> String {
     asset_docs(index, asset_path, false).hover_markdown()
 }
 
-fn asset_completion_hover(asset: &PublicAssetEntry) -> String {
-    asset_docs_from_entry(asset).completion_markdown()
+fn asset_completion_hover(index: &ProjectIndex, asset: &PublicAssetEntry) -> String {
+    asset_docs_from_entry(index, asset).completion_markdown()
 }
 
 fn asset_docs(index: &ProjectIndex, asset_path: &str, for_completion: bool) -> DocBundle {
@@ -1130,16 +1144,20 @@ fn asset_docs(index: &ProjectIndex, asset_path: &str, for_completion: bool) -> D
     })
 }
 
-fn asset_docs_from_entry(asset: &PublicAssetEntry) -> DocBundle {
+fn asset_docs_from_entry(index: &ProjectIndex, asset: &PublicAssetEntry) -> DocBundle {
     let file_name = std::path::Path::new(&asset.asset_path)
         .file_name()
         .and_then(|n| n.to_str())
         .map(|s| s.to_string());
 
+    let file_uri = Some(path_to_file_uri(
+        &index.project_root.join(&asset.file),
+    ));
+
     rust_php_markdown::asset::build(AssetHoverInput {
         asset_path: asset.asset_path.clone(),
         file_name,
-        file_uri: None,
+        file_uri,
         size_display: Some(format_size(asset.size_bytes as u64)),
         extension: asset.extension.clone(),
         usages: asset.usages.len(),
@@ -2282,7 +2300,7 @@ Route::get('/dashboard', function () {
             .unwrap_or_default();
         assert!(hover_value.contains("public/assets/images/virtual/centers-card-img.png"));
         assert!(hover_value.contains("/public/assets/images/virtual/centers-card-img.png"));
-        assert!(hover_value.contains("[open file](file://"));
+        assert!(hover_value.contains("[assets/images/virtual/centers-card-img.png](file://"));
 
         let definitions = definitions(&index, &context, 0);
         let first = definitions.first().expect("definition expected");

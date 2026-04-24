@@ -13,7 +13,7 @@ Resolved:
 
 Size: `1.50 KiB`
 
-File: [open file](file:///Users/you/project/public/assets/logo.svg)
+File: [assets/logo.svg](file:///Users/you/project/public/assets/logo.svg)
 ```
 
 Missing:
@@ -43,7 +43,7 @@ Status: `unresolved`
 
 ---
 
-Path: `public/assets/logo.svg`
+Path: [public/assets/logo.svg](file:///Users/you/project/public/assets/logo.svg)
 
 Extension: `.svg`
 
@@ -97,7 +97,7 @@ Source: [routes/web.php:15:13](file:///Users/you/project/routes/web.php)
 
 Value: `http://localhost`
 
-Source: `.env:1:1`
+Source: [.env:1:1](file:///Users/you/project/.env)
 ```
 
 ## View Hover
@@ -109,7 +109,7 @@ Source: `.env:1:1`
 
 Kind: `blade`
 
-File: `resources/views/dashboard.blade.php`
+File: [resources/views/dashboard.blade.php](file:///Users/you/project/resources/views/dashboard.blade.php)
 
 Usages: `3`
 
@@ -127,7 +127,7 @@ Callable methods: `2`
 
 Total methods: `8`
 
-Source: `app/Http/Controllers/UserController.php:14`
+Source: [app/Http/Controllers/UserController.php:14](file:///Users/you/project/app/Http/Controllers/UserController.php)
 
 Extends: `App\Http\Controllers\Controller`
 
@@ -151,7 +151,7 @@ Source kind: `method`
 
 Notes: `public`
 
-Source: `app/Http/Controllers/UserController.php:52`
+Source: [app/Http/Controllers/UserController.php:52](file:///Users/you/project/app/Http/Controllers/UserController.php)
 ```
 
 ## Blade Component Hover

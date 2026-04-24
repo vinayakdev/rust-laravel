@@ -43,14 +43,11 @@ pub fn build(input: RouteHoverInput) -> DocBundle {
             .join(", ");
         doc = doc.field("Parameter patterns", patterns).blank();
     }
+    let source_text = format!("{}:{}:{}", input.source, input.line, input.column);
     if let Some(source_uri) = input.source_uri.as_deref() {
-        doc = doc.link_field(
-            "Source",
-            format!("{}:{}:{}", input.source, input.line, input.column),
-            source_uri,
-        );
+        doc = doc.link_field("Source", source_text, source_uri);
     } else {
-        doc = doc.field("Source", format!("{}:{}:{}", input.source, input.line, input.column));
+        doc = doc.field("Source", source_text);
     }
 
     DocBundle::new(input.name, doc).with_detail(input.detail.unwrap_or_default())

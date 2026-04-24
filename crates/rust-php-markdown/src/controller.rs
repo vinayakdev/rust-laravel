@@ -8,6 +8,7 @@ pub struct ControllerHoverInput {
     pub callable_methods: usize,
     pub total_methods: usize,
     pub source: String,
+    pub source_uri: Option<String>,
     pub line: usize,
     pub extends: Option<String>,
     pub traits: Vec<String>,
@@ -23,6 +24,7 @@ pub struct ControllerMethodHoverInput {
     pub source_kind: String,
     pub notes: String,
     pub source: String,
+    pub source_uri: Option<String>,
     pub line: usize,
     pub detail: Option<String>,
 }
@@ -36,8 +38,14 @@ pub fn build(input: ControllerHoverInput) -> DocBundle {
         .field("Callable methods", input.callable_methods.to_string())
         .blank()
         .field("Total methods", input.total_methods.to_string())
-        .blank()
-        .field("Source", format!("{}:{}", input.source, input.line));
+        .blank();
+
+    let source_text = format!("{}:{}", input.source, input.line);
+    if let Some(source_uri) = input.source_uri.as_deref() {
+        doc = doc.link_field("Source", source_text, source_uri);
+    } else {
+        doc = doc.field("Source", source_text);
+    }
 
     if let Some(parent) = input.extends.as_deref() {
         doc = doc.field("Extends", parent).blank();
@@ -64,8 +72,14 @@ pub fn build_method(input: ControllerMethodHoverInput) -> DocBundle {
         .field("Source kind", input.source_kind)
         .blank()
         .field("Notes", input.notes)
-        .blank()
-        .field("Source", format!("{}:{}", input.source, input.line));
+        .blank();
+
+    let source_text = format!("{}:{}", input.source, input.line);
+    let doc = if let Some(source_uri) = input.source_uri.as_deref() {
+        doc.link_field("Source", source_text, source_uri)
+    } else {
+        doc.field("Source", source_text)
+    };
 
     DocBundle::new(input.label, doc).with_detail(input.detail.unwrap_or_default())
 }

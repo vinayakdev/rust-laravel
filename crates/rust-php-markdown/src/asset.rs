@@ -41,7 +41,7 @@ pub fn build(input: AssetHoverInput) -> DocBundle {
             }
 
             if let Some(file_uri) = file_uri.clone() {
-                doc = doc.link_field("File", "open file", file_uri);
+                doc = doc.link_field("File", asset_path.clone(), file_uri);
             } else {
                 doc = doc.line(format!("File: `{asset_path}`"));
             }
@@ -60,7 +60,13 @@ pub fn build(input: AssetHoverInput) -> DocBundle {
 
     let completion = {
         let mut doc = MarkdownDoc::new().title(title).blank().separator().blank();
-        doc = doc.field("Path", format!("public/{asset_path}")).blank();
+        if let Some(file_uri) = file_uri.as_deref() {
+            doc = doc
+                .link_field("Path", format!("public/{asset_path}"), file_uri)
+                .blank();
+        } else {
+            doc = doc.field("Path", format!("public/{asset_path}")).blank();
+        }
 
         if let Some(extension) = extension {
             doc = doc.field("Extension", format!(".{extension}")).blank();

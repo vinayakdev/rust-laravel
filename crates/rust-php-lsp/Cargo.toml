@@ -10,6 +10,7 @@ rust-php-editor = { path = "../rust-php-editor" }
 rust-php-configs = { path = "../rust-php-configs" }
 rust-php-controllers = { path = "../rust-php-controllers" }
 rust-php-foundation = { path = "../rust-php-foundation" }
+rust-php-markdown = { path = "../rust-php-markdown" }
 rust-php-middleware = { path = "../rust-php-middleware" }
 rust-php-public = { path = "../rust-php-public" }
 rust-php-routes = { path = "../rust-php-routes" }
