@@ -29,20 +29,22 @@ pub(crate) fn find_config_items(
                 format!("{namespace}.{}.{}", stack.join("."), parsed.key)
             };
 
-            let env_value = parsed.env_key.as_ref().and_then(|k| env.get(k).cloned());
+            if parsed.emit_item {
+                let env_value = parsed.env_key.as_ref().and_then(|k| env.get(k).cloned());
 
-            items.push(ConfigItem {
-                file: strip_root(root, file),
-                line: index + 1,
-                column: parsed.column,
-                key: full_key,
-                env_key: parsed.env_key.clone(),
-                default_value: parsed.default_value.clone(),
-                env_value,
-                source: item_source.clone(),
-            });
+                items.push(ConfigItem {
+                    file: strip_root(root, file),
+                    line: index + 1,
+                    column: parsed.column,
+                    key: full_key,
+                    env_key: parsed.env_key.clone(),
+                    default_value: parsed.default_value.clone(),
+                    env_value,
+                    source: item_source.clone(),
+                });
+            }
 
-            if parsed.opens_array {
+            if parsed.opens_array && !parsed.closes_array {
                 stack.push(parsed.key);
             }
         } else {
@@ -56,7 +58,9 @@ pub(crate) fn find_config_items(
 struct ParsedConfigLine {
     key: String,
     column: usize,
+    emit_item: bool,
     opens_array: bool,
+    closes_array: bool,
     env_key: Option<String>,
     default_value: Option<String>,
 }
@@ -97,6 +101,7 @@ fn parse_config_assignment(line: &str) -> Option<ParsedConfigLine> {
 
     let value = rest[2..].trim_start().trim_end_matches(',');
     let opens_array = value.starts_with('[');
+    let closes_array = opens_array && value.contains(']');
     let (env_key, default_value) = parse_env_call(value)
         .map(|(k, d)| (Some(k), d))
         .unwrap_or_else(|| (None, parse_literal_value(value)));
@@ -104,7 +109,9 @@ fn parse_config_assignment(line: &str) -> Option<ParsedConfigLine> {
     Some(ParsedConfigLine {
         key,
         column: leading + 1,
+        emit_item: !opens_array,
         opens_array,
+        closes_array,
         env_key,
         default_value,
     })

@@ -30,7 +30,20 @@ export type RouteEntry = {
   middleware: string[]
   resolved_middleware: string[]
   parameter_patterns: Record<string, string>
+  controller_target?: RouteControllerTarget
   registration: RegistrationSource
+}
+
+export type RouteControllerTarget = {
+  controller: string
+  method: string
+  declared_in?: string
+  method_declared_in?: string
+  method_line?: number
+  accessible_from_route: boolean
+  status: string
+  source_kind?: string
+  notes: string[]
 }
 
 export type RoutesReport = {
@@ -98,6 +111,42 @@ export type ProviderReport = {
   providers: ProviderEntry[]
 }
 
+export type ControllerMethodEntry = {
+  name: string
+  declared_in: string
+  line: number
+  visibility: string
+  is_static: boolean
+  source_kind: string
+  source_name: string
+  accessible_from_route: boolean
+  accessibility: string
+  variables: ControllerVariableEntry[]
+}
+
+export type ControllerVariableEntry = {
+  name: string
+  source_kind: string
+}
+
+export type ControllerEntry = {
+  file: string
+  line: number
+  class_name: string
+  namespace: string
+  fqn: string
+  extends?: string
+  traits: string[]
+  method_count: number
+  callable_method_count: number
+  methods: ControllerMethodEntry[]
+}
+
+export type ControllerReport = {
+  controller_count: number
+  controllers: ControllerEntry[]
+}
+
 export type ViewVariable = {
   name: string
   default_value?: string
@@ -138,9 +187,23 @@ export type ViewReport = {
   view_count: number
   blade_component_count: number
   livewire_component_count: number
+  missing_view_count: number
   views: ViewEntry[]
   blade_components: BladeComponent[]
   livewire_components: LivewireComponent[]
+  missing_views: MissingViewReference[]
+}
+
+export type MissingViewReference = {
+  name: string
+  expected_file: string
+  usages: ViewUsage[]
+}
+
+export type ViewUsage = {
+  kind: string
+  source: RegistrationSource
+  variables: ViewVariable[]
 }
 
 export type ComparedRoute = {
@@ -245,24 +308,83 @@ export type MigrationReport = {
   migrations: MigrationEntry[]
 }
 
+export type PublicAssetUsage = {
+  helper: string
+  source_kind: string
+  file: string
+  line: number
+  column: number
+  raw_reference: string
+  asset_path: string
+}
+
+export type PublicAssetEntry = {
+  file: string
+  asset_path: string
+  extension?: string
+  size_bytes: number
+  usages: PublicAssetUsage[]
+}
+
+export type PublicAssetReport = {
+  file_count: number
+  usage_count: number
+  assets: PublicAssetEntry[]
+}
+
+export type DashboardFeatureMetric = {
+  id: string
+  label: string
+  files_scanned: number
+  items_found: number
+  autocomplete_suggestions: number
+  scan_time_ms: number
+  rss_delta_kb?: number | null
+}
+
+export type DashboardSummary = {
+  feature_count: number
+  total_files_scanned: number
+  total_items_found: number
+  total_autocomplete_suggestions: number
+}
+
+export type DashboardReport = {
+  summary: DashboardSummary
+  features: DashboardFeatureMetric[]
+}
+
 export type CommandId =
+  | "dashboard"
   | "route:list"
   | "route:compare"
   | "route:sources"
   | "middleware:list"
   | "config:list"
   | "config:sources"
+  | "controller:list"
   | "provider:list"
   | "view:list"
   | "model:list"
   | "migration:list"
+  | "public:list"
 
 export type Payload = {
   project: string
   root: string
   command: CommandId
   debug?: DebugInfo
-  report?: RoutesReport | MiddlewareReport | ConfigReport | ProviderReport | ViewReport | ModelReport | MigrationReport
+  report?:
+    | DashboardReport
+    | RoutesReport
+    | MiddlewareReport
+    | ConfigReport
+    | ControllerReport
+    | ProviderReport
+    | ViewReport
+    | ModelReport
+    | MigrationReport
+    | PublicAssetReport
   comparison?: RouteComparison
   error?: string
 }

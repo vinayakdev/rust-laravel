@@ -1,12 +1,14 @@
-mod analyzers;
+pub mod analyzers;
 mod benchmark;
 mod cli;
+pub mod core;
 mod debug;
-mod debug_web;
+mod export;
+pub mod lsp;
 mod output;
-mod php;
-mod project;
-mod types;
+pub mod types;
+pub use rust_php_foundation::php;
+pub use rust_php_foundation::project;
 
 use cli::Command;
 
@@ -39,6 +41,11 @@ pub fn run() -> Result<(), String> {
             let report = analyzers::configs::analyze(&project)?;
             output::print_config_sources(&report, options.json)?;
         }
+        Command::ControllerList => {
+            let project = project::resolve(options.project.as_deref())?;
+            let report = analyzers::controllers::analyze(&project)?;
+            output::print_controllers(&report, options.json)?;
+        }
         Command::ProviderList => {
             let project = project::resolve(options.project.as_deref())?;
             let report = analyzers::providers::analyze(&project)?;
@@ -48,6 +55,11 @@ pub fn run() -> Result<(), String> {
             let project = project::resolve(options.project.as_deref())?;
             let report = analyzers::views::analyze(&project)?;
             output::print_views(&report, options.json)?;
+        }
+        Command::LivewireList => {
+            let project = project::resolve(options.project.as_deref())?;
+            let report = analyzers::views::analyze(&project)?;
+            output::print_livewire(&report, options.json)?;
         }
         Command::ModelList => {
             let project = project::resolve(options.project.as_deref())?;
@@ -59,15 +71,26 @@ pub fn run() -> Result<(), String> {
             let report = analyzers::migrations::analyze(&project)?;
             output::print_migrations(&report, options.json)?;
         }
+        Command::PublicList => {
+            let project = project::resolve(options.project.as_deref())?;
+            let report = analyzers::public_assets::analyze(&project)?;
+            output::print_public_assets(&report, options.json)?;
+        }
+        Command::Lsp => {
+            lsp::run_stdio()?;
+        }
+        Command::ExportLsp => {
+            export::run(&options.export)?;
+        }
         Command::BenchmarkIndex => {
             let project = project::resolve(options.project.as_deref())?;
             benchmark::run(&project, options.json)?;
         }
         Command::DebugBrowse => {
-            debug::run(options.project.as_deref())?;
+            debug::run_browse(options.project.as_deref())?;
         }
         Command::DebugWeb => {
-            debug_web::run(options.project.as_deref())?;
+            debug::run_web(options.project.as_deref())?;
         }
     }
 

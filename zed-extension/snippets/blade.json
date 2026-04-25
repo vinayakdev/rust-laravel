@@ -1,0 +1,280 @@
+{
+  "@if": {
+    "prefix": "@if",
+    "body": [
+      "@if($1)",
+      "\t$2",
+      "@endif"
+    ],
+    "description": "Blade if statement"
+  },
+  "@foreach": {
+    "prefix": "@foreach",
+    "body": [
+      "@foreach($1 as $2)",
+      "\t$3",
+      "@endforeach"
+    ],
+    "description": "Blade foreach loop"
+  },
+  "@for": {
+    "prefix": "@for",
+    "body": [
+      "@for($1 = 0; $1 < $2; $1++)",
+      "\t$3",
+      "@endfor"
+    ],
+    "description": "Blade for loop"
+  },
+  "@while": {
+    "prefix": "@while",
+    "body": [
+      "@while($1)",
+      "\t$2",
+      "@endwhile"
+    ],
+    "description": "Blade while loop"
+  },
+  "@switch": {
+    "prefix": "@switch",
+    "body": [
+      "@switch($1)",
+      "\t@case($2)",
+      "\t\t$3",
+      "\t\t@break",
+      "\t@default",
+      "\t\t$4",
+      "@endswitch"
+    ],
+    "description": "Blade switch statement"
+  },
+  "@forelse": {
+    "prefix": "@forelse",
+    "body": [
+      "@forelse($1 as $2)",
+      "\t$3",
+      "@empty",
+      "\t$4",
+      "@endforelse"
+    ],
+    "description": "Blade forelse (foreach with empty fallback)"
+  },
+  "@isset": {
+    "prefix": "@isset",
+    "body": [
+      "@isset($1)",
+      "\t$2",
+      "@endisset"
+    ],
+    "description": "Blade isset check"
+  },
+  "@empty": {
+    "prefix": "@empty",
+    "body": [
+      "@empty($1)",
+      "\t$2",
+      "@endempty"
+    ],
+    "description": "Blade empty check"
+  },
+  "@auth": {
+    "prefix": "@auth",
+    "body": [
+      "@auth",
+      "\t$1",
+      "@endauth"
+    ],
+    "description": "Blade auth check"
+  },
+  "@guest": {
+    "prefix": "@guest",
+    "body": [
+      "@guest",
+      "\t$1",
+      "@endguest"
+    ],
+    "description": "Blade guest check"
+  },
+  "{{ }}": {
+    "prefix": "{{",
+    "body": [
+      "{{ $1 }}"
+    ],
+    "description": "Blade echo statement"
+  },
+  "{!! !!}": {
+    "prefix": "{!!",
+    "body": [
+      "{!! $1 !!}"
+    ],
+    "description": "Blade unescaped echo"
+  },
+  "@component": {
+    "prefix": "@component",
+    "body": [
+      "@component('$1')",
+      "\t$2",
+      "@endcomponent"
+    ],
+    "description": "Blade component"
+  },
+  "@slot": {
+    "prefix": "@slot",
+    "body": [
+      "@slot('$1')",
+      "\t$2",
+      "@endslot"
+    ],
+    "description": "Blade component slot"
+  },
+  "@yield": {
+    "prefix": "@yield",
+    "body": [
+      "@yield('$1'${2:, '$3'})"
+    ],
+    "description": "Blade yield statement"
+  },
+  "@section": {
+    "prefix": "@section",
+    "body": [
+      "@section('$1')",
+      "\t$2",
+      "@endsection"
+    ],
+    "description": "Blade section"
+  },
+  "@extends": {
+    "prefix": "@extends",
+    "body": [
+      "@extends('$1')"
+    ],
+    "description": "Blade extends layout"
+  },
+  "@include": {
+    "prefix": "@include",
+    "body": [
+      "@include('$1'${2:, $3})"
+    ],
+    "description": "Blade include view"
+  },
+  "@includeIf": {
+    "prefix": "@includeIf",
+    "body": [
+      "@includeIf('$1'${2:, $3})"
+    ],
+    "description": "Blade include view if exists"
+  },
+  "@csrf": {
+    "prefix": "@csrf",
+    "body": [
+      "@csrf"
+    ],
+    "description": "CSRF token field"
+  },
+  "@method": {
+    "prefix": "@method",
+    "body": [
+      "@method('$1')"
+    ],
+    "description": "HTTP method spoof field"
+  },
+  "@error": {
+    "prefix": "@error",
+    "body": [
+      "@error('$1')",
+      "\t<span class=\"error\">{{ \\$message }}</span>",
+      "@enderror"
+    ],
+    "description": "Blade error check"
+  },
+  "@can": {
+    "prefix": "@can",
+    "body": [
+      "@can('$1')",
+      "\t$2",
+      "@endcan"
+    ],
+    "description": "Blade authorization check"
+  },
+  "@cannot": {
+    "prefix": "@cannot",
+    "body": [
+      "@cannot('$1')",
+      "\t$2",
+      "@endcannot"
+    ],
+    "description": "Blade cannot authorization check"
+  },
+  "@env": {
+    "prefix": "@env",
+    "body": [
+      "@env('$1')",
+      "\t$2",
+      "@endenv"
+    ],
+    "description": "Blade environment check"
+  },
+  "@livewire": {
+    "prefix": "@livewire",
+    "body": [
+      "@livewire('$1'${2:, [$3]})"
+    ],
+    "description": "Render a Livewire component directive"
+  },
+  "<livewire:component />": {
+    "prefix": "livewire",
+    "body": [
+      "<livewire:$1 ${2}/>"
+    ],
+    "description": "Render a Livewire component tag"
+  },
+  "wire:model": {
+    "prefix": "wire:model",
+    "body": [
+      "wire:model=\"$1\""
+    ],
+    "description": "Bind a Livewire public property"
+  },
+  "wire:model.live": {
+    "prefix": "wire:model.live",
+    "body": [
+      "wire:model.live=\"$1\""
+    ],
+    "description": "Bind a Livewire public property with live updates"
+  },
+  "wire:click": {
+    "prefix": "wire:click",
+    "body": [
+      "wire:click=\"$1\""
+    ],
+    "description": "Call a Livewire action on click"
+  },
+  "wire:submit": {
+    "prefix": "wire:submit",
+    "body": [
+      "wire:submit=\"$1\""
+    ],
+    "description": "Call a Livewire action on form submit"
+  },
+  "wire:target": {
+    "prefix": "wire:target",
+    "body": [
+      "wire:target=\"$1\""
+    ],
+    "description": "Target a Livewire property or action"
+  },
+  "wire:loading": {
+    "prefix": "wire:loading",
+    "body": [
+      "wire:loading${1:.class=\"$2\"}"
+    ],
+    "description": "Show content while Livewire is loading"
+  },
+  "@props": {
+    "prefix": "@props",
+    "body": [
+      "@props(['$1'])"
+    ],
+    "description": "Blade component props"
+  }
+}

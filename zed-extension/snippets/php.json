@@ -1,0 +1,254 @@
+{
+  "class": {
+    "prefix": "class",
+    "body": [
+      "class $1 ${2:extends $3} ${4:implements $5} {",
+      "\t$6",
+      "}"
+    ],
+    "description": "PHP class definition"
+  },
+  "public function": {
+    "prefix": "pub",
+    "body": [
+      "public function $1($2)${3:: $4} {",
+      "\t$5",
+      "}"
+    ],
+    "description": "Public function"
+  },
+  "private function": {
+    "prefix": "priv",
+    "body": [
+      "private function $1($2)${3:: $4} {",
+      "\t$5",
+      "}"
+    ],
+    "description": "Private function"
+  },
+  "protected function": {
+    "prefix": "prot",
+    "body": [
+      "protected function $1($2)${3:: $4} {",
+      "\t$5",
+      "}"
+    ],
+    "description": "Protected function"
+  },
+  "namespace": {
+    "prefix": "namespace",
+    "body": [
+      "namespace $1;"
+    ],
+    "description": "PHP namespace declaration"
+  },
+  "use": {
+    "prefix": "use",
+    "body": [
+      "use $1;"
+    ],
+    "description": "PHP use statement"
+  },
+  "interface": {
+    "prefix": "interface",
+    "body": [
+      "interface $1 ${2:extends $3} {",
+      "\t$4",
+      "}"
+    ],
+    "description": "PHP interface"
+  },
+  "trait": {
+    "prefix": "trait",
+    "body": [
+      "trait $1 {",
+      "\t$2",
+      "}"
+    ],
+    "description": "PHP trait"
+  },
+  "try/catch": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch (${2:Exception} \\$e) {",
+      "\t$3",
+      "}"
+    ],
+    "description": "Try-catch block"
+  },
+  "try/catch/finally": {
+    "prefix": "tryf",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch (${2:Exception} \\$e) {",
+      "\t$3",
+      "} finally {",
+      "\t$4",
+      "}"
+    ],
+    "description": "Try-catch-finally block"
+  },
+  "foreach": {
+    "prefix": "foreach",
+    "body": [
+      "foreach ($1 as $2) {",
+      "\t$3",
+      "}"
+    ],
+    "description": "Foreach loop"
+  },
+  "for": {
+    "prefix": "for",
+    "body": [
+      "for ($1 = 0; $1 < $2; $1++) {",
+      "\t$3",
+      "}"
+    ],
+    "description": "For loop"
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "while ($1) {",
+      "\t$2",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "if/else": {
+    "prefix": "ifelse",
+    "body": [
+      "if ($1) {",
+      "\t$2",
+      "} else {",
+      "\t$3",
+      "}"
+    ],
+    "description": "If-else statement"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if ($1) {",
+      "\t$2",
+      "}"
+    ],
+    "description": "If statement"
+  },
+  "else": {
+    "prefix": "else",
+    "body": [
+      "else {",
+      "\t$1",
+      "}"
+    ],
+    "description": "Else block"
+  },
+  "elseif": {
+    "prefix": "elseif",
+    "body": [
+      "elseif ($1) {",
+      "\t$2",
+      "}"
+    ],
+    "description": "Else-if block"
+  },
+  "switch": {
+    "prefix": "switch",
+    "body": [
+      "switch ($1) {",
+      "\tcase $2:",
+      "\t\t$3",
+      "\t\tbreak;",
+      "\tdefault:",
+      "\t\t$4",
+      "}"
+    ],
+    "description": "Switch statement"
+  },
+  "return": {
+    "prefix": "return",
+    "body": [
+      "return $1;"
+    ],
+    "description": "Return statement"
+  },
+  "echo": {
+    "prefix": "echo",
+    "body": [
+      "echo $1;"
+    ],
+    "description": "Echo statement"
+  },
+  "property": {
+    "prefix": "prop",
+    "body": [
+      "${1:public} ${2:string} \\$$3 = ${4:''};"
+    ],
+    "description": "Class property with visibility"
+  },
+  "Livewire component": {
+    "prefix": "livewire:component",
+    "body": [
+      "use Livewire\\Component;",
+      "",
+      "class ${1:ComponentName} extends Component",
+      "{",
+      "\tpublic ${2:string} \\$$3 = ${4:''};",
+      "",
+      "\tpublic function ${5:save}(): void",
+      "\t{",
+      "\t\t$6",
+      "\t}",
+      "",
+      "\tpublic function render()",
+      "\t{",
+      "\t\treturn view('${7:livewire.component-name}');",
+      "\t}",
+      "}"
+    ],
+    "description": "Livewire component class with render method"
+  },
+  "Livewire view layout": {
+    "prefix": "livewire:view",
+    "body": [
+      "return view('${1:livewire.component-name}')->layout('${2:components.layouts.app}');"
+    ],
+    "description": "Return a Livewire view with chained layout"
+  },
+  "Livewire::component": {
+    "prefix": "Livewire::component",
+    "body": [
+      "Livewire::component('${1:component-name}', ${2:ComponentName}::class);"
+    ],
+    "description": "Register a Livewire component alias"
+  },
+  "__construct": {
+    "prefix": "construct",
+    "body": [
+      "public function __construct($1) {",
+      "\t$2",
+      "}"
+    ],
+    "description": "Constructor method"
+  },
+  "array": {
+    "prefix": "arr",
+    "body": [
+      "[$1]"
+    ],
+    "description": "Array declaration"
+  },
+  "anonymous function": {
+    "prefix": "afunc",
+    "body": [
+      "function($1) {",
+      "\t$2",
+      "}"
+    ],
+    "description": "Anonymous/lambda function"
+  }
+}

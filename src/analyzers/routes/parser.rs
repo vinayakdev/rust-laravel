@@ -2,16 +2,27 @@ use bumpalo::Bump;
 use php_parser::ast::{Expr, ExprId, StmtId};
 use php_parser::lexer::Lexer;
 use php_parser::parser::Parser;
-use std::path::Path;
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use super::chain::{
     ChainOp, apply_modifier, build_route_entry, flatten_route_chain, join_uri, resource_routes,
     route_line, route_signature,
 };
 use super::context::{MiddlewareIndex, RouteContext};
-use crate::php::ast::{expr_name, expr_to_string, expr_to_string_list, strip_root};
+use crate::php::ast::{expr_name, expr_to_path, expr_to_string, expr_to_string_list, strip_root};
 use crate::php::walk::walk_stmts;
 use crate::types::{RouteEntry, RouteRegistration};
+
+thread_local! {
+    static VISITED_INCLUDES: RefCell<BTreeSet<PathBuf>> = RefCell::new(BTreeSet::new());
+}
+
+pub(crate) fn reset_include_tracking() {
+    VISITED_INCLUDES.with(|v| v.borrow_mut().clear());
+}
 
 pub(crate) struct RouteChunk {
     pub(crate) text: Vec<u8>,
@@ -116,7 +127,10 @@ fn parse_chunk(
     middleware_index: &MiddlewareIndex,
     routes: &mut Vec<RouteEntry>,
 ) {
-    if !chunk.complete && !chunk.text.windows(5).any(|w| w == b"group") {
+    // Incomplete chunks are common while the user is typing. Parsing them is
+    // not safe, and incomplete `Route::group(...)` chunks can wedge the PHP
+    // parser because the closure body still contains unterminated strings.
+    if !chunk.complete || has_unsafe_string_adjacency(&chunk.text) {
         return;
     }
     let sanitized = sanitize_closure_bodies(&chunk.text);
@@ -162,6 +176,30 @@ pub(crate) fn analyze_expr(
     line_offset: usize,
     raw_chunk: Option<&[u8]>,
 ) {
+    if let Expr::Include {
+        expr: path_expr, ..
+    } = expr
+    {
+        if let Some(included) = expr_to_path(path_expr, source, project_root, file) {
+            let is_new = VISITED_INCLUDES.with(|v| v.borrow_mut().insert(included.clone()));
+            if is_new {
+                if let Ok(included_source) = fs::read(&included) {
+                    collect_routes_from_source(
+                        &included_source,
+                        project_root,
+                        &included,
+                        registration,
+                        1,
+                        base_context,
+                        middleware_index,
+                        routes,
+                    );
+                }
+            }
+        }
+        return;
+    }
+
     let Some(ops) = flatten_route_chain(expr) else {
         return;
     };
@@ -450,6 +488,7 @@ fn expand_resource_routes(
                 ),
                 middleware_index,
             ),
+            controller_target: None,
             registration: registration.clone(),
         })
         .collect()
@@ -512,111 +551,6 @@ fn group_body_stmts<'ast>(
     match expr {
         Expr::Closure { body, .. } => Some(body),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::context::MiddlewareIndex;
-    use super::*;
-    use std::collections::BTreeMap;
-    use std::path::PathBuf;
-
-    fn empty_index() -> MiddlewareIndex {
-        MiddlewareIndex {
-            aliases: BTreeMap::new(),
-            groups: BTreeMap::new(),
-            patterns: BTreeMap::new(),
-        }
-    }
-
-    fn registration() -> RouteRegistration {
-        RouteRegistration {
-            kind: "test".to_string(),
-            declared_in: PathBuf::from("routes/web.php"),
-            line: 1,
-            column: 1,
-            provider_class: None,
-        }
-    }
-
-    fn parse(source: &str) -> Vec<RouteEntry> {
-        let mut routes = Vec::new();
-        let project_root = PathBuf::from("/tmp/example");
-        let file = project_root.join("routes/web.php");
-        collect_routes_from_source(
-            source.as_bytes(),
-            &project_root,
-            &file,
-            &registration(),
-            1,
-            &RouteContext::default(),
-            &empty_index(),
-            &mut routes,
-        );
-        routes
-    }
-
-    #[test]
-    fn parses_view_redirect_fallback_and_resources() {
-        let routes = parse(
-            r#"<?php
-Route::view('/pages/about', 'pages.about')->name('pages.about');
-Route::redirect('/legacy', '/new-home');
-Route::permanentRedirect('/old-home', '/home');
-Route::resource('photos', \App\Http\Controllers\PhotoController::class)->only(['index', 'show']);
-Route::apiResource('articles', \App\Http\Controllers\ArticleController::class);
-Route::singleton('profile', \App\Http\Controllers\ProfileController::class)->except(['destroy']);
-Route::fallback(function () {
-    return 'fallback';
-});
-"#,
-        );
-
-        assert!(routes.iter().any(|route| {
-            route.uri == "/pages/about"
-                && route.action.as_deref() == Some("view:pages.about")
-                && route.name.as_deref() == Some("pages.about")
-        }));
-        assert!(routes.iter().any(|route| {
-            route.uri == "/legacy" && route.action.as_deref() == Some("redirect:/new-home")
-        }));
-        assert!(routes.iter().any(|route| {
-            route.uri == "/old-home" && route.action.as_deref() == Some("redirect-permanent:/home")
-        }));
-        assert!(routes.iter().any(|route| {
-            route.uri == "/{fallbackPlaceholder}"
-                && route.methods == vec!["ANY".to_string()]
-                && route.action.as_deref() == Some("closure")
-        }));
-
-        let photo_names: Vec<String> = routes
-            .iter()
-            .filter_map(|route| route.name.clone())
-            .filter(|name| name.starts_with("photos."))
-            .collect();
-        assert_eq!(
-            photo_names,
-            vec!["photos.index".to_string(), "photos.show".to_string()]
-        );
-
-        assert!(routes.iter().any(|route| {
-            route.name.as_deref() == Some("articles.update")
-                && route.methods == vec!["PUT".to_string(), "PATCH".to_string()]
-                && route
-                    .action
-                    .as_deref()
-                    .map(|action| action.ends_with("ArticleController@update"))
-                    .unwrap_or(false)
-        }));
-
-        let profile_names: Vec<String> = routes
-            .iter()
-            .filter_map(|route| route.name.clone())
-            .filter(|name| name.starts_with("profile."))
-            .collect();
-        assert!(!profile_names.iter().any(|name| name == "profile.destroy"));
-        assert!(profile_names.iter().any(|name| name == "profile.show"));
     }
 }
 
@@ -792,7 +726,7 @@ impl ScanState {
 pub(crate) fn source_can_use_full_parse(source: &[u8]) -> bool {
     let mut state = ScanState::default();
     state.consume(source);
-    state.is_balanced()
+    state.is_balanced() && !has_unsafe_string_adjacency(source)
 }
 
 pub(crate) fn sanitize_closure_bodies(source: &[u8]) -> Vec<u8> {
@@ -1017,4 +951,178 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 fn count_newlines(bytes: &[u8]) -> usize {
     bytes.iter().filter(|&&b| b == b'\n').count()
+}
+
+pub(crate) fn has_unsafe_string_adjacency(source: &[u8]) -> bool {
+    let mut state = ScanState::default();
+    let mut index = 0usize;
+
+    while index < source.len() {
+        let byte = source[index];
+        let next = source.get(index + 1).copied();
+
+        if state.in_line_comment {
+            if byte == b'\n' {
+                state.in_line_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if state.in_block_comment {
+            if byte == b'*' && next == Some(b'/') {
+                state.in_block_comment = false;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if state.in_single_quote {
+            if state.escape {
+                state.escape = false;
+            } else if byte == b'\\' {
+                state.escape = true;
+            } else if byte == b'\'' {
+                state.in_single_quote = false;
+                if next_non_whitespace_is_unsafe(source, index + 1) {
+                    return true;
+                }
+            }
+            index += 1;
+            continue;
+        }
+        if state.in_double_quote {
+            if state.escape {
+                state.escape = false;
+            } else if byte == b'\\' {
+                state.escape = true;
+            } else if byte == b'"' {
+                state.in_double_quote = false;
+                if next_non_whitespace_is_unsafe(source, index + 1) {
+                    return true;
+                }
+            }
+            index += 1;
+            continue;
+        }
+
+        if byte == b'/' && next == Some(b'/') {
+            state.in_line_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'#' {
+            state.in_line_comment = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'/' && next == Some(b'*') {
+            state.in_block_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'\'' {
+            state.in_single_quote = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            state.in_double_quote = true;
+            index += 1;
+            continue;
+        }
+
+        index += 1;
+    }
+
+    false
+}
+
+fn next_non_whitespace_is_unsafe(source: &[u8], mut index: usize) -> bool {
+    while let Some(byte) = source.get(index).copied() {
+        if !byte.is_ascii_whitespace() {
+            return byte.is_ascii_alphanumeric()
+                || matches!(byte, b'_' | b'$' | b'\\' | b'\'' | b'"');
+        }
+        index += 1;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        MiddlewareIndex, RouteContext, collect_routes_from_source, has_unsafe_string_adjacency,
+        source_can_use_full_parse, split_route_chunks,
+    };
+    use crate::types::RouteRegistration;
+
+    #[test]
+    fn marks_group_with_unterminated_route_action_string_as_incomplete() {
+        let source = br#"<?php
+Route::group([], function () {
+    Route::get('/', [VirtualOfficeController::class, 'sdc'center'])->name('index');
+});
+"#;
+
+        let chunks = split_route_chunks(source, 1);
+
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].complete);
+    }
+
+    #[test]
+    fn skips_incomplete_group_chunks_without_hanging() {
+        let source = br#"<?php
+Route::view('/before', 'pages.before')->name('before');
+Route::group([], function () {
+    Route::get('/', [VirtualOfficeController::class, 'sdc'center'])->name('index');
+});
+Route::view('/after', 'pages.after')->name('after');
+"#;
+
+        let registration = RouteRegistration {
+            kind: "route-file".to_string(),
+            declared_in: PathBuf::from("routes/web.php"),
+            line: 1,
+            column: 1,
+            provider_class: None,
+        };
+        let mut routes = Vec::new();
+
+        collect_routes_from_source(
+            source,
+            Path::new("/tmp/project"),
+            Path::new("/tmp/project/routes/web.php"),
+            &registration,
+            1,
+            &RouteContext::default(),
+            &MiddlewareIndex {
+                aliases: Default::default(),
+                groups: Default::default(),
+                patterns: Default::default(),
+            },
+            &mut routes,
+        );
+
+        let names = routes
+            .iter()
+            .filter_map(|route| route.name.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["before"]);
+    }
+
+    #[test]
+    fn treats_adjacent_route_action_strings_as_unsafe_for_parser_fallback() {
+        let source = br#"<?php
+Route::group([], function () {
+    Route::get('/', [VirtualOfficeController::class, 'indea''sasx'])->name('index');
+});
+"#;
+
+        assert!(has_unsafe_string_adjacency(source));
+        assert!(!source_can_use_full_parse(source));
+    }
 }

@@ -15,6 +15,12 @@ src/
 ├── cli.rs               Argument parsing, help text
 ├── types.rs             All public report types (RouteReport, ConfigReport, …) — no logic
 ├── project.rs           Laravel project resolution (path → LaravelProject struct)
+├── debug/               Shared terminal/web debug tooling
+│   ├── mod.rs           Debug entry points used by lib.rs
+│   ├── browser.rs       Terminal debugger UI
+│   ├── command.rs       Shared debug command catalog
+│   ├── reports.rs       Shared JSON/text report rendering + route comparison
+│   └── web.rs           Local HTTP server for the web UI
 │
 ├── php/                 Shared PHP-ecosystem utilities (no analyzer-specific logic)
 │   ├── ast.rs           PHP AST helpers: span_text, expr_name, expr_to_string, expr_to_path, strip_root, normalize_path

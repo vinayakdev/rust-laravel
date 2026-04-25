@@ -1,0 +1,8 @@
+[package]
+name = "rust-php-markdown"
+version = "0.1.0"
+edition = "2024"
+description = "Chained Markdown document builder for hovers and structured docs"
+license = "MIT OR Apache-2.0"
+
+[dependencies]

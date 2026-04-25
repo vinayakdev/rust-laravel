@@ -225,6 +225,7 @@ pub(crate) fn build_route_entry(
         middleware: context.middleware.clone(),
         resolved_middleware,
         parameter_patterns,
+        controller_target: None,
         registration: registration.clone(),
     }
 }

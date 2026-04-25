@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::analyzers::providers;
+use crate::core::analysis::ProjectAnalysis;
 use crate::php::ast::{expr_name, expr_to_path, expr_to_string, strip_root};
 use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
@@ -20,9 +20,9 @@ pub(crate) struct RegisteredConfigFile {
 }
 
 pub(crate) fn collect_registered_config_files(
-    project: &LaravelProject,
+    context: &ProjectAnalysis,
 ) -> Result<Vec<RegisteredConfigFile>, String> {
-    let config_dir = project.root.join("config");
+    let config_dir = context.project().root.join("config");
     let mut files = Vec::new();
     let mut seen = BTreeSet::new();
 
@@ -44,7 +44,7 @@ pub(crate) fn collect_registered_config_files(
         files.push(RegisteredConfigFile {
             source: ConfigSource {
                 kind: "config-file".to_string(),
-                declared_in: strip_root(&project.root, &path),
+                declared_in: strip_root(&context.project().root, &path),
                 line: 1,
                 column: 1,
                 provider_class: None,
@@ -54,7 +54,7 @@ pub(crate) fn collect_registered_config_files(
         });
     }
 
-    for merged in discover_provider_merged_configs(project)? {
+    for merged in discover_provider_merged_configs(context)? {
         if !merged.file.is_file() {
             continue;
         }
@@ -86,13 +86,13 @@ struct MergedConfigFile {
 }
 
 fn discover_provider_merged_configs(
-    project: &LaravelProject,
+    context: &ProjectAnalysis,
 ) -> Result<Vec<MergedConfigFile>, String> {
-    let provider_report = providers::analyze(project)?;
+    let provider_report = context.providers()?;
     let mut files = Vec::new();
     let mut seen_sources = BTreeSet::new();
 
-    for provider in provider_report.providers {
+    for provider in &provider_report.providers {
         let Some(relative_source_file) = provider.source_file.as_ref() else {
             continue;
         };
@@ -106,15 +106,14 @@ fn discover_provider_merged_configs(
             continue;
         }
 
-        let source_file = project.root.join(relative_source_file);
-        let source = fs::read(&source_file)
-            .map_err(|e| format!("failed to read {}: {e}", source_file.display()))?;
+        let source_file = context.project().root.join(relative_source_file);
+        let source = context.read_string(&source_file)?;
         files.extend(extract_merged_configs(
-            project,
+            context.project(),
             &provider.provider_class,
             relative_source_file,
             &source_file,
-            &source,
+            source.as_bytes(),
         ));
     }
 

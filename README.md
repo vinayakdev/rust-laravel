@@ -2,6 +2,22 @@
 
 Rust analyzers for Laravel projects, built as a CLI first and shaped for future editor/LSP use.
 
+## Zed Extension Install
+
+1. Go to the [Releases](../../releases) page and download the zip for your platform:
+   - `rust-laravel-vX.X.X-macos-aarch64.zip` — Apple Silicon Mac
+   - `rust-laravel-vX.X.X-windows-x86_64.zip` — Windows
+
+2. Extract the zip. You will get a folder like `bundle/` containing an `extension/` directory.
+
+3. Open Zed and press `Cmd+Shift+X` (Mac) or `Ctrl+Shift+X` (Windows) to open the Extensions panel.
+
+4. Click **Install Dev Extension** and select the `extension/` folder from the extracted bundle.
+
+The LSP binary is bundled inside — no PATH changes or extra config required.
+
+---
+
 ![rust-laravel routes analyzer UI](demo1-o.jpg)
 
 ## What This Engine Does
@@ -19,15 +35,6 @@ It is designed for two uses:
 
 1. human debugging from the terminal
 2. machine-readable JSON for future extension/LSP work
-
-## Quick Links
-
-| File                                                                                | Purpose                                              |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| [README.md](/Users/hotdogb/Work/rust-php/README.md)                                 | Main guide and command reference                     |
-| [example.md](/Users/hotdogb/Work/rust-php/example.md)                               | Static input/output examples without running the CLI |
-| [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md)                                     | Roadmap and completed milestones                     |
-| [laravel-example/README.md](/Users/hotdogb/Work/rust-php/laravel-example/README.md) | How to place Laravel apps for analysis               |
 
 ## Where To Put Laravel Apps
 
@@ -372,18 +379,3 @@ This separation matters because the CLI is just one frontend. The same reports c
 - go-to-definition
 - diagnostics
 - completions
-
-## Example Output
-
-See [example.md](/Users/hotdogb/Work/rust-php/example.md) for static examples of:
-
-- example project input
-- example commands
-- text output
-- JSON output
-
-## Roadmap
-
-See [PLAN.md](/Users/hotdogb/Work/rust-php/PLAN.md).
-
-The next major step is optional runtime verification and diffing against Laravel itself when available, while keeping static analysis as the default baseline.

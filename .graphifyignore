@@ -1,1 +1,34 @@
+# Build artifacts
+target/
+zed-extension/target/
+zed-extension/extension.wasm
+
+# Web build artifacts
+web/.next/
+web/out/
+web/node_modules/
+web/tsconfig.tsbuildinfo
+
+# Tests
 test/
+test.md
+**/tests/
+**/*_test.rs
+**/*.test.ts
+**/*.spec.ts
+
+# Skills (Claude Code skills, not source code)
+skills/
+skills-lock.json
+
+# Laravel example (demo project, not core source)
+laravel-example/
+
+# Graphify output (avoid recursive indexing)
+graphify-out/
+
+# OS / misc
+.DS_Store
+*.DS_Store
+demo1-o.jpg
+Cargo.lock

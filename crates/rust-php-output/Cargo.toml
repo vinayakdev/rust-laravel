@@ -1,0 +1,17 @@
+[package]
+name = "rust-php-output"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+comfy-table = "7.2.1"
+rust-php-configs = { path = "../rust-php-configs" }
+rust-php-controllers = { path = "../rust-php-controllers" }
+rust-php-foundation = { path = "../rust-php-foundation" }
+rust-php-middleware = { path = "../rust-php-middleware" }
+rust-php-migrations = { path = "../rust-php-migrations" }
+rust-php-models = { path = "../rust-php-models" }
+rust-php-public = { path = "../rust-php-public" }
+rust-php-routes = { path = "../rust-php-routes" }
+rust-php-views = { path = "../rust-php-views" }
+serde_json = "1.0"

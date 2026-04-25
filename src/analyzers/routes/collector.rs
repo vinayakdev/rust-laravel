@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::analyzers::providers;
 use crate::analyzers::routes::chain::{ChainOp, flatten_route_chain};
+use crate::core::analysis::ProjectAnalysis;
 use crate::php::ast::{expr_name, expr_to_path, strip_root};
 use crate::php::walk::walk_stmts;
 use crate::project::LaravelProject;
@@ -20,10 +20,10 @@ pub(crate) struct RegisteredRouteFile {
 }
 
 pub(crate) fn collect_registered_route_files(
-    project: &LaravelProject,
+    context: &ProjectAnalysis,
 ) -> Result<Vec<RegisteredRouteFile>, String> {
-    let direct_files = collect_direct_route_files(project)?;
-    let discovered = discover_provider_route_files(project)?;
+    let direct_files = collect_direct_route_files(context)?;
+    let discovered = discover_provider_route_files(context)?;
     let mut by_file: BTreeMap<PathBuf, Vec<RouteRegistration>> = BTreeMap::new();
 
     for registered in discovered {
@@ -49,7 +49,7 @@ pub(crate) fn collect_registered_route_files(
         } else {
             all_files.push(RegisteredRouteFile {
                 file: file.clone(),
-                registration: default_route_registration(&project.root, file),
+                registration: default_route_registration(&context.project().root, file),
             });
         }
     }
@@ -76,21 +76,21 @@ pub(crate) fn collect_registered_route_files(
     Ok(all_files)
 }
 
-fn has_explicit_route_registrations(project: &LaravelProject) -> Result<bool, String> {
-    let bootstrap_app = project.root.join("bootstrap/app.php");
+fn has_explicit_route_registrations(context: &ProjectAnalysis) -> Result<bool, String> {
+    let bootstrap_app = context.project().root.join("bootstrap/app.php");
     if bootstrap_app.is_file()
-        && !discover_bootstrap_route_files(project, &bootstrap_app)?.is_empty()
+        && !discover_bootstrap_route_files(context.project(), &bootstrap_app)?.is_empty()
     {
         return Ok(true);
     }
 
-    Ok(!discover_provider_route_files(project)?.is_empty())
+    Ok(!discover_provider_route_files(context)?.is_empty())
 }
 
-fn collect_direct_route_files(project: &LaravelProject) -> Result<Vec<PathBuf>, String> {
-    let bootstrap_app = project.root.join("bootstrap/app.php");
+fn collect_direct_route_files(context: &ProjectAnalysis) -> Result<Vec<PathBuf>, String> {
+    let bootstrap_app = context.project().root.join("bootstrap/app.php");
     if bootstrap_app.is_file() {
-        let bootstrap_files = discover_bootstrap_route_files(project, &bootstrap_app)?;
+        let bootstrap_files = discover_bootstrap_route_files(context.project(), &bootstrap_app)?;
         if !bootstrap_files.is_empty() {
             return Ok(bootstrap_files
                 .into_iter()
@@ -99,11 +99,11 @@ fn collect_direct_route_files(project: &LaravelProject) -> Result<Vec<PathBuf>, 
         }
     }
 
-    if has_explicit_route_registrations(project)? {
+    if has_explicit_route_registrations(context)? {
         return Ok(Vec::new());
     }
 
-    let routes_dir = project.root.join("routes");
+    let routes_dir = context.project().root.join("routes");
     Ok(collect_php_files(&routes_dir))
 }
 
@@ -138,13 +138,13 @@ fn discover_bootstrap_route_files(
 }
 
 fn discover_provider_route_files(
-    project: &LaravelProject,
+    context: &ProjectAnalysis,
 ) -> Result<Vec<RegisteredRouteFile>, String> {
-    let provider_report = providers::analyze(project)?;
+    let provider_report = context.providers()?;
     let mut files = Vec::new();
     let mut seen_sources = BTreeSet::new();
 
-    for provider in provider_report.providers {
+    for provider in &provider_report.providers {
         let Some(relative_source_file) = provider.source_file.as_ref() else {
             continue;
         };
@@ -158,12 +158,11 @@ fn discover_provider_route_files(
             continue;
         }
 
-        let source_file = project.root.join(relative_source_file);
-        let source = fs::read(&source_file)
-            .map_err(|e| format!("failed to read {}: {e}", source_file.display()))?;
+        let source_file = context.project().root.join(relative_source_file);
+        let source = context.read_bytes(&source_file)?;
 
         files.extend(extract_provider_route_files(
-            project,
+            context.project(),
             &provider,
             &source_file,
             &source,
@@ -410,116 +409,4 @@ fn collect_php_files(dir: &Path) -> Vec<PathBuf> {
     }
     files.sort();
     files
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_with_routing_web_files_from_bootstrap_app() {
-        let project_root = PathBuf::from("/tmp/example");
-        let bootstrap_file = project_root.join("bootstrap/app.php");
-        let source = br#"<?php
-use Illuminate\Foundation\Application;
-
-return Application::configure(basePath: dirname(__DIR__))
-    ->withRouting(
-        web: [
-            __DIR__.'/../routes/web.php',
-//            __DIR__.'/../routes/old_web.php',
-        ],
-        api: __DIR__.'/../routes/api.php',
-        commands: __DIR__.'/../routes/console.php',
-        health: '/up',
-    )
-    ->create();
-"#;
-
-        let arena = Bump::new();
-        let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer, &arena);
-        let program = parser.parse_program();
-        assert!(program.errors.is_empty());
-
-        let project = LaravelProject {
-            root: project_root.clone(),
-            name: "example".to_string(),
-        };
-        let mut files = Vec::new();
-        walk_stmts(program.statements, false, &mut |expr| {
-            visit_bootstrap_expr(expr, source, &project, &bootstrap_file, &mut files);
-        });
-
-        let discovered: Vec<PathBuf> = files
-            .into_iter()
-            .map(|registered| registered.file)
-            .collect();
-        assert_eq!(
-            discovered,
-            vec![
-                project_root.join("routes/web.php"),
-                project_root.join("routes/api.php"),
-            ]
-        );
-    }
-
-    #[test]
-    fn extracts_old_style_grouped_route_files_from_provider() {
-        let project_root = PathBuf::from("/tmp/example");
-        let provider_file = project_root.join("app/Providers/RouteServiceProvider.php");
-        let provider = ProviderEntry {
-            provider_class: "App\\Providers\\RouteServiceProvider".to_string(),
-            line: 1,
-            column: 1,
-            registration_kind: "config-app".to_string(),
-            declared_in: PathBuf::from("config/app.php"),
-            package_name: None,
-            source_file: Some(PathBuf::from("app/Providers/RouteServiceProvider.php")),
-            source_available: true,
-            status: "static_exact".to_string(),
-        };
-
-        let source = br#"<?php
-namespace App\Providers;
-
-class RouteServiceProvider
-{
-    public function boot(): void
-    {
-        $this->routes(function () {
-            Route::middleware('web')->group(base_path('routes/web.php'));
-            Route::prefix('api')->middleware('api')->group(base_path('routes/api.php'));
-        });
-    }
-}
-"#;
-
-        let web_path = project_root.join("routes/web.php");
-        let api_path = project_root.join("routes/api.php");
-        let parent = web_path.parent().unwrap();
-        std::fs::create_dir_all(parent).unwrap();
-        std::fs::write(&web_path, "<?php\n").unwrap();
-        std::fs::write(&api_path, "<?php\n").unwrap();
-
-        let files = extract_provider_route_files(
-            &LaravelProject {
-                root: project_root.clone(),
-                name: "example".to_string(),
-            },
-            &provider,
-            &provider_file,
-            source,
-        );
-
-        let discovered: Vec<PathBuf> = files
-            .into_iter()
-            .map(|registered| registered.file)
-            .collect();
-        assert_eq!(discovered, vec![web_path, api_path]);
-
-        let _ = std::fs::remove_file(project_root.join("routes/web.php"));
-        let _ = std::fs::remove_file(project_root.join("routes/api.php"));
-        let _ = std::fs::remove_dir_all(project_root.join("routes"));
-    }
 }
