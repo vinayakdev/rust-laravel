@@ -91,6 +91,16 @@ pub fn print_views(report: &ViewReport, mode: OutputMode) -> Result<(), String> 
     }
 }
 
+pub fn print_livewire(report: &ViewReport, mode: OutputMode) -> Result<(), String> {
+    match mode {
+        OutputMode::Json => rust_php_output::json::print_livewire(report),
+        OutputMode::Text => {
+            rust_php_output::text::views::print_livewire_report(report);
+            Ok(())
+        }
+    }
+}
+
 pub fn print_models(report: &ModelReport, mode: OutputMode) -> Result<(), String> {
     match mode {
         OutputMode::Json => rust_php_output::json::print_models(report),

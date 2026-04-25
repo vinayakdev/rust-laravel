@@ -56,6 +56,11 @@ pub fn run() -> Result<(), String> {
             let report = analyzers::views::analyze(&project)?;
             output::print_views(&report, options.json)?;
         }
+        Command::LivewireList => {
+            let project = project::resolve(options.project.as_deref())?;
+            let report = analyzers::views::analyze(&project)?;
+            output::print_livewire(&report, options.json)?;
+        }
         Command::ModelList => {
             let project = project::resolve(options.project.as_deref())?;
             let report = analyzers::models::analyze(&project)?;

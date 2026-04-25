@@ -63,6 +63,10 @@ pub(crate) fn render_text_report(
             let report = analyzers::views::analyze(project)?;
             Ok(text::views::render_view_report(&report))
         }
+        DebugCommand::LivewireList => {
+            let report = analyzers::views::analyze(project)?;
+            Ok(text::views::render_livewire_report(&report))
+        }
         DebugCommand::ModelList => {
             let report = analyzers::models::analyze(project)?;
             Ok(text::models::render_model_report(&report))
@@ -123,8 +127,24 @@ pub(crate) fn render_json_report(
             (json_payload(project, command, json!({ "report": report })), None)
         }
         DebugCommand::ViewList => {
-            let report = analyzers::views::analyze(project)?;
+            let mut report = analyzers::views::analyze(project)?;
+            report.livewire_components = vec![];
+            report.livewire_component_count = 0;
             (json_payload(project, command, json!({ "report": report })), None)
+        }
+        DebugCommand::LivewireList => {
+            let report = analyzers::views::analyze(project)?;
+            (
+                json_payload(
+                    project,
+                    command,
+                    json!({
+                        "livewire_component_count": report.livewire_component_count,
+                        "livewire_components": report.livewire_components,
+                    }),
+                ),
+                None,
+            )
         }
         DebugCommand::ModelList => {
             let report = analyzers::models::analyze(project)?;

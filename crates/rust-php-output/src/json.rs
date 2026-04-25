@@ -51,6 +51,20 @@ pub fn print_views(report: &ViewReport) -> Result<(), String> {
     Ok(())
 }
 
+pub fn print_livewire(report: &ViewReport) -> Result<(), String> {
+    let output = serde_json::json!({
+        "project_name": report.project_name,
+        "project_root": report.project_root,
+        "livewire_component_count": report.livewire_component_count,
+        "livewire_components": report.livewire_components,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&output).map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
 pub fn print_models(report: &ModelReport) -> Result<(), String> {
     println!(
         "{}",

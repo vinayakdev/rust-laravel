@@ -57,7 +57,13 @@ pub struct LivewireComponentHoverInput {
 }
 
 pub fn build_livewire(input: LivewireComponentHoverInput) -> DocBundle {
-    let title = input.component.clone();
+    let title = input
+        .class_name
+        .as_deref()
+        .and_then(livewire_short_class_name)
+        .unwrap_or(input.component.as_str())
+        .to_string();
+
     let mut doc = MarkdownDoc::new()
         .title(&title)
         .blank()
@@ -72,10 +78,6 @@ pub fn build_livewire(input: LivewireComponentHoverInput) -> DocBundle {
         }
     }
 
-    if let Some(view_name) = input.view_name.as_deref() {
-        doc = doc.field("View", view_name).blank();
-    }
-
     if let Some(file) = input.view_file.as_deref() {
         if let Some(uri) = input.view_file_uri.as_deref() {
             doc = doc.link_field("Blade file", file, uri).blank();
@@ -84,13 +86,30 @@ pub fn build_livewire(input: LivewireComponentHoverInput) -> DocBundle {
         }
     }
 
-    if !input.properties.is_empty() {
-        doc = doc.field("Properties", input.properties.join(", ")).blank();
-    }
+    let has_members = !input.properties.is_empty() || !input.actions.is_empty();
+    if has_members {
+        let mut lines: Vec<String> = input
+            .properties
+            .iter()
+            .map(|p| format!("public ${p};"))
+            .collect();
 
-    if !input.actions.is_empty() {
-        doc = doc.field("Actions", input.actions.join(", "));
+        if !input.properties.is_empty() && !input.actions.is_empty() {
+            lines.push(String::new());
+        }
+
+        for action in &input.actions {
+            lines.push(format!("public function {action}();"));
+        }
+
+        doc = doc.code_block("php", lines.join("\n"));
     }
 
     DocBundle::new(title, doc).with_detail(input.detail.unwrap_or_default())
+}
+
+fn livewire_short_class_name(class: &str) -> Option<&str> {
+    let marker = "Livewire\\";
+    let pos = class.find(marker)?;
+    Some(&class[pos + marker.len()..])
 }

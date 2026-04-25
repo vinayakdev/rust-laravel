@@ -306,6 +306,17 @@ pub fn definitions(index: &ProjectIndex, context: &SymbolContext, line: usize) -
             .collect(),
         SymbolKind::View => {
             if let Some(component) = index.livewire_component_for_view_name(&context.full_text) {
+                if let Some(view_file) = component.view_file.as_ref() {
+                    return vec![location_link(
+                        &index.project_root,
+                        view_file,
+                        1,
+                        1,
+                        line,
+                        context.start_character,
+                        context.end_character,
+                    )];
+                }
                 return livewire_component_locations(
                     index,
                     &component.component,
@@ -1053,7 +1064,10 @@ fn livewire_component_hover_text(component: &LivewireComponentEntry, project_roo
         view_name: component.view_name.clone(),
         view_file: component.view_file.as_ref().map(|f| f.display().to_string()),
         view_file_uri,
-        properties: component.state.iter().map(|s| s.name.clone()).collect(),
+        properties: component.state.iter().map(|s| match &s.default_value {
+            Some(default) => format!("{} = {}", s.name, default),
+            None => s.name.clone(),
+        }).collect(),
         actions: component.actions.iter().map(|a| a.name.clone()).collect(),
         detail: None,
     })
