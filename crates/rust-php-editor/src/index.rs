@@ -423,6 +423,16 @@ impl ProjectIndex {
             .find(|component| component.view_file.as_deref() == Some(file))
     }
 
+    pub fn livewire_component_for_view_name<'a>(
+        &'a self,
+        view_name: &str,
+    ) -> Option<&'a LivewireComponentEntry> {
+        self.view_report
+            .livewire_components
+            .iter()
+            .find(|component| component.view_name.as_deref() == Some(view_name))
+    }
+
     pub fn routes_for_file<'a>(&'a self, file: &std::path::Path) -> Vec<&'a RouteEntry> {
         self.route_report
             .routes

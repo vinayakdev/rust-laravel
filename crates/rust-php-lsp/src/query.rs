@@ -18,6 +18,7 @@ use crate::types::{
 };
 use rust_php_markdown::{
     asset::{self, AssetHoverInput},
+    blade::{self, BladeComponentHoverInput, LivewireComponentHoverInput},
     controller, env, route, view, DocBundle,
 };
 
@@ -46,7 +47,7 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
         SymbolKind::Livewire => index
             .livewire_component_matches(&context.prefix)
             .into_iter()
-            .map(|component| livewire_symbol_completion(component, context, line))
+            .map(|component| livewire_symbol_completion(component, context, line, &index.project_root))
             .collect(),
         SymbolKind::Asset => index
             .public_asset_matches(&context.prefix)
@@ -147,7 +148,7 @@ pub fn complete_livewire_components(
     index
         .livewire_component_matches(&context.prefix)
         .into_iter()
-        .map(|component| livewire_tag_completion(component, context, line))
+        .map(|component| livewire_tag_completion(component, context, line, &index.project_root))
         .collect()
 }
 
@@ -215,8 +216,9 @@ pub fn blade_component_hover(
         blade_component_selection_start_character(context),
         context.end_character,
     );
+    let component = components[0];
     Some(json!({
-        "contents": { "kind": "markdown", "value": blade_component_hover_text_all(&components, &index.project_root) },
+        "contents": { "kind": "markdown", "value": blade_component_hover_text(component, &index.project_root) },
         "range": range,
     }))
 }
@@ -226,34 +228,34 @@ pub fn blade_component_definitions(
     context: &BladeComponentTagContext,
     line: usize,
 ) -> Vec<Value> {
-    index
+    let Some(component) = index
         .blade_component_definitions(&context.full_text)
         .into_iter()
-        .filter_map(|component| {
-            let file = component
-                .class_file
-                .as_ref()
-                .or(component.view_file.as_ref())?;
-            Some(json!({
-                "originSelectionRange": {
-                    "start": {
-                        "line": line,
-                        "character": blade_component_selection_start_character(context),
-                    },
-                    "end": { "line": line, "character": context.end_character },
-                },
-                "targetUri": path_to_file_uri(&index.project_root.join(file)),
-                "targetRange": {
-                    "start": { "line": 0, "character": 0 },
-                    "end": { "line": 0, "character": 0 },
-                },
-                "targetSelectionRange": {
-                    "start": { "line": 0, "character": 0 },
-                    "end": { "line": 0, "character": 0 },
-                },
-            }))
-        })
-        .collect()
+        .next()
+    else {
+        return vec![];
+    };
+    let Some(file) = component.class_file.as_ref().or(component.view_file.as_ref()) else {
+        return vec![];
+    };
+    vec![json!({
+        "originSelectionRange": {
+            "start": {
+                "line": line,
+                "character": blade_component_selection_start_character(context),
+            },
+            "end": { "line": line, "character": context.end_character },
+        },
+        "targetUri": path_to_file_uri(&index.project_root.join(file)),
+        "targetRange": {
+            "start": { "line": 0, "character": 0 },
+            "end": { "line": 0, "character": 0 },
+        },
+        "targetSelectionRange": {
+            "start": { "line": 0, "character": 0 },
+            "end": { "line": 0, "character": 0 },
+        },
+    })]
 }
 
 pub fn definitions(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
@@ -303,21 +305,32 @@ pub fn definitions(index: &ProjectIndex, context: &SymbolContext, line: usize) -
                 )
             })
             .collect(),
-        SymbolKind::View => index
-            .view_definitions(&context.full_text)
-            .into_iter()
-            .map(|view| {
-                location_link(
-                    &index.project_root,
-                    &view.file,
-                    1,
-                    1,
+        SymbolKind::View => {
+            if let Some(component) = index.livewire_component_for_view_name(&context.full_text) {
+                return livewire_component_locations(
+                    index,
+                    &component.component,
                     line,
                     context.start_character,
                     context.end_character,
-                )
-            })
-            .collect(),
+                );
+            }
+            index
+                .view_definitions(&context.full_text)
+                .into_iter()
+                .map(|view| {
+                    location_link(
+                        &index.project_root,
+                        &view.file,
+                        1,
+                        1,
+                        line,
+                        context.start_character,
+                        context.end_character,
+                    )
+                })
+                .collect()
+        }
         SymbolKind::Livewire => livewire_component_locations(
             index,
             &context.full_text,
@@ -429,6 +442,9 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Opti
             }))
         }
         SymbolKind::View => {
+            if let Some(component) = index.livewire_component_for_view_name(&context.full_text) {
+                return livewire_symbol_hover_from_component(component, &index.project_root, range);
+            }
             let view = index
                 .view_definitions(&context.full_text)
                 .into_iter()
@@ -873,6 +889,7 @@ fn livewire_symbol_completion(
     component: &LivewireComponentEntry,
     context: &SymbolContext,
     line: usize,
+    project_root: &Path,
 ) -> Value {
     json!({
         "label": component.component,
@@ -880,7 +897,7 @@ fn livewire_symbol_completion(
         "detail": livewire_component_detail(component),
         "documentation": {
             "kind": "markdown",
-            "value": livewire_component_hover_text(component),
+            "value": livewire_component_hover_text(component, project_root),
         },
         "textEdit": replacement_edit(context, line, &component.component),
     })
@@ -890,6 +907,7 @@ fn livewire_tag_completion(
     component: &LivewireComponentEntry,
     context: &LivewireComponentTagContext,
     line: usize,
+    project_root: &Path,
 ) -> Value {
     json!({
         "label": format!("livewire:{}", component.component),
@@ -898,7 +916,7 @@ fn livewire_tag_completion(
         "filterText": component.component,
         "documentation": {
             "kind": "markdown",
-            "value": livewire_component_hover_text(component),
+            "value": livewire_component_hover_text(component, project_root),
         },
         "textEdit": {
             "range": {
@@ -987,42 +1005,27 @@ fn livewire_component_detail(component: &LivewireComponentEntry) -> String {
         .unwrap_or_else(|| format!("Livewire component ({})", component.kind))
 }
 
-fn livewire_component_hover_text(component: &LivewireComponentEntry) -> String {
-    let mut lines = vec![format!("`{}`", component.component)];
-    lines.push(format!("- kind: `{}`", component.kind));
-
-    if let Some(class) = &component.class_name {
-        lines.push(format!("- class: `{class}`"));
-    }
-    if let Some(class_file) = &component.class_file {
-        lines.push(format!("- class file: `{}`", class_file.display()));
-    }
-    if let Some(view_name) = &component.view_name {
-        lines.push(format!("- view: `{view_name}`"));
-    }
-    if let Some(view_file) = &component.view_file {
-        lines.push(format!("- view file: `{}`", view_file.display()));
-    }
-    if !component.state.is_empty() {
-        let state = component
-            .state
-            .iter()
-            .map(|item| item.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("- public properties: `{state}`"));
-    }
-    if !component.actions.is_empty() {
-        let actions = component
-            .actions
-            .iter()
-            .map(|item| item.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("- actions: `{actions}`"));
-    }
-
-    lines.join("\n")
+fn livewire_component_hover_text(component: &LivewireComponentEntry, project_root: &Path) -> String {
+    let class_uri = component
+        .class_file
+        .as_ref()
+        .map(|f| path_to_file_uri(&project_root.join(f)));
+    let view_file_uri = component
+        .view_file
+        .as_ref()
+        .map(|f| path_to_file_uri(&project_root.join(f)));
+    blade::build_livewire(LivewireComponentHoverInput {
+        component: component.component.clone(),
+        class_name: component.class_name.clone(),
+        class_uri,
+        view_name: component.view_name.clone(),
+        view_file: component.view_file.as_ref().map(|f| f.display().to_string()),
+        view_file_uri,
+        properties: component.state.iter().map(|s| s.name.clone()).collect(),
+        actions: component.actions.iter().map(|a| a.name.clone()).collect(),
+        detail: None,
+    })
+    .hover_markdown()
 }
 
 fn livewire_symbol_hover(index: &ProjectIndex, name: &str, range: Value) -> Option<Value> {
@@ -1030,10 +1033,18 @@ fn livewire_symbol_hover(index: &ProjectIndex, name: &str, range: Value) -> Opti
         .livewire_component_definitions(name)
         .into_iter()
         .next()?;
-    Some(json!({
-        "contents": { "kind": "markdown", "value": livewire_component_hover_text(component) },
+    Some(livewire_symbol_hover_from_component(component, &index.project_root, range))
+}
+
+fn livewire_symbol_hover_from_component(
+    component: &LivewireComponentEntry,
+    project_root: &Path,
+    range: Value,
+) -> Value {
+    json!({
+        "contents": { "kind": "markdown", "value": livewire_component_hover_text(component, project_root) },
         "range": range,
-    }))
+    })
 }
 
 fn livewire_component_locations(
@@ -1043,25 +1054,21 @@ fn livewire_component_locations(
     start_character: usize,
     end_character: usize,
 ) -> Vec<Value> {
-    index
-        .livewire_component_definitions(name)
-        .into_iter()
-        .filter_map(|component| {
-            let file = component
-                .class_file
-                .as_ref()
-                .or(component.view_file.as_ref())?;
-            Some(location_link(
-                &index.project_root,
-                file,
-                component.source.line,
-                component.source.column,
-                line,
-                start_character,
-                end_character,
-            ))
-        })
-        .collect()
+    let Some(component) = index.livewire_component_definitions(name).into_iter().next() else {
+        return vec![];
+    };
+    let Some(file) = component.class_file.as_ref().or(component.view_file.as_ref()) else {
+        return vec![];
+    };
+    vec![location_link(
+        &index.project_root,
+        file,
+        component.source.line,
+        component.source.column,
+        line,
+        start_character,
+        end_character,
+    )]
 }
 
 fn blade_component_tag_completion(
@@ -1130,60 +1137,40 @@ fn blade_component_detail(component: &BladeComponentEntry) -> String {
 }
 
 fn blade_component_hover_text(component: &BladeComponentEntry, project_root: &Path) -> String {
-    blade_component_hover_text_all(&[component], project_root)
-}
-
-fn blade_component_hover_text_all(
-    components: &[&BladeComponentEntry],
-    project_root: &Path,
-) -> String {
-    let first = components[0];
-    let mut lines = vec![format!("`x-{}`", first.component)];
-
-    for c in components {
-        if let Some(class) = &c.class_name {
-            if let Some(class_file) = &c.class_file {
-                let absolute = project_root.join(class_file);
-                let uri = path_to_file_uri(&absolute);
-                lines.push(format!("- class: [`{class}`]({})", uri));
-            } else {
-                lines.push(format!("- class: `{class}`"));
-            }
-        }
-    }
-    let mut seen_files = std::collections::HashSet::new();
-    for c in components {
-        // if let Some(file) = &c.class_file {
-        //     if seen_files.insert(file.clone()) {
-        //         let absolute = project_root.join(file);
-        //         let uri = path_to_file_uri(&absolute);
-        //         lines.push(format!("- class file: [{}]({})", file.display(), uri));
-        //     }
-        // }
-        if let Some(file) = &c.view_file {
-            if seen_files.insert(file.clone()) {
-                let absolute = project_root.join(file);
-                let uri = path_to_file_uri(&absolute);
-                lines.push(format!("- blade file: [{}]({})", file.display(), uri));
-            }
-        }
-    }
-
-    let mut seen_props = std::collections::HashSet::new();
-    let props: Vec<String> = components
+    let props = component
+        .props
         .iter()
-        .flat_map(|c| c.props.iter())
-        .filter(|p| seen_props.insert(p.name.clone()))
         .map(|p| match &p.default_value {
             Some(v) => format!("{} = {v}", p.name),
             None => p.name.clone(),
         })
         .collect();
-    if !props.is_empty() {
-        lines.push(format!("- props: `{}`", props.join(", ")));
-    }
+    let (class_uri, view_file_uri) = blade_component_uris(component, project_root);
+    blade::build(BladeComponentHoverInput {
+        component: component.component.clone(),
+        class_name: component.class_name.clone(),
+        class_uri,
+        view_file: component.view_file.as_ref().map(|f| f.display().to_string()),
+        view_file_uri,
+        props,
+        detail: None,
+    })
+    .hover_markdown()
+}
 
-    lines.join("\n")
+fn blade_component_uris(
+    component: &BladeComponentEntry,
+    project_root: &Path,
+) -> (Option<String>, Option<String>) {
+    let class_uri = component
+        .class_file
+        .as_ref()
+        .map(|f| path_to_file_uri(&project_root.join(f)));
+    let view_file_uri = component
+        .view_file
+        .as_ref()
+        .map(|f| path_to_file_uri(&project_root.join(f)));
+    (class_uri, view_file_uri)
 }
 
 fn asset_hover(index: &ProjectIndex, asset_path: &str) -> String {

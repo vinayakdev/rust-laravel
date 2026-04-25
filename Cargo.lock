@@ -1117,6 +1117,7 @@ dependencies = [
  "rust-php-debug",
  "rust-php-foundation",
  "rust-php-lsp",
+ "rust-php-markdown",
  "rust-php-middleware",
  "rust-php-migrations",
  "rust-php-models",

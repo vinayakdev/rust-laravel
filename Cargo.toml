@@ -20,6 +20,7 @@ rust-php-controllers = { path = "crates/rust-php-controllers" }
 rust-php-debug = { path = "crates/rust-php-debug" }
 rust-php-foundation = { path = "crates/rust-php-foundation" }
 rust-php-lsp = { path = "crates/rust-php-lsp" }
+rust-php-markdown = { path = "crates/rust-php-markdown" }
 rust-php-middleware = { path = "crates/rust-php-middleware" }
 rust-php-migrations = { path = "crates/rust-php-migrations" }
 rust-php-models = { path = "crates/rust-php-models" }
