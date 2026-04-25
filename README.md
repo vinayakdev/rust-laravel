@@ -2,6 +2,22 @@
 
 Rust analyzers for Laravel projects, built as a CLI first and shaped for future editor/LSP use.
 
+## Zed Extension Install
+
+1. Go to the [Releases](../../releases) page and download the zip for your platform:
+   - `rust-laravel-vX.X.X-macos-aarch64.zip` — Apple Silicon Mac
+   - `rust-laravel-vX.X.X-windows-x86_64.zip` — Windows
+
+2. Extract the zip. You will get a folder like `bundle/` containing an `extension/` directory.
+
+3. Open Zed and press `Cmd+Shift+X` (Mac) or `Ctrl+Shift+X` (Windows) to open the Extensions panel.
+
+4. Click **Install Dev Extension** and select the `extension/` folder from the extracted bundle.
+
+The LSP binary is bundled inside — no PATH changes or extra config required.
+
+---
+
 ![rust-laravel routes analyzer UI](demo1-o.jpg)
 
 ## What This Engine Does
