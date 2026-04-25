@@ -1,7 +1,10 @@
 /.DS_Store
+**/.DS_Store
 /target/
-laravel-example/.DS_Store
+/dist/
+/vendor/
 /test/
+/test.md
 /graphify-out
 /zed-extension/target/
 /zed-extension/extension.wasm
@@ -10,4 +13,3 @@ laravel-example/.DS_Store
 /web/out/
 /web/tsconfig.tsbuildinfo
 /laravel-example/.env
-/test.md
