@@ -17,7 +17,7 @@ pub(crate) enum DebugCommand {
     MigrationList,
 }
 
-pub(crate) const BROWSER_COMMANDS: [DebugCommand; 10] = [
+pub(crate) const BROWSER_COMMANDS: [DebugCommand; 11] = [
     DebugCommand::RouteList,
     DebugCommand::RouteSources,
     DebugCommand::MiddlewareList,

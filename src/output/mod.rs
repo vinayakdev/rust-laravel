@@ -3,14 +3,6 @@ use crate::types::{
     ProviderReport, PublicAssetReport, RouteReport, ViewReport,
 };
 
-#[allow(dead_code)]
-/// Shared contract for rendering a report. Each report type gets one text
-/// renderer module and one JSON renderer function.
-pub trait Reporter<T> {
-    fn render_text(data: &T) -> Result<(), String>;
-    fn render_json(data: &T) -> Result<(), String>;
-}
-
 pub fn print_routes(report: &RouteReport, mode: OutputMode) -> Result<(), String> {
     match mode {
         OutputMode::Json => rust_php_output::json::print_routes(report),
