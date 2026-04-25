@@ -8,14 +8,11 @@ on:
 permissions:
   contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
-  build-mac:
+  release-mac:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -42,8 +39,8 @@ jobs:
           # rust-laravel — Install
 
           1. Open Zed
-          2. Open the **Extensions** panel (Cmd+Shift+X)
-          3. Click **Install Dev Extension**
+          2. Open the Extensions panel (Cmd+Shift+X)
+          3. Click Install Dev Extension
           4. Select the `extension/` folder inside this archive
 
           The LSP binary is bundled — no PATH changes or config needed.
@@ -51,73 +48,10 @@ jobs:
 
           zip -r rust-laravel-v${VERSION}-macos-aarch64.zip bundle
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mac-bundle
-          path: rust-laravel-*.zip
-
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Build LSP binary
-        run: cargo build --release --bin rust-php
-
-      - name: Assemble bundle
-        shell: pwsh
-        run: |
-          $version = (Select-String -Path "zed-extension\extension.toml" -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
-          echo "VERSION=$version" >> $env:GITHUB_ENV
-
-          New-Item -ItemType Directory -Force -Path bundle\extension\bin, bundle\extension\src | Out-Null
-          Copy-Item zed-extension\extension.toml   bundle\extension\
-          Copy-Item zed-extension\Cargo.toml       bundle\extension\
-          Copy-Item zed-extension\Cargo.lock       bundle\extension\
-          Copy-Item zed-extension\src\lib.rs       bundle\extension\src\
-          Copy-Item -Recurse zed-extension\languages  bundle\extension\
-          Copy-Item -Recurse zed-extension\snippets   bundle\extension\
-          Copy-Item target\release\rust-php.exe    bundle\extension\bin\rust-php-windows-x86_64.exe
-          Add-Content bundle\extension\Cargo.toml "`n[workspace]"
-
-          Set-Content bundle\INSTALL.md @"
-          # rust-laravel -- Install
-
-          1. Open Zed
-          2. Open the Extensions panel (Ctrl+Shift+X)
-          3. Click Install Dev Extension
-          4. Select the ``extension\`` folder inside this archive
-
-          The LSP binary is bundled -- no PATH changes or config needed.
-          "@
-
-          Compress-Archive -Path bundle\* -DestinationPath "rust-laravel-v${version}-windows-x86_64.zip"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-bundle
-          path: rust-laravel-*.zip
-
-  release:
-    needs: [build-mac, build-windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Get version
-        run: echo "VERSION=$(grep '^version' zed-extension/extension.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')" >> $GITHUB_ENV
-
-      - uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-          path: zips
-
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2.3.2
         with:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
           prerelease: true
           generate_release_notes: true
-          files: zips/*.zip
+          files: rust-laravel-*.zip
