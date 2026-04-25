@@ -24,6 +24,10 @@ enum DocLine {
         text: String,
         url: String,
     },
+    CodeBlock {
+        language: String,
+        code: String,
+    },
 }
 
 impl MarkdownDoc {
@@ -55,6 +59,14 @@ impl MarkdownDoc {
         self.lines.push(DocLine::Field {
             label: label.into(),
             value: value.into(),
+        });
+        self
+    }
+
+    pub fn code_block(mut self, language: impl Into<String>, code: impl Into<String>) -> Self {
+        self.lines.push(DocLine::CodeBlock {
+            language: language.into(),
+            code: code.into(),
         });
         self
     }
@@ -104,6 +116,10 @@ impl MarkdownDoc {
                 (MarkdownFormat::PlainText, DocLine::LinkField { label, text, url }) => {
                     format!("{label}: {text} ({url})")
                 }
+                (MarkdownFormat::Markdown, DocLine::CodeBlock { language, code }) => {
+                    format!("```{language}\n{code}\n```")
+                }
+                (MarkdownFormat::PlainText, DocLine::CodeBlock { code, .. }) => code.clone(),
             })
             .collect::<Vec<_>>()
             .join("\n")

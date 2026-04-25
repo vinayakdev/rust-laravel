@@ -26,6 +26,27 @@ pub fn print_view_report(report: &ViewReport) {
     println!("{}", render_view_report(report));
 }
 
+pub fn print_livewire_report(report: &ViewReport) {
+    println!("{}", render_livewire_report(report));
+}
+
+pub fn render_livewire_report(report: &ViewReport) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "Project: {}", report.project_name);
+    let _ = writeln!(
+        output,
+        "Livewire components: {}",
+        report.livewire_component_count
+    );
+    let _ = writeln!(output);
+    let _ = write!(
+        output,
+        "{}",
+        render_livewire_detail_table(&report.livewire_components)
+    );
+    output
+}
+
 pub fn render_view_report(report: &ViewReport) -> String {
     let mut output = String::new();
     let _ = writeln!(output, "Project: {}", report.project_name);
@@ -186,6 +207,75 @@ fn render_livewire_components_table(components: &[LivewireComponentEntry]) -> St
                 ),
                 widths.source,
             ),
+        ]);
+    }
+
+    table.to_string()
+}
+
+fn render_livewire_detail_table(components: &[LivewireComponentEntry]) -> String {
+    if components.is_empty() {
+        return "No Livewire components found.".to_string();
+    }
+
+    let t = terminal_width();
+    let (col_component, col_class, col_view, col_properties, col_actions) = if t < 120 {
+        (18, 20, 20, 18, 16)
+    } else if t < 160 {
+        (22, 26, 26, 22, 18)
+    } else {
+        (28, 32, 32, 28, 22)
+    };
+
+    let mut table = new_table();
+    table.set_header(vec![
+        header("Component"),
+        header("Class File"),
+        header("Blade File"),
+        header("Properties"),
+        header("Actions"),
+    ]);
+
+    for component in components {
+        let class_file = component
+            .class_file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let blade_file = component
+            .view_file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let properties = if component.state.is_empty() {
+            "-".to_string()
+        } else {
+            component
+                .state
+                .iter()
+                .map(|s| match &s.default_value {
+                    Some(d) => format!("{}={}", s.name, d),
+                    None => s.name.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let actions = if component.actions.is_empty() {
+            "-".to_string()
+        } else {
+            component
+                .actions
+                .iter()
+                .map(|a| a.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        table.add_row(vec![
+            wrap_cell(&component.component, col_component),
+            wrap_cell(&class_file, col_class),
+            wrap_cell(&blade_file, col_view),
+            wrap_cell(&properties, col_properties),
+            wrap_cell(&actions, col_actions),
         ]);
     }
 

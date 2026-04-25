@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use rust_php_foundation::overrides::FileOverrides;
 use rust_php_foundation::php::ast::{
-    byte_offset_to_line_col, expr_name, expr_to_path, expr_to_string, expr_to_string_list,
+    expr_name, expr_to_path, expr_to_string, expr_to_string_list,
     span_text, strip_root,
 };
 use rust_php_foundation::php::walk::walk_stmts;
@@ -735,7 +735,3 @@ pub fn resolve_columns_for_table(table: &str, migrations: &[MigrationEntry]) -> 
     columns
 }
 
-#[allow(dead_code)]
-fn _byte_offset_hint(source: &[u8], offset: usize) -> (usize, usize) {
-    byte_offset_to_line_col(source, offset)
-}
