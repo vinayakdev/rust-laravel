@@ -68,11 +68,29 @@ fn resolve_binary(
         return Ok(path);
     }
 
+    if let Some(bundled) = bundled_binary_path() {
+        if binary_is_available(&bundled) {
+            return Ok(bundled);
+        }
+    }
+
     if let Some(path) = worktree.which(BINARY_NAME) {
         return Ok(path);
     }
 
     install_release_binary(language_server_id)
+}
+
+fn bundled_binary_path() -> Option<String> {
+    let (os, arch) = current_platform();
+    let name = match (os, arch) {
+        (Os::Mac, Architecture::Aarch64) => "rust-php-macos-aarch64",
+        (Os::Mac, Architecture::X8664) => "rust-php-macos-x86_64",
+        (Os::Linux, Architecture::X8664) => "rust-php-linux-x86_64",
+        (Os::Windows, Architecture::X8664) => "rust-php-windows-x86_64.exe",
+        _ => return None,
+    };
+    Some(format!("bin/{name}"))
 }
 
 fn install_release_binary(language_server_id: &zed::LanguageServerId) -> zed::Result<String> {
