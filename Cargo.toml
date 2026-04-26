@@ -33,6 +33,10 @@ serde_json = "1.0"
 serde_yaml = "0.9.34"
 zed_extension_api = "0.4.0"
 
+[[bin]]
+name = "debug-classmap"
+path = "src/debug_classmap.rs"
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

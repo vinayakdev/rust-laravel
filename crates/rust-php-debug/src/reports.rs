@@ -80,6 +80,9 @@ pub(crate) fn render_text_report(
             "route:compare is only available in the web debugger because it needs structured JSON output"
                 .to_string(),
         ),
+        DebugCommand::VendorList => Err(
+            "vendor:list is only available in the web debugger".to_string(),
+        ),
     }
 }
 
@@ -185,6 +188,14 @@ pub(crate) fn render_json_report(
                     json!({ "comparison": compare_routes(project, &report.routes)? }),
                 ),
                 None,
+            )
+        }
+        DebugCommand::VendorList => {
+            let classes = crate::vendor::list_vendor_classes(&project.root);
+            let count = classes.len();
+            (
+                json_payload(project, command, json!({ "report": { "class_count": count, "classes": classes } })),
+                Some(count),
             )
         }
     };

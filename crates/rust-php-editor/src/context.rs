@@ -1046,12 +1046,676 @@ fn is_inside_blade_php(source: &str, line: usize, cursor: usize) -> bool {
     }
 }
 
+/// Context for completing vendor class chainable methods after `->`.
+/// Detected when cursor is positioned in a method name slot in a fluent chain.
+#[derive(Clone, Debug)]
+pub struct VendorChainContext {
+    /// Resolved FQN of the chain-originating class (e.g. `Filament\Forms\Components\TextInput`).
+    pub class_fqn: String,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
+/// Context for completing model column names inside `ClassName::make('|')`.
+#[derive(Clone, Debug)]
+pub struct VendorMakeContext {
+    /// Short class name extracted from before `::make(` (e.g. `TextInput`).
+    pub class_short: String,
+    /// Resolved FQN if the use map contained the short name.
+    pub class_fqn: Option<String>,
+    /// Model class name found directly in the current source file (`$model = X::class`).
+    pub model_class: Option<String>,
+    /// Path to the current file — used by the query layer to scan sibling Resource files
+    /// when `model_class` is None (i.e. the form lives in a separate Schema class).
+    pub current_file: Option<std::path::PathBuf>,
+    /// Short name of the class declared in the current file (e.g. `WhatsAppLinkForm`).
+    pub current_class_name: Option<String>,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
+/// Detect a vendor method chain context: cursor is typing a method name after `->`.
+///
+/// Looks for `->identifier` at the cursor position (no `(` between `->` and cursor),
+/// then scans backwards through the current statement to find the originating `ClassName::`.
+pub fn detect_vendor_chain_context(
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<VendorChainContext> {
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+
+    let arrow_byte = find_last_arrow_before(line_text, cursor)?;
+    let after_arrow = &line_text[arrow_byte + 2..cursor];
+
+    // We must be typing a method name: no `(` between `->` and cursor
+    if after_arrow.contains('(') || after_arrow.contains(')') {
+        return None;
+    }
+    if !after_arrow.chars().all(|c| is_identifier_char(c)) {
+        return None;
+    }
+
+    let prefix = after_arrow.to_string();
+
+    // Extend to end of current identifier token
+    let mut end = cursor;
+    while end < line_text.len() {
+        match line_text[end..].chars().next() {
+            Some(c) if is_identifier_char(c) => end += c.len_utf8(),
+            _ => break,
+        }
+    }
+
+    let lines: Vec<&str> = source.lines().collect();
+    let class_short = find_chain_origin_class(&lines, line, line_text, arrow_byte)?;
+    let use_map = extract_use_map(source);
+    let class_fqn = use_map
+        .get(&class_short)
+        .cloned()
+        .unwrap_or(class_short);
+
+    Some(VendorChainContext {
+        class_fqn,
+        prefix,
+        start_character: line_text[..arrow_byte + 2].chars().count(),
+        end_character: line_text[..end].chars().count(),
+    })
+}
+
+/// Detect the context for `ClassName::make('|')` — column name completion.
+///
+/// Fires when the cursor is inside the first string argument of a `::make()` call.
+/// Accepts `uri` so that the query layer can locate a sibling Resource file when the
+/// form is defined in a separate Schema class (the common Filament v3 pattern).
+pub fn detect_vendor_make_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<VendorMakeContext> {
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let (quote_start, quote_char) = find_quote_start(line_text, cursor)?;
+    let quote_end =
+        find_quote_end(line_text, quote_start + quote_char.len_utf8(), quote_char)?;
+    let inner_start = quote_start + quote_char.len_utf8();
+    let inner_end = quote_end;
+
+    if cursor < inner_start || cursor > inner_end {
+        return None;
+    }
+
+    let before_quote = &line_text[..quote_start];
+    let compact_before: String = before_quote.chars().filter(|c| !c.is_whitespace()).collect();
+    if !compact_before.ends_with("::make(") {
+        return None;
+    }
+
+    // Extract class short name: chars before `::make(`
+    let marker = "::make(";
+    let make_pos = compact_before.rfind(marker)?;
+    let class_short_compact = &compact_before[..make_pos];
+    let class_short = class_short_compact
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '\\')
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+
+    if class_short.is_empty() {
+        return None;
+    }
+
+    let use_map = extract_use_map(source);
+    let class_fqn = use_map.get(&class_short).cloned();
+    let model_class = extract_model_class_from_resource(source);
+    let current_file = file_uri_to_path(uri);
+    let current_class_name = extract_class_name_from_source(source);
+    let prefix = source_chars_slice(line_text, inner_start, cursor.min(inner_end));
+
+    Some(VendorMakeContext {
+        class_short,
+        class_fqn,
+        model_class,
+        current_file,
+        current_class_name,
+        prefix,
+        start_character: line_text[..inner_start].chars().count(),
+        end_character: line_text[..inner_end].chars().count(),
+    })
+}
+
+fn file_uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
+    let path = uri.strip_prefix("file://")?;
+    let decoded = percent_decode_simple(path);
+    Some(std::path::PathBuf::from(decoded))
+}
+
+fn percent_decode_simple(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
+                out.push(v as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn extract_class_name_from_source(source: &str) -> Option<String> {
+    for line in source.lines() {
+        let t = line.trim();
+        if t.starts_with("class ") || t.starts_with("abstract class ") || t.starts_with("final class ") {
+            let after = t
+                .trim_start_matches("final ")
+                .trim_start_matches("abstract ")
+                .trim_start_matches("class ");
+            let name = after
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches('{');
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn find_last_arrow_before(line: &str, cursor: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let limit = cursor.min(bytes.len());
+    let mut last = None;
+    let mut i = 0;
+    while i + 1 < limit {
+        if bytes[i] == b'-' && bytes[i + 1] == b'>' {
+            last = Some(i);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    last
+}
+
+fn find_chain_origin_class(
+    lines: &[&str],
+    current_line: usize,
+    line_text: &str,
+    arrow_byte: usize,
+) -> Option<String> {
+    // Check current line before the arrow for ClassName::
+    if let Some(name) = extract_class_from_segment(&line_text[..arrow_byte]) {
+        return Some(name);
+    }
+
+    // Scan backwards up to 30 lines for the start of this chain
+    let start = current_line.saturating_sub(30);
+    for idx in (start..current_line).rev() {
+        let prev = lines.get(idx)?;
+        let trimmed = prev.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(name) = extract_class_from_segment(prev) {
+            return Some(name);
+        }
+        // Stop at statement boundaries (semicolons, closing braces at start)
+        if trimmed.ends_with(';') || trimmed == "}" || trimmed.starts_with("function ")
+            || trimmed.starts_with("class ") || trimmed.starts_with("return ")
+        {
+            break;
+        }
+    }
+    None
+}
+
+fn extract_class_from_segment(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut last_class: Option<String> = None;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b':' && bytes[i + 1] == b':' {
+            // Find the word immediately before `::`
+            let mut start = i;
+            while start > 0 {
+                let slice = &text[..start];
+                let Some(ch) = slice.chars().next_back() else { break };
+                if !is_identifier_char(ch) { break; }
+                start -= ch.len_utf8();
+            }
+            let word = &text[start..i];
+            if !word.is_empty() && word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                last_class = Some(word.to_string());
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    last_class
+}
+
+pub fn extract_use_map(source: &str) -> std::collections::HashMap<String, String> {
+    rust_php_foundation::vendor::parse_file_use_statements(source)
+}
+
+/// Context for completing model column names inside builder/collection method string args.
+/// Fires when cursor is inside the first string arg of a known Eloquent builder method
+/// (e.g. `->pluck('|')`, `->orderBy('|')`, `->where('|', ...)`).
+#[derive(Clone, Debug)]
+pub struct BuilderArgContext {
+    /// Inferred model class (short name resolved from typed param or PHPDoc `@var`).
+    pub model_class: String,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
+/// Known Eloquent/Collection builder methods whose first string arg is a column name.
+const BUILDER_COLUMN_METHODS: &[&str] = &[
+    "pluck",
+    "orderBy",
+    "orderByDesc",
+    "orderByAsc",
+    "where",
+    "whereIn",
+    "whereNotIn",
+    "whereBetween",
+    "whereNull",
+    "whereNotNull",
+    "select",
+    "value",
+    "firstWhere",
+    "find",
+    "sum",
+    "min",
+    "max",
+    "avg",
+    "average",
+    "groupBy",
+    "having",
+    "withAggregate",
+    "withCount",
+    "withSum",
+    "withMin",
+    "withMax",
+    "withAvg",
+    "latest",
+    "oldest",
+];
+
+/// Detect a builder method string-arg context.
+///
+/// Fires when the cursor is inside the first string argument of a known Eloquent column method.
+/// Infers the model from:
+/// - typed function parameter (`BlogPost $record`) or PHPDoc `@var`/`@param`
+/// - static model call origin (`BlogPost::query()->pluck(...)` or `BlogPost::all()->...`)
+pub fn detect_builder_arg_context(
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<BuilderArgContext> {
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let (quote_start, quote_char) = find_quote_start(line_text, cursor)?;
+    let quote_end = find_quote_end(line_text, quote_start + quote_char.len_utf8(), quote_char)?;
+    let inner_start = quote_start + quote_char.len_utf8();
+    let inner_end = quote_end;
+
+    if cursor < inner_start || cursor > inner_end {
+        return None;
+    }
+
+    // Check that immediately before the opening quote is `->methodName(`
+    let before_quote = &line_text[..quote_start];
+    let compact_before: String = before_quote.chars().filter(|c| !c.is_whitespace()).collect();
+    let method_name = BUILDER_COLUMN_METHODS
+        .iter()
+        .find(|&&m| compact_before.ends_with(&format!("->{m}(")))?;
+
+    // Find the chain segment before `->method(`
+    let arrow_needle = format!("->{method_name}(");
+    let arrow_pos = before_quote.rfind(&arrow_needle)?;
+    let before_arrow = &before_quote[..arrow_pos];
+
+    let prefix = source_chars_slice(line_text, inner_start, cursor.min(inner_end));
+
+    // Strategy 1: extract `$variable` and resolve its type from typed params/PHPDoc
+    let model_class = if let Some(var_name) = extract_root_variable(before_arrow) {
+        resolve_variable_type(source, &var_name)
+    } else {
+        None
+    };
+
+    // Strategy 2: extract static origin class from `ClassName::` in the chain
+    let model_class = model_class.or_else(|| {
+        let lines: Vec<&str> = source.lines().collect();
+        let class_short = find_chain_origin_class(&lines, line, line_text, arrow_pos)?;
+        if is_model_like_class(&class_short) {
+            Some(class_short)
+        } else {
+            None
+        }
+    })?;
+
+    Some(BuilderArgContext {
+        model_class,
+        prefix,
+        start_character: line_text[..inner_start].chars().count(),
+        end_character: line_text[..inner_end].chars().count(),
+    })
+}
+
+/// Extract the root variable name from a chain like `$record->tagsWithType('x')`.
+/// Returns `record` (without `$`).
+fn extract_root_variable(text: &str) -> Option<String> {
+    // Walk right-to-left: skip method calls and whitespace to find the last `$varName`
+    let trimmed = text.trim_end();
+
+    // Find the last `$identifier` before a `->` or at the end of the segment
+    let mut i = trimmed.len();
+    // Skip any trailing `->chainedMethod()` parts
+    loop {
+        let s = &trimmed[..i];
+        if let Some(arrow_pos) = s.rfind("->") {
+            i = arrow_pos;
+        } else {
+            break;
+        }
+    }
+
+    let segment = trimmed[..i].trim_end();
+    let dollar_pos = segment.rfind('$')?;
+    let after_dollar = &segment[dollar_pos + 1..];
+    let var_name: String = after_dollar
+        .chars()
+        .take_while(|c| is_identifier_char(*c))
+        .collect();
+
+    if var_name.is_empty() {
+        None
+    } else {
+        Some(var_name)
+    }
+}
+
+/// Scan the source for typed parameter hints and PHPDoc `@var` annotations to resolve
+/// a variable name to a model class name.
+///
+/// Handles:
+/// - `function foo(BlogPost $record)` → `record` → `BlogPost`
+/// - `/** @var BlogPost $record */` → `record` → `BlogPost`
+/// - `@param BlogPost $record` → `record` → `BlogPost`
+fn resolve_variable_type(source: &str, var_name: &str) -> Option<String> {
+    let needle = format!("${var_name}");
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+
+        // PHPDoc @var or @param: `@var TypeName $varName` or `@param TypeName $varName`
+        if trimmed.starts_with("* @var ") || trimmed.starts_with("* @param ") || trimmed.starts_with("@var ") || trimmed.starts_with("@param ") {
+            let after_tag = trimmed
+                .trim_start_matches('*')
+                .trim()
+                .trim_start_matches("@var")
+                .trim_start_matches("@param")
+                .trim();
+            // `TypeName $varName ...`
+            let mut parts = after_tag.split_whitespace();
+            let type_name = parts.next()?;
+            let var_part = parts.next().unwrap_or("");
+            if var_part == needle {
+                let class_name = type_name.trim_matches('\\').split('\\').last()?;
+                if is_model_like_class(class_name) {
+                    return Some(class_name.to_string());
+                }
+            }
+            continue;
+        }
+
+        // Typed function/closure parameter: `TypeName $varName` optionally followed by `,`, `)`, `=`
+        if !trimmed.contains(&needle) {
+            continue;
+        }
+        if let Some(class_name) = extract_typed_param(trimmed, &needle) {
+            return Some(class_name);
+        }
+    }
+    None
+}
+
+/// From a line like `static fn(BlogPost $record): array`, extract the type of `$varName`.
+fn extract_typed_param(line: &str, needle: &str) -> Option<String> {
+    let pos = line.find(needle)?;
+    // Walk backwards from needle to find identifier (type hint)
+    let before = &line[..pos];
+    let trimmed_before = before.trim_end();
+    let type_name: String = trimmed_before
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '\\')
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+
+    if type_name.is_empty() {
+        return None;
+    }
+
+    // The char immediately before the type hint must be a word boundary (space, `(`, `,`)
+    let type_start = trimmed_before.len().saturating_sub(type_name.len());
+    let boundary = if type_start == 0 {
+        true
+    } else {
+        let ch = trimmed_before[..type_start].chars().next_back()?;
+        matches!(ch, ' ' | '\t' | '(' | ',')
+    };
+
+    // The char after needle must be `)`, `,`, ` `, `:`, `=` or end of relevant token
+    let after_needle = &line[pos + needle.len()..];
+    let after_ok = after_needle.is_empty()
+        || after_needle.starts_with([',', ')', ' ', ':', '=', '\n'].as_ref());
+
+    if boundary && after_ok && is_model_like_class(&type_name) {
+        let short = type_name.split('\\').last()?.to_string();
+        Some(short)
+    } else {
+        None
+    }
+}
+
+/// Heuristic: a class name looks like a model if it starts with an uppercase letter
+/// and is not a PHP keyword or common non-model type.
+fn is_model_like_class(name: &str) -> bool {
+    let first_char = name.chars().next();
+    matches!(first_char, Some(c) if c.is_uppercase())
+        && !matches!(
+            name,
+            "Schema" | "Builder" | "Collection" | "Request" | "Response"
+                | "Closure" | "Callable" | "Void" | "Never" | "Static" | "Self"
+                | "True" | "False" | "Null" | "Int" | "Float" | "Bool" | "String"
+                | "Array" | "Object" | "Mixed" | "Iterable" | "Countable"
+                | "JsonSerializable" | "Throwable" | "Exception" | "Error"
+        )
+}
+
+fn extract_model_class_from_resource(source: &str) -> Option<String> {
+    for line in source.lines() {
+        let t = line.trim();
+        // Match: protected static ?string $model = SomeModel::class;
+        // or: protected static ?SomeModel $model = SomeModel::class;
+        if t.contains("$model") && t.contains("::class") {
+            // Extract the identifier before `::class`
+            let class_pos = t.rfind("::class")?;
+            let before = &t[..class_pos];
+            let class_name = before
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '\\')
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>();
+            if !class_name.is_empty() {
+                return Some(class_name);
+            }
+        }
+    }
+    None
+}
+
+fn source_chars_slice(text: &str, byte_start: usize, byte_end: usize) -> String {
+    text.get(byte_start..byte_end)
+        .unwrap_or("")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        RouteActionKind, SymbolKind, ViewDataKind, detect_route_action_context,
-        detect_symbol_context, detect_view_data_context,
+        RouteActionKind, SymbolKind, ViewDataKind, detect_builder_arg_context,
+        detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
+        detect_vendor_make_context, detect_view_data_context,
     };
+
+    #[test]
+    fn detects_vendor_chain_context_on_arrow() {
+        let source = "<?php\nuse Filament\\Forms\\Components\\TextInput;\n\nTextInput::make('label')\n    ->lab\n";
+        let line = 4;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("->lab").expect("token") + "->lab".len();
+        let ctx = detect_vendor_chain_context(source, line, character)
+            .expect("vendor chain context");
+        assert_eq!(ctx.class_fqn, "Filament\\Forms\\Components\\TextInput");
+        assert_eq!(ctx.prefix, "lab");
+    }
+
+    #[test]
+    fn detects_vendor_chain_context_inline() {
+        let source = "<?php\nuse App\\Components\\Button;\n\nButton::make('x')->dis\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("->dis").expect("token") + "->dis".len();
+        let ctx = detect_vendor_chain_context(source, line, character)
+            .expect("vendor chain context");
+        assert_eq!(ctx.class_fqn, "App\\Components\\Button");
+        assert_eq!(ctx.prefix, "dis");
+    }
+
+    #[test]
+    fn does_not_detect_vendor_chain_context_inside_parens() {
+        let source = "TextInput::make('label')->label('Gr')\n";
+        let line = 0;
+        let character = source.find("->label('Gr')").expect("token") + "->label('G".len();
+        let ctx = detect_vendor_chain_context(source, line, character);
+        assert!(ctx.is_none(), "should not fire inside a method argument");
+    }
+
+    #[test]
+    fn detects_vendor_make_context() {
+        let source = "<?php\nuse Filament\\Forms\\Components\\TextInput;\n\nprotected static ?string $model = WhatsAppLink::class;\n\nTextInput::make('lab')\n";
+        let line = 5;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("'lab'").expect("token") + "'lab".len();
+        let ctx = detect_vendor_make_context("file:///tmp/app/Filament/Resources/WhatsAppLinkResource.php", source, line, character)
+            .expect("vendor make context");
+        assert_eq!(ctx.class_short, "TextInput");
+        assert_eq!(ctx.prefix, "lab");
+        assert_eq!(ctx.model_class.as_deref(), Some("WhatsAppLink"));
+    }
+
+    #[test]
+    fn does_not_detect_vendor_make_context_for_non_make_calls() {
+        let source = "TextInput::label('something')\n";
+        let line = 0;
+        let character = source.find("'something'").expect("token") + "'someth".len();
+        let ctx = detect_vendor_make_context("file:///tmp/foo.php", source, line, character);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn detects_vendor_make_context_for_separate_form_class() {
+        // Simulates WhatsAppLinkForm — no $model here, but class name captured
+        let source = "<?php\n\nnamespace App\\Filament\\Resources\\WhatsAppLinks\\Schemas;\n\nuse Filament\\Forms\\Components\\TextInput;\nuse Filament\\Schemas\\Schema;\n\nclass WhatsAppLinkForm\n{\n    public static function configure(Schema $schema): Schema\n    {\n        return $schema->components([\n            TextInput::make('lab')\n        ]);\n    }\n}\n";
+        let line = source.lines().position(|l| l.contains("TextInput::make")).expect("line");
+        let line_text = source.lines().nth(line).expect("line text");
+        let character = line_text.find("'lab'").expect("token") + "'lab".len();
+        let ctx = detect_vendor_make_context(
+            "file:///tmp/app/Filament/Resources/WhatsAppLinks/Schemas/WhatsAppLinkForm.php",
+            source,
+            line,
+            character,
+        )
+        .expect("vendor make context");
+
+        assert_eq!(ctx.class_short, "TextInput");
+        assert_eq!(ctx.prefix, "lab");
+        // $model is NOT in this file — model_class should be None
+        assert!(ctx.model_class.is_none());
+        // But we should have captured the form class name for sibling lookup
+        assert_eq!(ctx.current_class_name.as_deref(), Some("WhatsAppLinkForm"));
+        // And the file path should be set
+        assert!(ctx.current_file.is_some());
+    }
+
+    #[test]
+    fn detects_builder_arg_context_for_pluck() {
+        let source = "<?php\nstatic fn(BlogPost $record): array => $record->tagsWithType('category')->pluck('na')\n";
+        let line = 1;
+        let line_text = source.lines().nth(line).expect("line");
+        let character = line_text.find("->pluck('na')").expect("token") + "->pluck('na".len();
+        let ctx = detect_builder_arg_context(source, line, character).expect("builder arg context");
+        assert_eq!(ctx.model_class, "BlogPost");
+        assert_eq!(ctx.prefix, "na");
+    }
+
+    #[test]
+    fn detects_builder_arg_context_for_order_by_static_chain() {
+        let source = "<?php\nreturn Article::query()->orderBy('pub')\n";
+        let line = 1;
+        let line_text = source.lines().nth(line).expect("line");
+        let character = line_text.find("->orderBy('pub')").expect("token") + "->orderBy('pub".len();
+        let ctx = detect_builder_arg_context(source, line, character).expect("builder arg context");
+        assert_eq!(ctx.model_class, "Article");
+        assert_eq!(ctx.prefix, "pub");
+    }
+
+    #[test]
+    fn does_not_detect_builder_arg_context_for_unknown_method() {
+        let source = "<?php\nstatic fn(BlogPost $record) => $record->unknownMethod('na')\n";
+        let line = 1;
+        let line_text = source.lines().nth(line).expect("line");
+        let character = line_text.find("->unknownMethod('na')").expect("token") + "->unknownMethod('na".len();
+        let ctx = detect_builder_arg_context(source, line, character);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn detects_builder_arg_context_from_phpdoc_var() {
+        let source = "<?php\n/** @var BlogPost $post */\n$post->where('titl')\n";
+        let line = 2;
+        let line_text = source.lines().nth(line).expect("line");
+        let character = line_text.find("->where('titl')").expect("token") + "->where('titl".len();
+        let ctx = detect_builder_arg_context(source, line, character).expect("builder arg context");
+        assert_eq!(ctx.model_class, "BlogPost");
+        assert_eq!(ctx.prefix, "titl");
+    }
 
     #[test]
     fn detects_symbol_context_at_end_of_non_empty_string() {

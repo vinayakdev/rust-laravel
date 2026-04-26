@@ -12,9 +12,10 @@ use serde_json::{Value, json};
 
 use super::context::{
     detect_blade_component_attr_context, detect_blade_component_tag_context,
-    detect_blade_variable_context, detect_helper_context, detect_livewire_component_tag_context,
-    detect_livewire_directive_value_context, detect_route_action_context, detect_symbol_context,
-    detect_view_data_context,
+    detect_blade_variable_context, detect_builder_arg_context, detect_helper_context,
+    detect_livewire_component_tag_context, detect_livewire_directive_value_context,
+    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
+    detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -303,6 +304,24 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
                 .unwrap_or_default(),
             true,
         )
+    } else if let Some(context) = detect_builder_arg_context(source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=builder-arg model={:?} prefix={:?}",
+            line, character, context.model_class, context.prefix
+        ));
+        (query::complete_builder_arg_columns(index, &context, line), true)
+    } else if let Some(context) = detect_vendor_chain_context(source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=vendor-chain class={:?} prefix={:?}",
+            line, character, context.class_fqn, context.prefix
+        ));
+        (query::complete_vendor_chain_methods(index, &context, line), true)
+    } else if let Some(context) = detect_vendor_make_context(uri, source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=vendor-make class={:?} model={:?} prefix={:?}",
+            line, character, context.class_short, context.model_class, context.prefix
+        ));
+        (query::complete_vendor_make_columns(index, &context, line), true)
     } else if let Some(context) = detect_symbol_context(source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=symbol prefix={:?}",

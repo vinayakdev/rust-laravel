@@ -1,4 +1,6 @@
 pub use rust_php_configs::types::{ConfigItem, ConfigReport, ConfigSource};
+pub use rust_php_migrations::types::ColumnEntry;
+pub use rust_php_models::types::{ModelEntry, ModelReport};
 pub use rust_php_controllers::types::{
     ControllerEntry, ControllerMethodEntry, ControllerReport, ControllerVariableEntry,
     RouteControllerTarget,

@@ -4,10 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::context::{
-    BladeComponentAttrContext, BladeComponentTagContext, BladeVariableContext, HelperContext,
-    HelperStyle, LivewireComponentTagContext, LivewireDirectiveValueContext,
+    BladeComponentAttrContext, BladeComponentTagContext, BladeVariableContext, BuilderArgContext,
+    HelperContext, HelperStyle, LivewireComponentTagContext, LivewireDirectiveValueContext,
     LivewireDirectiveValueKind, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
-    ViewDataContext, ViewDataKind,
+    VendorChainContext, VendorMakeContext, ViewDataContext, ViewDataKind,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
@@ -2035,6 +2035,271 @@ fn location(
             "end": { "line": target_line.saturating_sub(1), "character": target_column.saturating_sub(1) },
         },
     })
+}
+
+pub fn complete_vendor_chain_methods(
+    index: &ProjectIndex,
+    context: &VendorChainContext,
+    line: usize,
+) -> Vec<Value> {
+    let methods = index.vendor_chainable_methods(&context.class_fqn);
+    let mut matches: Vec<(u32, usize, String)> = methods
+        .into_iter()
+        .filter(|m| !m.starts_with('_'))
+        .filter_map(|m| {
+            let score = fuzzy_score(&m, &context.prefix)?;
+            let len = m.len();
+            Some((score, len, m))
+        })
+        .collect();
+    matches.sort_by_key(|(score, len, label)| (Reverse(*score), *len, label.clone()));
+    matches.dedup_by(|a, b| a.2 == b.2);
+    matches
+        .into_iter()
+        .map(|(_, _, name)| vendor_chain_method_completion(&name, context, line))
+        .collect()
+}
+
+/// Walk upward from `current_file` (up to 4 directory levels) looking for a PHP file that:
+/// - contains `$form_class_name` (references the form class by name), AND
+/// - contains `$model = SomeModel::class`
+/// Returns the model short name when found.
+fn find_model_via_sibling_resource(
+    current_file: Option<&std::path::Path>,
+    form_class_name: Option<&str>,
+    project_root: &std::path::Path,
+) -> Option<String> {
+    let file = current_file?;
+    let form_class = form_class_name?;
+
+    let mut dir = file.parent()?;
+    for _ in 0..4 {
+        if !dir.starts_with(project_root) {
+            break;
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("php") {
+                    continue;
+                }
+                if path == file {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                if !content.contains(form_class) {
+                    continue;
+                }
+                if let Some(model) = extract_model_class_from_text(&content) {
+                    return Some(model);
+                }
+            }
+        }
+        dir = dir.parent()?;
+    }
+    None
+}
+
+fn extract_model_class_from_text(source: &str) -> Option<String> {
+    for line in source.lines() {
+        let t = line.trim();
+        if t.contains("$model") && t.contains("::class") {
+            let class_pos = t.rfind("::class")?;
+            let before = &t[..class_pos];
+            let name: String = before
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '\\')
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn vendor_chain_method_completion(name: &str, context: &VendorChainContext, line: usize) -> Value {
+    json!({
+        "label": name,
+        "kind": 2,  // Method
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end":   { "line": line, "character": context.end_character }
+            },
+            "newText": name
+        }
+    })
+}
+
+pub fn complete_vendor_make_columns(
+    index: &ProjectIndex,
+    context: &VendorMakeContext,
+    line: usize,
+) -> Vec<Value> {
+    let resolved_model = context.model_class.as_deref().map(str::to_string).or_else(|| {
+        find_model_via_sibling_resource(
+            context.current_file.as_deref(),
+            context.current_class_name.as_deref(),
+            &index.project_root,
+        )
+    });
+    let model_class = match resolved_model.as_deref() {
+        Some(c) if !c.is_empty() => c,
+        _ => return Vec::new(),
+    };
+
+    let Some(model) = index.model_for_class(model_class) else {
+        return Vec::new();
+    };
+
+    let prefix = &context.prefix;
+
+    // Dot-notation: user types `relation.col_prefix` — suggest related model's columns.
+    if let Some(dot_pos) = prefix.find('.') {
+        let relation_name = &prefix[..dot_pos];
+        let col_prefix = &prefix[dot_pos + 1..];
+        let Some(relation) = model.relations.iter().find(|r| r.method == relation_name) else {
+            return Vec::new();
+        };
+        let Some(related_model) = index.model_for_class(&relation.related_model) else {
+            return Vec::new();
+        };
+        let mut matches: Vec<(u32, usize, String)> = related_model
+            .columns
+            .iter()
+            .filter_map(|col| {
+                let score = fuzzy_score(&col.name, col_prefix)?;
+                Some((score, col.name.len(), col.name.clone()))
+            })
+            .collect();
+        matches.sort_by_key(|(score, len, label)| (Reverse(*score), *len, label.clone()));
+        matches.dedup_by(|a, b| a.2 == b.2);
+        return matches
+            .into_iter()
+            .map(|(_, _, col_name)| {
+                let full_name = format!("{relation_name}.{col_name}");
+                vendor_make_field_completion(
+                    &full_name,
+                    &col_name,
+                    5,
+                    &format!("{} column", relation.related_model),
+                    context,
+                    line,
+                )
+            })
+            .collect();
+    }
+
+    // Flat suggestions: columns + relation names + scopes.
+    enum Kind { Column(String), Relation(String, String), Scope }
+    let mut candidates: Vec<(u32, usize, String, Kind)> = Vec::new();
+
+    for col in &model.columns {
+        if let Some(score) = fuzzy_score(&col.name, prefix) {
+            let detail = format!("{} {}", col.column_type, if col.nullable { "nullable" } else { "" }).trim().to_string();
+            candidates.push((score, col.name.len(), col.name.clone(), Kind::Column(detail)));
+        }
+    }
+
+    for rel in &model.relations {
+        if let Some(score) = fuzzy_score(&rel.method, prefix) {
+            let detail = format!("{} {}", rel.relation_type, rel.related_model);
+            candidates.push((score, rel.method.len(), rel.method.clone(), Kind::Relation(detail, rel.related_model.clone())));
+        }
+    }
+
+    for scope in &model.scopes {
+        if let Some(score) = fuzzy_score(scope, prefix) {
+            candidates.push((score, scope.len(), scope.clone(), Kind::Scope));
+        }
+    }
+
+    candidates.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
+    candidates.dedup_by(|a, b| a.2 == b.2);
+    candidates
+        .into_iter()
+        .map(|(_, _, name, kind)| match kind {
+            Kind::Column(detail) => vendor_make_field_completion(&name, &name, 5, &detail, context, line),
+            Kind::Relation(detail, _related) => vendor_make_field_completion(&name, &name, 18, &detail, context, line),
+            Kind::Scope => vendor_make_field_completion(&name, &name, 3, "scope", context, line),
+        })
+        .collect()
+}
+
+fn vendor_make_field_completion(
+    new_text: &str,
+    label: &str,
+    kind: u8,
+    detail: &str,
+    context: &VendorMakeContext,
+    line: usize,
+) -> Value {
+    json!({
+        "label": label,
+        "kind": kind,
+        "detail": detail,
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end":   { "line": line, "character": context.end_character }
+            },
+            "newText": new_text
+        }
+    })
+}
+
+pub fn complete_builder_arg_columns(
+    index: &ProjectIndex,
+    context: &BuilderArgContext,
+    line: usize,
+) -> Vec<Value> {
+    let Some(model) = index.model_for_class(&context.model_class) else {
+        return Vec::new();
+    };
+
+    let prefix = &context.prefix;
+    let mut matches: Vec<(u32, usize, String, String)> = model
+        .columns
+        .iter()
+        .filter_map(|col| {
+            let score = fuzzy_score(&col.name, prefix)?;
+            let detail = format!(
+                "{} {}",
+                col.column_type,
+                if col.nullable { "nullable" } else { "" }
+            )
+            .trim()
+            .to_string();
+            Some((score, col.name.len(), col.name.clone(), detail))
+        })
+        .collect();
+
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
+    matches.dedup_by(|a, b| a.2 == b.2);
+    matches
+        .into_iter()
+        .map(|(_, _, name, detail)| {
+            json!({
+                "label": name,
+                "kind": 5,  // Field
+                "detail": detail,
+                "textEdit": {
+                    "range": {
+                        "start": { "line": line, "character": context.start_character },
+                        "end":   { "line": line, "character": context.end_character }
+                    },
+                    "newText": name
+                }
+            })
+        })
+        .collect()
 }
 
 fn path_to_file_uri(path: &std::path::Path) -> String {
