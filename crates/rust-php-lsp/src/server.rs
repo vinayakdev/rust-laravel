@@ -12,10 +12,10 @@ use serde_json::{Value, json};
 
 use super::context::{
     detect_blade_component_attr_context, detect_blade_component_tag_context,
-    detect_blade_variable_context, detect_builder_arg_context, detect_helper_context,
-    detect_livewire_component_tag_context, detect_livewire_directive_value_context,
-    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
-    detect_vendor_make_context, detect_view_data_context,
+    detect_blade_model_property_context, detect_blade_variable_context,
+    detect_builder_arg_context, detect_helper_context, detect_livewire_component_tag_context,
+    detect_livewire_directive_value_context, detect_route_action_context, detect_symbol_context,
+    detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -266,6 +266,23 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
         ));
         (
             query::complete_view_data_variables(source, &context, line),
+            true,
+        )
+    } else if let Some(context) = detect_blade_model_property_context(uri, source, line, character) {
+        let relative = file_uri_to_path(uri).and_then(|path| {
+            path.strip_prefix(&index.project_root)
+                .ok()
+                .map(PathBuf::from)
+        });
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=blade-model-property var={:?} prefix={:?}",
+            line, character, context.variable_name, context.prefix
+        ));
+        (
+            relative
+                .as_deref()
+                .map(|file| query::complete_blade_model_properties(index, file, &context, line))
+                .unwrap_or_default(),
             true,
         )
     } else if let Some(context) = detect_blade_variable_context(uri, source, line, character) {

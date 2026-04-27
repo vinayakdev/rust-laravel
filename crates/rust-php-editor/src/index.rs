@@ -371,6 +371,23 @@ impl ProjectIndex {
             .collect()
     }
 
+    pub fn blade_variable_class_for_file(&self, file: &std::path::Path, var_name: &str) -> Option<String> {
+        self.view_report
+            .views
+            .iter()
+            .filter(|view| view.file == file)
+            .flat_map(|view| view.props.iter().chain(view.variables.iter()))
+            .chain(
+                self.view_report
+                    .livewire_components
+                    .iter()
+                    .filter(|c| c.view_file.as_deref() == Some(file))
+                    .flat_map(|c| c.state.iter()),
+            )
+            .find(|v| v.name == var_name)
+            .and_then(|v| v.class_name.clone())
+    }
+
     pub fn blade_variables_for_file<'a>(
         &'a self,
         file: &std::path::Path,

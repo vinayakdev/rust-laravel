@@ -4,10 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::context::{
-    BladeComponentAttrContext, BladeComponentTagContext, BladeVariableContext, BuilderArgContext,
-    HelperContext, HelperStyle, LivewireComponentTagContext, LivewireDirectiveValueContext,
-    LivewireDirectiveValueKind, RouteActionContext, RouteActionKind, SymbolContext, SymbolKind,
-    VendorChainContext, VendorMakeContext, ViewDataContext, ViewDataKind,
+    BladeComponentAttrContext, BladeComponentTagContext, BladeModelPropertyContext,
+    BladeVariableContext, BuilderArgContext, HelperContext, HelperStyle,
+    LivewireComponentTagContext, LivewireDirectiveValueContext, LivewireDirectiveValueKind,
+    RouteActionContext, RouteActionKind, SymbolContext, SymbolKind, VendorChainContext,
+    VendorMakeContext, ViewDataContext, ViewDataKind,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
@@ -92,6 +93,96 @@ pub fn complete_blade_view_variables(
         .blade_variables_for_file(file, &context.prefix)
         .into_iter()
         .map(|variable| blade_view_variable_completion(variable, context, line))
+        .collect()
+}
+
+pub fn complete_blade_model_properties(
+    index: &ProjectIndex,
+    file: &Path,
+    context: &BladeModelPropertyContext,
+    line: usize,
+) -> Vec<Value> {
+    let class_name = match index.blade_variable_class_for_file(file, &context.variable_name) {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+    let Some(model) = index.model_for_class(&class_name) else {
+        return Vec::new();
+    };
+
+    let prefix = &context.prefix;
+    enum Kind {
+        Column(String),
+        Relation(String),
+        Accessor,
+        Append,
+        Scope,
+    }
+    let mut candidates: Vec<(u32, usize, String, Kind)> = Vec::new();
+
+    for col in &model.columns {
+        if let Some(score) = fuzzy_score(&col.name, prefix) {
+            let detail = format!(
+                "{} {}",
+                col.column_type,
+                if col.nullable { "nullable" } else { "" }
+            )
+            .trim()
+            .to_string();
+            candidates.push((score, col.name.len(), col.name.clone(), Kind::Column(detail)));
+        }
+    }
+
+    for rel in &model.relations {
+        if let Some(score) = fuzzy_score(&rel.method, prefix) {
+            let detail = format!("{} → {}", rel.relation_type, rel.related_model);
+            candidates.push((score, rel.method.len(), rel.method.clone(), Kind::Relation(detail)));
+        }
+    }
+
+    for name in &model.accessors {
+        if let Some(score) = fuzzy_score(name, prefix) {
+            candidates.push((score, name.len(), name.clone(), Kind::Accessor));
+        }
+    }
+
+    for name in &model.appends {
+        if let Some(score) = fuzzy_score(name, prefix) {
+            candidates.push((score, name.len(), name.clone(), Kind::Append));
+        }
+    }
+
+    for name in &model.scopes {
+        if let Some(score) = fuzzy_score(name, prefix) {
+            candidates.push((score, name.len(), name.clone(), Kind::Scope));
+        }
+    }
+
+    candidates.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
+    candidates.dedup_by(|a, b| a.2 == b.2);
+    candidates
+        .into_iter()
+        .map(|(_, _, name, kind)| {
+            let (item_kind, detail) = match kind {
+                Kind::Column(d) => (5u8, d),
+                Kind::Relation(d) => (18, d),
+                Kind::Accessor => (5, "accessor".to_string()),
+                Kind::Append => (5, "appended attribute".to_string()),
+                Kind::Scope => (3, "scope".to_string()),
+            };
+            json!({
+                "label": name,
+                "kind": item_kind,
+                "detail": detail,
+                "textEdit": {
+                    "range": {
+                        "start": { "line": line, "character": context.start_character },
+                        "end":   { "line": line, "character": context.end_character }
+                    },
+                    "newText": name
+                }
+            })
+        })
         .collect()
 }
 
