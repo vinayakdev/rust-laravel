@@ -480,7 +480,10 @@ pub fn detect_blade_variable_context(
     let line_text = source.lines().nth(line)?;
     let cursor = character_to_byte_index(line_text, character)?;
 
-    if !is_inside_blade_echo(line_text, cursor) && !is_inside_blade_php(source, line, cursor) {
+    if !is_inside_blade_echo(line_text, cursor)
+        && !is_inside_blade_php(source, line, cursor)
+        && !is_inside_blade_directive_parens(line_text, cursor)
+    {
         return None;
     }
 
@@ -513,7 +516,10 @@ pub fn detect_blade_model_property_context(
     let line_text = source.lines().nth(line)?;
     let cursor = character_to_byte_index(line_text, character)?;
 
-    if !is_inside_blade_echo(line_text, cursor) && !is_inside_blade_php(source, line, cursor) {
+    if !is_inside_blade_echo(line_text, cursor)
+        && !is_inside_blade_php(source, line, cursor)
+        && !is_inside_blade_directive_parens(line_text, cursor)
+    {
         return None;
     }
 
@@ -529,6 +535,11 @@ pub fn detect_blade_model_property_context(
         return None;
     }
 
+    // If var_name is a @foreach iteration variable, resolve it to the collection
+    // variable so the index can look up its model class.
+    let resolved_var = find_foreach_collection_var(source, line, &var_name)
+        .unwrap_or(var_name);
+
     let after_arrow = arrow_byte + 2;
     let mut prop_end = cursor;
     while prop_end < line_text.len() {
@@ -540,7 +551,7 @@ pub fn detect_blade_model_property_context(
     }
 
     Some(BladeModelPropertyContext {
-        variable_name: var_name,
+        variable_name: resolved_var,
         prefix: line_text[after_arrow..cursor.min(prop_end)].to_string(),
         start_character: line_text[..after_arrow].chars().count(),
         end_character: line_text[..prop_end].chars().count(),
@@ -1046,6 +1057,87 @@ fn find_dollar_variable_name_bounds(text: &str, cursor: usize) -> Option<(usize,
 
 fn is_identifier_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn is_inside_blade_directive_parens(line_text: &str, cursor: usize) -> bool {
+    let before = &line_text[..cursor];
+    // Walk backward to find the last `@word(` whose parens are still open at cursor.
+    let bytes = before.as_bytes();
+    let mut i = bytes.len().saturating_sub(1);
+    loop {
+        // Find the previous `@`
+        let at = match before[..=i].rfind('@') {
+            Some(pos) => pos,
+            None => return false,
+        };
+        let after_at = &before[at + 1..];
+        let name_len = after_at
+            .find(|c: char| !c.is_alphabetic())
+            .unwrap_or(after_at.len());
+        // Must have at least one letter followed immediately by `(`
+        if name_len > 0 {
+            let paren_pos = at + 1 + name_len;
+            if before.as_bytes().get(paren_pos) == Some(&b'(') {
+                // Count depth from the opening `(` to cursor
+                let mut depth = 0i32;
+                for ch in before[paren_pos..].chars() {
+                    match ch {
+                        '(' => depth += 1,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                }
+                if depth > 0 {
+                    return true;
+                }
+            }
+        }
+        if at == 0 {
+            return false;
+        }
+        i = at - 1;
+    }
+}
+
+/// Scan backward from `current_line` through `source` to find an enclosing
+/// `@foreach($collection as $item)` that introduces `item_var`. Returns the
+/// collection variable name (without `$`) when found.
+fn find_foreach_collection_var(source: &str, current_line: usize, item_var: &str) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut open_endforeach: usize = 0;
+    let item_dollar = format!("${item_var}");
+
+    for ln in (0..current_line).rev() {
+        let text = lines.get(ln)?.trim();
+        if text.starts_with("@endforeach") {
+            open_endforeach += 1;
+            continue;
+        }
+        if let Some(rest) = text.strip_prefix("@foreach") {
+            if open_endforeach > 0 {
+                open_endforeach -= 1;
+                continue;
+            }
+            // Parse `@foreach($collection as $item)` — find ` as $item_var`
+            let needle = format!(" as {item_dollar}");
+            let needle_close = format!(" as {item_dollar})");
+            if rest.contains(&needle_close) || rest.contains(&needle) {
+                // Extract collection var: first `$word` inside the parens
+                let inner = rest
+                    .find('(')
+                    .and_then(|s| rest[s + 1..].find(')').map(|e| &rest[s + 1..s + 1 + e]))?;
+                let col_start = inner.find('$')?;
+                let col: String = inner[col_start + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                if !col.is_empty() {
+                    return Some(col);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn is_inside_blade_echo(line_text: &str, cursor: usize) -> bool {
@@ -1653,10 +1745,70 @@ fn source_chars_slice(text: &str, byte_start: usize, byte_end: usize) -> String 
 mod tests {
     use super::{
         RouteActionKind, SymbolKind, ViewDataKind, detect_blade_component_attr_context,
-        detect_blade_model_property_context, detect_builder_arg_context,
-        detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
-        detect_vendor_make_context, detect_view_data_context,
+        detect_blade_model_property_context, detect_blade_variable_context,
+        detect_builder_arg_context, detect_route_action_context, detect_symbol_context,
+        detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
     };
+
+    #[test]
+    fn detects_variable_context_inside_foreach_directive() {
+        let source = "@foreach($bo as $b)";
+        let line = 0;
+        // position right after "bo" — cursor sits past both letters
+        let character = source.find("$bo").expect("$bo") + 3;
+        let ctx = detect_blade_variable_context(
+            "resources/views/list.blade.php",
+            source,
+            line,
+            character,
+        );
+        assert!(ctx.is_some(), "should detect variable inside @foreach parens");
+        assert_eq!(ctx.unwrap().prefix, "bo");
+    }
+
+    #[test]
+    fn detects_variable_context_inside_dd_directive() {
+        let source = "@dd($user)";
+        let line = 0;
+        let character = source.find("$user").expect("$user") + 3;
+        let ctx = detect_blade_variable_context(
+            "resources/views/x.blade.php",
+            source,
+            line,
+            character,
+        );
+        assert!(ctx.is_some(), "should detect variable inside @dd parens");
+    }
+
+    #[test]
+    fn detects_model_property_context_inside_foreach_directive() {
+        let source = "@foreach($books as $book->na)";
+        let line = 0;
+        let character = source.find("->na").expect("->na") + 4;
+        let ctx = detect_blade_model_property_context(
+            "resources/views/x.blade.php",
+            source,
+            line,
+            character,
+        );
+        assert!(ctx.is_some(), "should detect model property inside @foreach parens");
+    }
+
+    #[test]
+    fn resolves_foreach_item_var_to_collection_var() {
+        let source = "@foreach($books as $book)\n{{ $book->na }}\n@endforeach";
+        let line = 1;
+        let character = source.lines().nth(1).unwrap().find("->na").unwrap() + 4;
+        let ctx = detect_blade_model_property_context(
+            "resources/views/x.blade.php",
+            source,
+            line,
+            character,
+        )
+        .expect("should detect model property context");
+        assert_eq!(ctx.variable_name, "books", "item var should resolve to collection var");
+        assert_eq!(ctx.prefix, "na");
+    }
 
     #[test]
     fn blade_component_attr_ignores_cursor_inside_attribute_value() {
