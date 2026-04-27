@@ -674,6 +674,111 @@ pub fn route_action_code_actions(index: &ProjectIndex, diagnostics: &[Value]) ->
         .collect()
 }
 
+pub fn blade_component_create_actions(
+    index: &ProjectIndex,
+    context: &BladeComponentTagContext,
+) -> Vec<Value> {
+    let name = &context.full_text;
+    if name.is_empty() || !index.blade_component_definitions(name).is_empty() {
+        return Vec::new();
+    }
+
+    let root = &index.project_root;
+
+    // dots → directory separators, kebab segments kept as-is
+    let rel_path: std::path::PathBuf = name.split('.').collect();
+    let view_rel = std::path::Path::new("resources/views/components").join(&rel_path).with_extension("blade.php");
+    let view_abs = root.join(&view_rel);
+    let view_uri = path_to_file_uri(&view_abs);
+
+    // Convert kebab-case segment to PascalCase
+    let pascal = |seg: &str| -> String {
+        seg.split('-')
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                }
+            })
+            .collect()
+    };
+
+    let class_segments: Vec<String> = name.split('.').map(|seg| pascal(seg)).collect();
+    let class_rel = std::path::Path::new("app/View/Components")
+        .join(class_segments.iter().collect::<std::path::PathBuf>())
+        .with_extension("php");
+    let class_abs = root.join(&class_rel);
+    let class_uri = path_to_file_uri(&class_abs);
+
+    let short_class = class_segments.last().cloned().unwrap_or_default();
+    let namespace = if class_segments.len() > 1 {
+        format!("App\\View\\Components\\{}", class_segments[..class_segments.len() - 1].join("\\"))
+    } else {
+        "App\\View\\Components".to_string()
+    };
+    let view_name = format!("components.{name}");
+
+    let anon_content = "<div>\n    {{ $slot }}\n</div>\n";
+
+    let class_php = format!(
+        "<?php\n\nnamespace {namespace};\n\nuse Illuminate\\View\\Component;\n\nclass {short_class} extends Component\n{{\n    public function render()\n    {{\n        return view('{view_name}');\n    }}\n}}\n"
+    );
+    let class_blade = "<div>\n    {{ $slot }}\n</div>\n";
+
+    let mut actions = vec![
+        json!({
+            "title": format!("Create anonymous component <x-{name} />"),
+            "kind": "quickfix",
+            "edit": {
+                "documentChanges": [
+                    { "kind": "create", "uri": view_uri, "options": { "ignoreIfExists": true } },
+                    {
+                        "textDocument": { "uri": view_uri, "version": null },
+                        "edits": [{
+                            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
+                            "newText": anon_content
+                        }]
+                    }
+                ]
+            }
+        }),
+        json!({
+            "title": format!("Create class component <x-{name} />"),
+            "kind": "quickfix",
+            "edit": {
+                "documentChanges": [
+                    { "kind": "create", "uri": class_uri, "options": { "ignoreIfExists": true } },
+                    {
+                        "textDocument": { "uri": class_uri, "version": null },
+                        "edits": [{
+                            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
+                            "newText": class_php
+                        }]
+                    },
+                    { "kind": "create", "uri": view_uri, "options": { "ignoreIfExists": true } },
+                    {
+                        "textDocument": { "uri": view_uri, "version": null },
+                        "edits": [{
+                            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
+                            "newText": class_blade
+                        }]
+                    }
+                ]
+            }
+        }),
+    ];
+
+    // Mark anonymous as preferred when there's no existing class component convention
+    if let Some(first) = actions.first_mut() {
+        if let Some(obj) = first.as_object_mut() {
+            obj.insert("isPreferred".to_string(), json!(true));
+        }
+    }
+
+    actions
+}
+
 pub fn asset_code_actions(index: &ProjectIndex, context: &SymbolContext) -> Vec<Value> {
     let Some(relative) = asset_location(index, &context.full_text) else {
         return Vec::new();

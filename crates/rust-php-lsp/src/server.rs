@@ -467,7 +467,7 @@ fn code_action_result(state: &ServerState, params: Option<&Value>) -> Value {
     let Some(params) = params else {
         return Value::Array(Vec::new());
     };
-    let Some((_uri, source, line, character)) = source_and_position_from_range(state, Some(params))
+    let Some((uri, source, line, character)) = source_and_position_from_range(state, Some(params))
     else {
         return Value::Array(Vec::new());
     };
@@ -485,6 +485,10 @@ fn code_action_result(state: &ServerState, params: Option<&Value>) -> Value {
         if context.kind == super::context::SymbolKind::Asset {
             actions.extend(query::asset_code_actions(index, &context));
         }
+    }
+
+    if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
+        actions.extend(query::blade_component_create_actions(index, &context));
     }
 
     Value::Array(actions)
