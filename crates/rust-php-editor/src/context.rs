@@ -492,6 +492,61 @@ pub fn detect_blade_variable_context(
     })
 }
 
+#[derive(Clone, Debug)]
+pub struct BladeModelPropertyContext {
+    pub variable_name: String,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
+pub fn detect_blade_model_property_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<BladeModelPropertyContext> {
+    if !uri.ends_with(".blade.php") {
+        return None;
+    }
+
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+
+    if !is_inside_blade_echo(line_text, cursor) && !is_inside_blade_php(source, line, cursor) {
+        return None;
+    }
+
+    let arrow_byte = find_last_arrow_before(line_text, cursor)?;
+    let before_arrow = &line_text[..arrow_byte];
+
+    let dollar_pos = before_arrow.rfind('$')?;
+    let var_name: String = before_arrow[dollar_pos + 1..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .collect();
+    if var_name.is_empty() {
+        return None;
+    }
+
+    let after_arrow = arrow_byte + 2;
+    let mut prop_end = cursor;
+    while prop_end < line_text.len() {
+        let ch = line_text[prop_end..].chars().next()?;
+        if !is_identifier_char(ch) {
+            break;
+        }
+        prop_end += ch.len_utf8();
+    }
+
+    Some(BladeModelPropertyContext {
+        variable_name: var_name,
+        prefix: line_text[after_arrow..cursor.min(prop_end)].to_string(),
+        start_character: line_text[..after_arrow].chars().count(),
+        end_character: line_text[..prop_end].chars().count(),
+    })
+}
+
 fn detect_kind(before: &str) -> Option<SymbolKind> {
     let compact: String = before.chars().filter(|ch| !ch.is_whitespace()).collect();
 
@@ -1598,8 +1653,9 @@ fn source_chars_slice(text: &str, byte_start: usize, byte_end: usize) -> String 
 mod tests {
     use super::{
         RouteActionKind, SymbolKind, ViewDataKind, detect_blade_component_attr_context,
-        detect_builder_arg_context, detect_route_action_context, detect_symbol_context,
-        detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
+        detect_blade_model_property_context, detect_builder_arg_context,
+        detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
+        detect_vendor_make_context, detect_view_data_context,
     };
 
     #[test]
@@ -1634,6 +1690,41 @@ mod tests {
         let ctx = ctx.unwrap();
         assert_eq!(ctx.component, "button");
         assert_eq!(ctx.prefix, "var");
+    }
+
+    #[test]
+    fn detects_blade_model_property_context_in_echo() {
+        let source = "{{ $user->na }}";
+        let line = 0;
+        let character = source.find("na").expect("na") + 1;
+        let ctx = detect_blade_model_property_context(
+            "resources/views/profile.blade.php",
+            source,
+            line,
+            character,
+        )
+        .expect("should detect model property context");
+        assert_eq!(ctx.variable_name, "user");
+        assert_eq!(ctx.prefix, "n");
+    }
+
+    #[test]
+    fn blade_model_property_context_ignores_non_blade_files() {
+        let source = "{{ $user->na }}";
+        let ctx = detect_blade_model_property_context("app/Http/Controllers/Foo.php", source, 0, 12);
+        assert!(ctx.is_none());
+    }
+
+    #[test]
+    fn blade_model_property_context_ignores_outside_echo() {
+        let source = "$user->name";
+        let ctx = detect_blade_model_property_context(
+            "resources/views/x.blade.php",
+            source,
+            0,
+            source.len(),
+        );
+        assert!(ctx.is_none());
     }
 
     #[test]
