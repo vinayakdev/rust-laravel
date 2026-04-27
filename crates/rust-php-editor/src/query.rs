@@ -719,12 +719,20 @@ pub fn blade_component_create_actions(
     };
     let view_name = format!("components.{name}");
 
-    let anon_content = "<div>\n    {{ $slot }}\n</div>\n";
+    let anon_content = if context.self_closing {
+        "<div>\n</div>\n".to_string()
+    } else {
+        "<div>\n    {{ $slot }}\n</div>\n".to_string()
+    };
 
     let class_php = format!(
         "<?php\n\nnamespace {namespace};\n\nuse Illuminate\\View\\Component;\n\nclass {short_class} extends Component\n{{\n    public function render()\n    {{\n        return view('{view_name}');\n    }}\n}}\n"
     );
-    let class_blade = "<div>\n    {{ $slot }}\n</div>\n";
+    let class_blade = if context.self_closing {
+        "<div>\n</div>\n".to_string()
+    } else {
+        "<div>\n    {{ $slot }}\n</div>\n".to_string()
+    };
 
     let mut actions = vec![
         json!({

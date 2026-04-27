@@ -79,6 +79,7 @@ pub struct BladeComponentTagContext {
     pub tag_start_character: usize,
     pub start_character: usize,
     pub end_character: usize,
+    pub self_closing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -152,6 +153,17 @@ pub fn detect_blade_component_tag_context(
         tag_start + 1
     };
 
+    // Detect self-closing: scan forward from name_end to find `/>` or `>`
+    let self_closing = {
+        let after = &line_text[name_end..];
+        // find the first `>` in the tag tail; check if preceded by `/`
+        if let Some(gt_pos) = after.find('>') {
+            gt_pos > 0 && after.as_bytes()[gt_pos - 1] == b'/'
+        } else {
+            false
+        }
+    };
+
     Some(BladeComponentTagContext {
         full_text: line_text[name_start..name_end].to_string(),
         prefix: between.to_string(),
@@ -159,6 +171,7 @@ pub fn detect_blade_component_tag_context(
         tag_start_character: line_text[..tag_start].chars().count(),
         start_character: line_text[..replace_start].chars().count(),
         end_character: line_text[..name_end].chars().count(),
+        self_closing,
     })
 }
 
