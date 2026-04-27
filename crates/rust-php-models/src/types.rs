@@ -40,6 +40,7 @@ pub struct ModelEntry {
     pub scopes: Vec<String>,
     pub accessors: Vec<String>,
     pub mutators: Vec<String>,
+    pub methods: Vec<String>,
     pub columns: Vec<ColumnEntry>,
 }
 

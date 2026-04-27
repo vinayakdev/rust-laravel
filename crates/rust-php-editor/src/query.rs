@@ -117,6 +117,7 @@ pub fn complete_blade_model_properties(
         Accessor,
         Append,
         Scope,
+        Method,
     }
     let mut candidates: Vec<(u32, usize, String, Kind)> = Vec::new();
 
@@ -158,6 +159,12 @@ pub fn complete_blade_model_properties(
         }
     }
 
+    for name in &model.methods {
+        if let Some(score) = fuzzy_score(name, prefix) {
+            candidates.push((score, name.len(), name.clone(), Kind::Method));
+        }
+    }
+
     candidates.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
     candidates.dedup_by(|a, b| a.2 == b.2);
     candidates
@@ -169,6 +176,7 @@ pub fn complete_blade_model_properties(
                 Kind::Accessor => (5, "accessor".to_string()),
                 Kind::Append => (5, "appended attribute".to_string()),
                 Kind::Scope => (3, "scope".to_string()),
+                Kind::Method => (2, "method".to_string()),
             };
             json!({
                 "label": name,
