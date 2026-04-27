@@ -243,6 +243,14 @@ pub fn detect_blade_component_attr_context(
         tok_start -= prev.len_utf8();
     }
 
+    // If the walk stopped at a quote, the cursor is inside an attribute value, not a name
+    if tok_start > 0 {
+        let stop_char = line_text[..tok_start].chars().next_back();
+        if matches!(stop_char, Some('"') | Some('\'')) {
+            return None;
+        }
+    }
+
     let attr_area = &before[name_end..tok_start];
     let already_present = parse_existing_attributes(attr_area);
 
@@ -1589,10 +1597,44 @@ fn source_chars_slice(text: &str, byte_start: usize, byte_end: usize) -> String 
 #[cfg(test)]
 mod tests {
     use super::{
-        RouteActionKind, SymbolKind, ViewDataKind, detect_builder_arg_context,
-        detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
-        detect_vendor_make_context, detect_view_data_context,
+        RouteActionKind, SymbolKind, ViewDataKind, detect_blade_component_attr_context,
+        detect_builder_arg_context, detect_route_action_context, detect_symbol_context,
+        detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
     };
+
+    #[test]
+    fn blade_component_attr_ignores_cursor_inside_attribute_value() {
+        // Cursor inside route('book') — should NOT match attr context so route completion can fire
+        let source = "<x-button href=\"{{ route('book') }}\" variant=\"primary\">Book</x-button>";
+        let line = 0;
+        let line_text = source;
+        let character = line_text.find("book").expect("book") + 2; // mid-word in 'book'
+        let ctx = detect_blade_component_attr_context(
+            "resources/views/home.blade.php",
+            source,
+            line,
+            character,
+        );
+        assert!(ctx.is_none(), "should not match inside a quoted attribute value");
+    }
+
+    #[test]
+    fn blade_component_attr_matches_at_attribute_name() {
+        // Cursor at an attribute name position — should still match
+        let source = "<x-button var";
+        let line = 0;
+        let character = source.len(); // cursor at end, typing "var"
+        let ctx = detect_blade_component_attr_context(
+            "resources/views/home.blade.php",
+            source,
+            line,
+            character,
+        );
+        assert!(ctx.is_some(), "should match when cursor is at an attribute name position");
+        let ctx = ctx.unwrap();
+        assert_eq!(ctx.component, "button");
+        assert_eq!(ctx.prefix, "var");
+    }
 
     #[test]
     fn detects_vendor_chain_context_on_arrow() {
