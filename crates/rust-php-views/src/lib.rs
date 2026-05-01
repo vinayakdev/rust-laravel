@@ -1200,7 +1200,14 @@ fn extract_class_from_expr(
     match expr {
         Expr::StaticCall { class, .. } => resolve_expr_class_name(class, source, imports),
         Expr::New { class, .. } => resolve_expr_class_name(class, source, imports),
-        Expr::MethodCall { target, .. } => extract_class_from_expr(target, source, imports),
+        Expr::MethodCall { target, method, .. } => {
+            match expr_name(method, source).as_deref() {
+                Some("paginate") => Some("LengthAwarePaginator".to_string()),
+                Some("simplePaginate") => Some("Paginator".to_string()),
+                Some("cursorPaginate") => Some("CursorPaginator".to_string()),
+                _ => extract_class_from_expr(target, source, imports),
+            }
+        }
         _ => None,
     }
 }

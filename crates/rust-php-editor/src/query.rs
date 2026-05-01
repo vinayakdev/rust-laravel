@@ -129,10 +129,22 @@ pub fn complete_blade_model_properties(
     context: &BladeModelPropertyContext,
     line: usize,
 ) -> Vec<Value> {
+    if context.variable_name == "loop" {
+        return complete_loop_variable_properties(context, line);
+    }
+
     let class_name = match index.blade_variable_class_for_file(file, &context.variable_name) {
         Some(c) => c,
         None => return Vec::new(),
     };
+
+    if matches!(
+        class_name.as_str(),
+        "LengthAwarePaginator" | "Paginator" | "CursorPaginator"
+    ) {
+        return complete_paginator_methods(context, &class_name, line);
+    }
+
     let Some(model) = index.model_for_class(&class_name) else {
         return Vec::new();
     };
@@ -218,6 +230,100 @@ pub fn complete_blade_model_properties(
                 }
             })
         })
+        .collect()
+}
+
+fn complete_loop_variable_properties(context: &BladeModelPropertyContext, line: usize) -> Vec<Value> {
+    struct LoopProp {
+        name: &'static str,
+        ty: &'static str,
+        doc: &'static str,
+    }
+    const PROPS: &[LoopProp] = &[
+        LoopProp { name: "index",     ty: "int",   doc: "Zero-based index of the current iteration." },
+        LoopProp { name: "iteration", ty: "int",   doc: "One-based iteration count (starts at 1)." },
+        LoopProp { name: "remaining", ty: "int",   doc: "Iterations remaining in the loop." },
+        LoopProp { name: "count",     ty: "int",   doc: "Total number of items in the collection." },
+        LoopProp { name: "first",     ty: "bool",  doc: "Whether this is the first iteration." },
+        LoopProp { name: "last",      ty: "bool",  doc: "Whether this is the last iteration." },
+        LoopProp { name: "even",      ty: "bool",  doc: "Whether this is an even-numbered iteration." },
+        LoopProp { name: "odd",       ty: "bool",  doc: "Whether this is an odd-numbered iteration." },
+        LoopProp { name: "depth",     ty: "int",   doc: "Nesting level of the current loop (1 = outermost)." },
+        LoopProp { name: "parent",    ty: "?Loop", doc: "The parent loop's `$loop` variable when nested." },
+    ];
+    PROPS
+        .iter()
+        .filter(|p| {
+            context.prefix.is_empty()
+                || p.name.contains(context.prefix.as_str())
+        })
+        .map(|p| json!({
+            "label": p.name,
+            "kind": 5,
+            "detail": format!("{} — $loop", p.ty),
+            "documentation": { "kind": "markdown", "value": p.doc },
+            "textEdit": {
+                "range": {
+                    "start": { "line": line, "character": context.start_character },
+                    "end":   { "line": line, "character": context.end_character },
+                },
+                "newText": p.name,
+            }
+        }))
+        .collect()
+}
+
+fn complete_paginator_methods(
+    context: &BladeModelPropertyContext,
+    class_name: &str,
+    line: usize,
+) -> Vec<Value> {
+    struct PaginatorMethod {
+        name: &'static str,
+        insert: &'static str,
+        detail: &'static str,
+        doc: &'static str,
+        all_paginators: bool,
+    }
+    const METHODS: &[PaginatorMethod] = &[
+        PaginatorMethod { name: "links()",            insert: "links()",                         detail: "string",  doc: "Render the pagination links HTML.",                        all_paginators: true },
+        PaginatorMethod { name: "withQueryString()",  insert: "withQueryString()",               detail: "static",  doc: "Append the current query string to pagination links.",     all_paginators: true },
+        PaginatorMethod { name: "appends()",          insert: "appends([${1:key} => ${2:val}])", detail: "static",  doc: "Append key/value pairs to the pagination query string.",   all_paginators: true },
+        PaginatorMethod { name: "onEachSide()",       insert: "onEachSide(${1:3})",              detail: "static",  doc: "Number of links to show on each side of the current page.", all_paginators: true },
+        PaginatorMethod { name: "count()",            insert: "count()",                         detail: "int",     doc: "Number of items on the current page.",                    all_paginators: true },
+        PaginatorMethod { name: "perPage()",          insert: "perPage()",                       detail: "int",     doc: "Number of items per page.",                               all_paginators: true },
+        PaginatorMethod { name: "currentPage()",      insert: "currentPage()",                   detail: "int",     doc: "Current page number.",                                    all_paginators: true },
+        PaginatorMethod { name: "hasPages()",         insert: "hasPages()",                      detail: "bool",    doc: "Whether there are multiple pages.",                       all_paginators: true },
+        PaginatorMethod { name: "hasMorePages()",     insert: "hasMorePages()",                  detail: "bool",    doc: "Whether there are more pages after the current one.",     all_paginators: true },
+        PaginatorMethod { name: "nextPageUrl()",      insert: "nextPageUrl()",                   detail: "?string", doc: "URL of the next page, or null.",                          all_paginators: true },
+        PaginatorMethod { name: "previousPageUrl()",  insert: "previousPageUrl()",               detail: "?string", doc: "URL of the previous page, or null.",                      all_paginators: true },
+        PaginatorMethod { name: "url()",              insert: "url(${1:\\$page})",               detail: "string",  doc: "URL for the given page number.",                          all_paginators: true },
+        PaginatorMethod { name: "items()",            insert: "items()",                         detail: "array",   doc: "Items on the current page.",                              all_paginators: true },
+        PaginatorMethod { name: "isEmpty()",          insert: "isEmpty()",                       detail: "bool",    doc: "Whether the result set is empty.",                        all_paginators: true },
+        PaginatorMethod { name: "isNotEmpty()",       insert: "isNotEmpty()",                    detail: "bool",    doc: "Whether the result set is not empty.",                    all_paginators: true },
+        PaginatorMethod { name: "total()",            insert: "total()",                         detail: "int",     doc: "Total number of matching items (not available on SimplePaginator/CursorPaginator).", all_paginators: false },
+        PaginatorMethod { name: "lastPage()",         insert: "lastPage()",                      detail: "int",     doc: "Last available page number (not available on SimplePaginator/CursorPaginator).",     all_paginators: false },
+    ];
+    let is_length_aware = class_name == "LengthAwarePaginator";
+    METHODS
+        .iter()
+        .filter(|m| (m.all_paginators || is_length_aware) && (
+            context.prefix.is_empty() || m.name.contains(context.prefix.as_str())
+        ))
+        .map(|m| json!({
+            "label": m.name,
+            "kind": 2,
+            "detail": format!("{} — {}", m.detail, class_name),
+            "insertTextFormat": 2,
+            "documentation": { "kind": "markdown", "value": m.doc },
+            "textEdit": {
+                "range": {
+                    "start": { "line": line, "character": context.start_character },
+                    "end":   { "line": line, "character": context.end_character },
+                },
+                "newText": m.insert,
+            }
+        }))
         .collect()
 }
 
