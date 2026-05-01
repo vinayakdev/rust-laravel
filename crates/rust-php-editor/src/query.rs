@@ -89,11 +89,38 @@ pub fn complete_blade_view_variables(
     context: &BladeVariableContext,
     line: usize,
 ) -> Vec<Value> {
-    index
+    let mut items: Vec<Value> = index
         .blade_variables_for_file(file, &context.prefix)
         .into_iter()
         .map(|variable| blade_view_variable_completion(variable, context, line))
-        .collect()
+        .collect();
+
+    for var_name in &context.foreach_vars {
+        let prefix_lower = context.prefix.to_lowercase();
+        if !context.prefix.is_empty() && !var_name.to_lowercase().contains(&prefix_lower) {
+            continue;
+        }
+        items.push(json!({
+            "label": var_name,
+            "filterText": var_name,
+            "kind": 6,
+            "detail": "Foreach loop variable",
+            "insertTextFormat": 2,
+            "documentation": {
+                "kind": "markdown",
+                "value": format!("`${}` — foreach loop variable", var_name),
+            },
+            "textEdit": {
+                "range": {
+                    "start": { "line": line, "character": context.start_character },
+                    "end": { "line": line, "character": context.end_character },
+                },
+                "newText": var_name,
+            }
+        }));
+    }
+
+    items
 }
 
 pub fn complete_blade_model_properties(

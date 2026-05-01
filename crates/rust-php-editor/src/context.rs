@@ -37,6 +37,7 @@ pub struct BladeVariableContext {
     pub prefix: String,
     pub start_character: usize,
     pub end_character: usize,
+    pub foreach_vars: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -505,7 +506,39 @@ pub fn detect_blade_variable_context(
         prefix: line_text[name_start..cursor.min(name_end)].to_string(),
         start_character: line_text[..name_start].chars().count(),
         end_character: line_text[..name_end].chars().count(),
+        foreach_vars: collect_foreach_vars_in_scope(source, line),
     })
+}
+
+pub fn collect_foreach_vars_in_scope(source: &str, current_line: usize) -> Vec<String> {
+    let mut stack: Vec<String> = Vec::new();
+    for (index, line) in source.lines().enumerate() {
+        if index >= current_line {
+            break;
+        }
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("@foreach") {
+            let rest = rest.trim_start();
+            if let Some(inner) = rest.strip_prefix('(') {
+                if let Some(as_pos) = inner.find(" as ") {
+                    let after_as = &inner[as_pos + 4..];
+                    let after_as = after_as.trim_start();
+                    if let Some(var_part) = after_as.strip_prefix('$') {
+                        let var_name: String = var_part
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        if !var_name.is_empty() {
+                            stack.push(var_name);
+                        }
+                    }
+                }
+            }
+        } else if trimmed.starts_with("@endforeach") {
+            stack.pop();
+        }
+    }
+    stack
 }
 
 #[derive(Clone, Debug)]
