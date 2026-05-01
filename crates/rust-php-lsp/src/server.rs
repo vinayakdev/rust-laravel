@@ -13,9 +13,10 @@ use serde_json::{Value, json};
 use super::context::{
     detect_blade_component_attr_context, detect_blade_component_tag_context,
     detect_blade_model_property_context, detect_blade_variable_context,
-    detect_builder_arg_context, detect_helper_context, detect_livewire_component_tag_context,
-    detect_livewire_directive_value_context, detect_route_action_context, detect_symbol_context,
-    detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
+    detect_builder_arg_context, detect_foreach_alias_context, detect_helper_context,
+    detect_livewire_component_tag_context, detect_livewire_directive_value_context,
+    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
+    detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -268,6 +269,12 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
             query::complete_view_data_variables(source, &context, line),
             true,
         )
+    } else if let Some(context) = detect_foreach_alias_context(uri, source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=foreach-alias collection={:?} prefix={:?}",
+            line, character, context.collection_name, context.prefix
+        ));
+        (query::complete_foreach_alias(&context, line), false)
     } else if let Some(context) = detect_blade_model_property_context(uri, source, line, character) {
         let relative = file_uri_to_path(uri).and_then(|path| {
             path.strip_prefix(&index.project_root)

@@ -640,5 +640,29 @@ fn pluralize(word: &str) -> String {
     }
 }
 
+pub fn singularize(word: &str) -> String {
+    if word.ends_with("_ids") {
+        return singularize(&word[..word.len() - 4]);
+    }
+    if word.ends_with("_id") {
+        return word[..word.len() - 3].to_string();
+    }
+    if word.ends_with("ies") {
+        return format!("{}y", &word[..word.len() - 3]);
+    }
+    if word.ends_with("sses")
+        || word.ends_with("xes")
+        || word.ends_with("ches")
+        || word.ends_with("shes")
+        || word.ends_with("zes")
+    {
+        return word[..word.len() - 2].to_string();
+    }
+    if word.ends_with('s') && !word.ends_with("ss") {
+        return word[..word.len() - 1].to_string();
+    }
+    word.to_string()
+}
+
 #[allow(dead_code)]
 fn _unused_col(_: ColumnEntry) {}

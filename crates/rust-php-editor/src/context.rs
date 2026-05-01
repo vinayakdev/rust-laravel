@@ -40,6 +40,15 @@ pub struct BladeVariableContext {
     pub foreach_vars: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ForeachAliasContext {
+    pub collection_name: String,
+    pub suggestion: String,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HelperStyle {
     Php,
@@ -602,6 +611,102 @@ pub fn detect_blade_model_property_context(
         start_character: line_text[..after_arrow].chars().count(),
         end_character: line_text[..prop_end].chars().count(),
     })
+}
+
+pub fn detect_foreach_alias_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<ForeachAliasContext> {
+    if !uri.ends_with(".php") {
+        return None;
+    }
+
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+
+    // Match both Blade `@foreach(` and PHP `foreach(` / `foreach (`.
+    let inner_start = if let Some(pos) = line_text.find("@foreach(") {
+        pos + "@foreach(".len()
+    } else if let Some(pos) = line_text.find("foreach(") {
+        pos + "foreach(".len()
+    } else if let Some(pos) = line_text.find("foreach (") {
+        pos + "foreach (".len()
+    } else {
+        return None;
+    };
+
+    if cursor < inner_start {
+        return None;
+    }
+
+    let inner = &line_text[inner_start..];
+
+    let as_offset = inner.find(" as ")?;
+    let dollar_offset = inner.find(" as $")?;
+    let dollar_byte = inner_start + dollar_offset + " as ".len();
+    let alias_start_byte = dollar_byte + 1;
+
+    if cursor < alias_start_byte {
+        return None;
+    }
+
+    let before_as = &inner[..as_offset];
+    let collection_name = before_as
+        .trim()
+        .trim_start_matches('$')
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .next()
+        .filter(|s| !s.is_empty())?
+        .to_string();
+
+    if alias_start_byte > line_text.len() {
+        return None;
+    }
+    let prefix = line_text[alias_start_byte..cursor.min(line_text.len())].to_string();
+
+    let mut end_byte = alias_start_byte;
+    for ch in line_text[alias_start_byte..].chars() {
+        if ch == ')' || ch.is_whitespace() {
+            break;
+        }
+        end_byte += ch.len_utf8();
+    }
+
+    let suggestion = singularize(&collection_name);
+
+    Some(ForeachAliasContext {
+        collection_name,
+        suggestion,
+        prefix,
+        start_character: line_text[..alias_start_byte].chars().count(),
+        end_character: line_text[..end_byte].chars().count(),
+    })
+}
+
+fn singularize(word: &str) -> String {
+    if word.ends_with("_ids") {
+        return singularize(&word[..word.len() - 4]);
+    }
+    if word.ends_with("_id") {
+        return word[..word.len() - 3].to_string();
+    }
+    if word.ends_with("ies") {
+        return format!("{}y", &word[..word.len() - 3]);
+    }
+    if word.ends_with("sses")
+        || word.ends_with("xes")
+        || word.ends_with("ches")
+        || word.ends_with("shes")
+        || word.ends_with("zes")
+    {
+        return word[..word.len() - 2].to_string();
+    }
+    if word.ends_with('s') && !word.ends_with("ss") {
+        return word[..word.len() - 1].to_string();
+    }
+    word.to_string()
 }
 
 fn detect_kind(before: &str) -> Option<SymbolKind> {

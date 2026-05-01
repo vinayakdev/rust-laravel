@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::context::{
     BladeComponentAttrContext, BladeComponentTagContext, BladeModelPropertyContext,
-    BladeVariableContext, BuilderArgContext, HelperContext, HelperStyle,
+    BladeVariableContext, BuilderArgContext, ForeachAliasContext, HelperContext, HelperStyle,
     LivewireComponentTagContext, LivewireDirectiveValueContext, LivewireDirectiveValueKind,
     RouteActionContext, RouteActionKind, SymbolContext, SymbolKind, VendorChainContext,
     VendorMakeContext, ViewDataContext, ViewDataKind,
@@ -219,6 +219,33 @@ pub fn complete_blade_model_properties(
             })
         })
         .collect()
+}
+
+pub fn complete_foreach_alias(context: &ForeachAliasContext, line: usize) -> Vec<Value> {
+    let matches = context.prefix.is_empty()
+        || context.suggestion.starts_with(&context.prefix)
+        || context.suggestion.contains(&context.prefix);
+    if !matches {
+        return Vec::new();
+    }
+    vec![json!({
+        "label": context.suggestion,
+        "kind": 6,
+        "detail": "Singular loop variable",
+        "insertTextFormat": 2,
+        "filterText": context.suggestion,
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": context.suggestion,
+        },
+        "documentation": {
+            "kind": "markdown",
+            "value": format!("Singular form of `${}`", context.collection_name),
+        },
+    })]
 }
 
 pub fn helper_snippets(context: &HelperContext, line: usize) -> Vec<Value> {
