@@ -70,6 +70,7 @@ pub struct LivewireActionEntry {
 pub struct ViewVariable {
     pub name: String,
     pub default_value: Option<String>,
+    pub class_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

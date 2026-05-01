@@ -2,6 +2,7 @@ mod analyzers;
 mod browser;
 mod command;
 mod reports;
+pub mod vendor;
 mod web;
 
 pub use browser::run as run_browse;

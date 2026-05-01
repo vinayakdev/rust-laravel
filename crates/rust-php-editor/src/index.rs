@@ -1,15 +1,16 @@
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
-use crate::analyzers::{configs, controllers, routes, views};
+use crate::analyzers::{configs, controllers, models, routes, views};
 use crate::php::env::load_env_entries_with;
 use crate::project::LaravelProject;
 use crate::types::{
-    BladeComponentEntry, ConfigItem, ConfigReport, ControllerEntry, ControllerMethodEntry,
-    ControllerReport, EnvItem, LivewireActionEntry, LivewireComponentEntry, RouteEntry,
-    RouteReport, ViewEntry, ViewReport, ViewVariable,
+    BladeComponentEntry, ColumnEntry, ConfigItem, ConfigReport, ControllerEntry,
+    ControllerMethodEntry, ControllerReport, EnvItem, LivewireActionEntry, LivewireComponentEntry,
+    ModelEntry, ModelReport, RouteEntry, RouteReport, ViewEntry, ViewReport, ViewVariable,
 };
+use rust_php_foundation::vendor as foundation_vendor;
 use rust_php_public::types::{PublicAssetEntry, PublicAssetReport};
 
 use super::overrides::FileOverrides;
@@ -22,6 +23,8 @@ pub struct ProjectIndex {
     env_items: Vec<EnvItem>,
     view_report: ViewReport,
     public_asset_report: PublicAssetReport,
+    model_report: ModelReport,
+    vendor_classmap: HashMap<String, PathBuf>,
     config_by_key: BTreeMap<String, Vec<usize>>,
     route_by_name: BTreeMap<String, Vec<usize>>,
     env_by_key: BTreeMap<String, Vec<usize>>,
@@ -29,6 +32,7 @@ pub struct ProjectIndex {
     blade_component_by_name: BTreeMap<String, Vec<usize>>,
     livewire_component_by_name: BTreeMap<String, Vec<usize>>,
     public_asset_by_path: BTreeMap<String, Vec<usize>>,
+    model_by_class: BTreeMap<String, Vec<usize>>,
 }
 
 impl ProjectIndex {
@@ -60,11 +64,19 @@ impl ProjectIndex {
                 usage_count: 0,
                 assets: Vec::new(),
             });
+        let model_report = models::analyze(project).unwrap_or_else(|_| ModelReport {
+            project_name: project.name.clone(),
+            project_root: project.root.clone(),
+            model_count: 0,
+            models: Vec::new(),
+        });
+        let vendor_classmap = foundation_vendor::load_classmap(&project.root);
         let mut config_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut route_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut env_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut view_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut public_asset_by_path: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut model_by_class: BTreeMap<String, Vec<usize>> = BTreeMap::new();
 
         for (index, item) in config_report.items.iter().enumerate() {
             config_by_key
@@ -124,6 +136,13 @@ impl ProjectIndex {
                 .sort_by_key(|&idx| livewire_component_rank(&view_report.livewire_components[idx]));
         }
 
+        for (index, model) in model_report.models.iter().enumerate() {
+            model_by_class
+                .entry(model.class_name.clone())
+                .or_default()
+                .push(index);
+        }
+
         Ok(Self {
             project_root: project.root.clone(),
             config_report,
@@ -132,6 +151,8 @@ impl ProjectIndex {
             env_items,
             view_report,
             public_asset_report,
+            model_report,
+            vendor_classmap,
             config_by_key,
             route_by_name,
             env_by_key,
@@ -139,6 +160,7 @@ impl ProjectIndex {
             blade_component_by_name,
             livewire_component_by_name,
             public_asset_by_path,
+            model_by_class,
         })
     }
 
@@ -349,6 +371,23 @@ impl ProjectIndex {
             .collect()
     }
 
+    pub fn blade_variable_class_for_file(&self, file: &std::path::Path, var_name: &str) -> Option<String> {
+        self.view_report
+            .views
+            .iter()
+            .filter(|view| view.file == file)
+            .flat_map(|view| view.props.iter().chain(view.variables.iter()))
+            .chain(
+                self.view_report
+                    .livewire_components
+                    .iter()
+                    .filter(|c| c.view_file.as_deref() == Some(file))
+                    .flat_map(|c| c.state.iter()),
+            )
+            .find(|v| v.name == var_name)
+            .and_then(|v| v.class_name.clone())
+    }
+
     pub fn blade_variables_for_file<'a>(
         &'a self,
         file: &std::path::Path,
@@ -439,6 +478,41 @@ impl ProjectIndex {
             .iter()
             .filter(|route| route.file == file)
             .collect()
+    }
+
+    pub fn vendor_class_path(&self, fqn: &str) -> Option<&Path> {
+        self.vendor_classmap.get(fqn).map(PathBuf::as_path)
+    }
+
+    pub fn vendor_chainable_methods(&self, fqn: &str) -> Vec<String> {
+        foundation_vendor::collect_chainable_methods(fqn, &self.vendor_classmap)
+    }
+
+    pub fn model_columns_for_class<'a>(&'a self, class_name: &str) -> Vec<&'a ColumnEntry> {
+        let normalized = class_name.trim_start_matches('\\');
+        let short = normalized.rsplit('\\').next().unwrap_or(normalized);
+
+        let indices = self
+            .model_by_class
+            .get(normalized)
+            .or_else(|| self.model_by_class.get(short));
+
+        indices
+            .into_iter()
+            .flat_map(|idxs| idxs.iter().flat_map(|&i| self.model_report.models[i].columns.iter()))
+            .collect()
+    }
+
+    pub fn model_for_class<'a>(&'a self, class_name: &str) -> Option<&'a ModelEntry> {
+        let normalized = class_name.trim_start_matches('\\');
+        let short = normalized.rsplit('\\').next().unwrap_or(normalized);
+
+        let indices = self
+            .model_by_class
+            .get(normalized)
+            .or_else(|| self.model_by_class.get(short))?;
+
+        indices.first().map(|&i| &self.model_report.models[i])
     }
 }
 

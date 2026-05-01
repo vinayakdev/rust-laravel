@@ -219,6 +219,7 @@ fn build_model_entry(
     let mut scopes: Vec<String> = Vec::new();
     let mut accessors: Vec<String> = Vec::new();
     let mut mutators: Vec<String> = Vec::new();
+    let mut methods: Vec<String> = Vec::new();
 
     for member in members.iter() {
         match member {
@@ -288,8 +289,15 @@ fn build_model_entry(
                     traits.push(short);
                 }
             }
-            ClassMember::Method { name, body, .. } => {
+            ClassMember::Method { name, modifiers, body, .. } => {
                 let method_name = span_text(name.span, source);
+
+                let is_public = !modifiers
+                    .iter()
+                    .any(|t| matches!(span_text(t.span, source).as_str(), "protected" | "private"));
+                let is_static = modifiers
+                    .iter()
+                    .any(|t| span_text(t.span, source) == "static");
 
                 if let Some(scope) = method_name.strip_prefix("scope") {
                     if scope
@@ -337,6 +345,11 @@ fn build_model_entry(
                     extract_relation(&method_name, body, source, imports, mappings, &project.root)
                 {
                     relations.push(relation);
+                    continue;
+                }
+
+                if is_public && !is_static && !method_name.starts_with("__") {
+                    methods.push(method_name.to_string());
                 }
             }
             ClassMember::Const { .. } => {}
@@ -375,6 +388,7 @@ fn build_model_entry(
         scopes,
         accessors,
         mutators,
+        methods,
         columns: Vec::new(),
     }
 }
@@ -624,6 +638,30 @@ fn pluralize(word: &str) -> String {
     } else {
         format!("{word}s")
     }
+}
+
+pub fn singularize(word: &str) -> String {
+    if word.ends_with("_ids") {
+        return singularize(&word[..word.len() - 4]);
+    }
+    if word.ends_with("_id") {
+        return word[..word.len() - 3].to_string();
+    }
+    if word.ends_with("ies") {
+        return format!("{}y", &word[..word.len() - 3]);
+    }
+    if word.ends_with("sses")
+        || word.ends_with("xes")
+        || word.ends_with("ches")
+        || word.ends_with("shes")
+        || word.ends_with("zes")
+    {
+        return word[..word.len() - 2].to_string();
+    }
+    if word.ends_with('s') && !word.ends_with("ss") {
+        return word[..word.len() - 1].to_string();
+    }
+    word.to_string()
 }
 
 #[allow(dead_code)]

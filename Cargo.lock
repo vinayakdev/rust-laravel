@@ -1181,6 +1181,8 @@ dependencies = [
  "rust-php-foundation",
  "rust-php-markdown",
  "rust-php-middleware",
+ "rust-php-migrations",
+ "rust-php-models",
  "rust-php-public",
  "rust-php-routes",
  "rust-php-views",

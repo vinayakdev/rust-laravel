@@ -40,6 +40,7 @@ import { ModelsView } from "@/components/app/views/models-view"
 import { MigrationsView } from "@/components/app/views/migrations-view"
 import { PublicFilesView } from "@/components/app/views/public-files-view"
 import { DashboardView } from "@/components/app/views/dashboard-view"
+import { VendorClassesView } from "@/components/app/views/vendor-classes-view"
 import type { CommandId, Payload, Project } from "@/lib/types"
 import {
   IconAlertTriangle,
@@ -50,6 +51,7 @@ import {
   IconEye,
   IconGitCompare,
   IconLoader2,
+  IconPackage,
   IconRefresh,
   IconRoute,
   IconSettings,
@@ -158,6 +160,13 @@ const COMMANDS: CommandDef[] = [
     label: "Public Files",
     description: "Indexed public assets with PHP and Blade references",
     icon: IconBox,
+    group: "Application",
+  },
+  {
+    id: "vendor:list",
+    label: "Vendor Classes",
+    description: "Composer vendor classes with chainable method browser",
+    icon: IconPackage,
     group: "Application",
   },
 ]
@@ -500,6 +509,8 @@ function ReportView({ payload }: { payload: Payload }) {
       return <MigrationsView payload={payload} />
     case "public:list":
       return <PublicFilesView payload={payload} />
+    case "vendor:list":
+      return <VendorClassesView payload={payload} />
     default:
       return (
         <Card>

@@ -829,6 +829,8 @@ fn extract_view_usages_from_php(
     }
 
     let imports = build_import_map(program.statements, &source);
+    let mut top_level_map = HashMap::new();
+    collect_var_class_map_from_stmts(program.statements, &source, &imports, &mut top_level_map);
     let mut usages = Vec::new();
     collect_view_usages_from_stmts(
         program.statements,
@@ -836,6 +838,7 @@ fn extract_view_usages_from_php(
         project,
         file,
         &imports,
+        &top_level_map,
         &mut usages,
     );
     Ok(usages)
@@ -950,6 +953,7 @@ fn collect_view_usages_from_stmts(
     project: &LaravelProject,
     file: &Path,
     imports: &HashMap<String, String>,
+    var_class_map: &HashMap<String, String>,
     out: &mut Vec<(String, ViewUsage)>,
 ) {
     for stmt in stmts {
@@ -964,18 +968,19 @@ fn collect_view_usages_from_stmts(
                 file,
                 stmt.span().line_info(source),
                 imports,
+                var_class_map,
                 out,
             ),
             Stmt::Block { statements, .. }
             | Stmt::Declare {
                 body: statements, ..
             } => {
-                collect_view_usages_from_stmts(statements, source, project, file, imports, out);
+                collect_view_usages_from_stmts(statements, source, project, file, imports, var_class_map, out);
             }
             Stmt::Namespace {
                 body: Some(body), ..
             } => {
-                collect_view_usages_from_stmts(body, source, project, file, imports, out);
+                collect_view_usages_from_stmts(body, source, project, file, imports, var_class_map, out);
             }
             Stmt::Class { members, .. }
             | Stmt::Interface { members, .. }
@@ -983,7 +988,9 @@ fn collect_view_usages_from_stmts(
             | Stmt::Enum { members, .. } => {
                 for member in members.iter().copied() {
                     if let ClassMember::Method { body, .. } = member {
-                        collect_view_usages_from_stmts(body, source, project, file, imports, out);
+                        let mut method_map = HashMap::new();
+                        collect_var_class_map_from_stmts(body, source, imports, &mut method_map);
+                        collect_view_usages_from_stmts(body, source, project, file, imports, &method_map, out);
                     }
                 }
             }
@@ -992,9 +999,9 @@ fn collect_view_usages_from_stmts(
                 else_block,
                 ..
             } => {
-                collect_view_usages_from_stmts(then_block, source, project, file, imports, out);
+                collect_view_usages_from_stmts(then_block, source, project, file, imports, var_class_map, out);
                 if let Some(else_block) = else_block {
-                    collect_view_usages_from_stmts(else_block, source, project, file, imports, out);
+                    collect_view_usages_from_stmts(else_block, source, project, file, imports, var_class_map, out);
                 }
             }
             Stmt::While { body, .. }
@@ -1002,7 +1009,7 @@ fn collect_view_usages_from_stmts(
             | Stmt::For { body, .. }
             | Stmt::Foreach { body, .. }
             | Stmt::Try { body, .. } => {
-                collect_view_usages_from_stmts(body, source, project, file, imports, out);
+                collect_view_usages_from_stmts(body, source, project, file, imports, var_class_map, out);
             }
             _ => {}
         }
@@ -1025,9 +1032,10 @@ fn collect_view_usages_from_expr(
     file: &Path,
     line_info: Option<LineInfo>,
     imports: &HashMap<String, String>,
+    var_class_map: &HashMap<String, String>,
     out: &mut Vec<(String, ViewUsage)>,
 ) {
-    let Some(invocation) = extract_view_invocation(expr, source, imports) else {
+    let Some(invocation) = extract_view_invocation(expr, source, imports, var_class_map) else {
         return;
     };
 
@@ -1053,6 +1061,7 @@ fn extract_view_invocation(
     expr: ExprId<'_>,
     source: &[u8],
     imports: &HashMap<String, String>,
+    var_class_map: &HashMap<String, String>,
 ) -> Option<ViewInvocation> {
     match expr {
         Expr::Call { func, args, .. } => {
@@ -1065,7 +1074,7 @@ fn extract_view_invocation(
                         .and_then(|arg| expr_to_string(arg.value, source))
                         .into_iter()
                         .collect(),
-                    variables: extract_passed_variables_from_args(&args, 1, source),
+                    variables: extract_passed_variables_from_args(&args, 1, source, var_class_map, imports),
                 });
             }
             None
@@ -1079,10 +1088,10 @@ fn extract_view_invocation(
             let method_name = expr_name(method, source)?;
             match method_name.as_str() {
                 "with" => {
-                    let mut invocation = extract_view_invocation(target, source, imports)?;
+                    let mut invocation = extract_view_invocation(target, source, imports, var_class_map)?;
                     invocation
                         .variables
-                        .extend(extract_with_variables(&args, source));
+                        .extend(extract_with_variables(&args, source, var_class_map, imports));
                     dedup_variables(&mut invocation.variables);
                     Some(invocation)
                 }
@@ -1093,12 +1102,12 @@ fn extract_view_invocation(
                         .and_then(|arg| expr_to_string(arg.value, source))
                         .into_iter()
                         .collect(),
-                    variables: extract_passed_variables_from_args(&args, 1, source),
+                    variables: extract_passed_variables_from_args(&args, 1, source, var_class_map, imports),
                 }),
                 "make" | "first" if is_view_factory_target(target, source) => {
-                    extract_view_factory_invocation(&method_name, args, source, "view-factory")
+                    extract_view_factory_invocation(&method_name, args, source, "view-factory", var_class_map, imports)
                 }
-                _ => extract_view_invocation(target, source, imports),
+                _ => extract_view_invocation(target, source, imports, var_class_map),
             }
         }
         Expr::StaticCall {
@@ -1118,12 +1127,12 @@ fn extract_view_invocation(
                         .and_then(|arg| expr_to_string(arg.value, source))
                         .into_iter()
                         .collect(),
-                    variables: extract_passed_variables_from_args(&args, 2, source),
+                    variables: extract_passed_variables_from_args(&args, 2, source, var_class_map, imports),
                 });
             }
 
             if is_view_factory_class(class_name.as_deref()) {
-                return extract_view_factory_invocation(&method_name, args, source, "view-facade");
+                return extract_view_factory_invocation(&method_name, args, source, "view-facade", var_class_map, imports);
             }
 
             None
@@ -1137,6 +1146,8 @@ fn extract_view_factory_invocation(
     args: &[php_parser::ast::Arg<'_>],
     source: &[u8],
     kind_prefix: &str,
+    var_class_map: &HashMap<String, String>,
+    imports: &HashMap<String, String>,
 ) -> Option<ViewInvocation> {
     match method_name {
         "make" => Some(ViewInvocation {
@@ -1146,7 +1157,7 @@ fn extract_view_factory_invocation(
                 .and_then(|arg| expr_to_string(arg.value, source))
                 .into_iter()
                 .collect(),
-            variables: extract_passed_variables_from_args(args, 1, source),
+            variables: extract_passed_variables_from_args(args, 1, source, var_class_map, imports),
         }),
         "first" => {
             let view_names = args
@@ -1159,7 +1170,7 @@ fn extract_view_factory_invocation(
             Some(ViewInvocation {
                 kind: format!("{kind_prefix}-first"),
                 view_names,
-                variables: extract_passed_variables_from_args(args, 1, source),
+                variables: extract_passed_variables_from_args(args, 1, source, var_class_map, imports),
             })
         }
         _ => None,
@@ -1170,13 +1181,73 @@ fn extract_passed_variables_from_args(
     args: &[php_parser::ast::Arg<'_>],
     start_index: usize,
     source: &[u8],
+    var_class_map: &HashMap<String, String>,
+    imports: &HashMap<String, String>,
 ) -> Vec<ViewVariable> {
     let mut variables = Vec::new();
     for arg in args.iter().skip(start_index) {
-        variables.extend(extract_passed_variables(arg.value, source));
+        variables.extend(extract_passed_variables(arg.value, source, var_class_map, imports));
     }
     dedup_variables(&mut variables);
     variables
+}
+
+fn extract_class_from_expr(
+    expr: ExprId<'_>,
+    source: &[u8],
+    imports: &HashMap<String, String>,
+) -> Option<String> {
+    match expr {
+        Expr::StaticCall { class, .. } => resolve_expr_class_name(class, source, imports),
+        Expr::New { class, .. } => resolve_expr_class_name(class, source, imports),
+        Expr::MethodCall { target, method, .. } => {
+            match expr_name(method, source).as_deref() {
+                Some("paginate") => Some("LengthAwarePaginator".to_string()),
+                Some("simplePaginate") => Some("Paginator".to_string()),
+                Some("cursorPaginate") => Some("CursorPaginator".to_string()),
+                _ => extract_class_from_expr(target, source, imports),
+            }
+        }
+        _ => None,
+    }
+}
+
+fn collect_var_class_map_from_stmts(
+    stmts: &[php_parser::ast::StmtId<'_>],
+    source: &[u8],
+    imports: &HashMap<String, String>,
+    map: &mut HashMap<String, String>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Expression { expr, .. } | Stmt::Return { expr: Some(expr), .. } => {
+                if let Expr::Assign { var, expr: rhs, .. } | Expr::AssignRef { var, expr: rhs, .. } = expr {
+                    if let Some(var_name) = expr_name(*var, source) {
+                        if let Some(class) = extract_class_from_expr(*rhs, source, imports) {
+                            map.insert(var_name, class);
+                        }
+                    }
+                }
+            }
+            Stmt::Block { statements, .. } | Stmt::Declare { body: statements, .. } => {
+                collect_var_class_map_from_stmts(statements, source, imports, map);
+            }
+            Stmt::If { then_block, else_block, .. } => {
+                collect_var_class_map_from_stmts(then_block, source, imports, map);
+                if let Some(else_block) = else_block {
+                    collect_var_class_map_from_stmts(else_block, source, imports, map);
+                }
+            }
+            Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::Foreach { body, .. }
+            | Stmt::Try { body, .. } => {
+                collect_var_class_map_from_stmts(body, source, imports, map);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn is_response_helper_call(expr: ExprId<'_>, source: &[u8]) -> bool {
@@ -1225,7 +1296,12 @@ fn resolve_expr_class_name(
     Some(imports.get(&raw).cloned().unwrap_or(raw))
 }
 
-fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable> {
+fn extract_passed_variables(
+    expr: ExprId<'_>,
+    source: &[u8],
+    var_class_map: &HashMap<String, String>,
+    imports: &HashMap<String, String>,
+) -> Vec<ViewVariable> {
     match expr {
         Expr::Array { items, .. } => items
             .iter()
@@ -1237,9 +1313,15 @@ fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable
                         item.key
                             .map(|key| trim_quotes(&span_text(key.span(), source)).to_string())
                     })?;
+                let class_name = match item.value {
+                    Expr::Variable { .. } => expr_name(item.value, source)
+                        .and_then(|var| var_class_map.get(&var).cloned()),
+                    _ => extract_class_from_expr(item.value, source, imports),
+                };
                 Some(ViewVariable {
                     name: key,
                     default_value: expr_literal_default(item.value, source),
+                    class_name,
                 })
             })
             .collect(),
@@ -1252,13 +1334,14 @@ fn extract_passed_variables(expr: ExprId<'_>, source: &[u8]) -> Vec<ViewVariable
                     .map(|name| ViewVariable {
                         name,
                         default_value: None,
+                        class_name: None,
                     })
                     .collect();
             }
             if func_name == "array_merge" || func_name == "\\array_merge" {
                 let mut merged = Vec::new();
                 for arg in *args {
-                    merged.extend(extract_passed_variables(arg.value, source));
+                    merged.extend(extract_passed_variables(arg.value, source, var_class_map, imports));
                 }
                 dedup_variables(&mut merged);
                 return merged;
@@ -1296,6 +1379,7 @@ fn extract_passed_variables_from_text(expr: &str) -> Vec<ViewVariable> {
             .map(|name| ViewVariable {
                 name,
                 default_value: None,
+                class_name: None,
             })
             .collect();
     }
@@ -1312,17 +1396,23 @@ fn extract_passed_variables_from_text(expr: &str) -> Vec<ViewVariable> {
     Vec::new()
 }
 
-fn extract_with_variables(args: &[php_parser::ast::Arg<'_>], source: &[u8]) -> Vec<ViewVariable> {
+fn extract_with_variables(
+    args: &[php_parser::ast::Arg<'_>],
+    source: &[u8],
+    var_class_map: &HashMap<String, String>,
+    imports: &HashMap<String, String>,
+) -> Vec<ViewVariable> {
     if args.len() >= 2 {
         if let Some(name) = expr_to_string(args[0].value, source) {
             return vec![ViewVariable {
                 name,
                 default_value: expr_literal_default(args[1].value, source),
+                class_name: None,
             }];
         }
     }
 
-    let mut variables = extract_passed_variables_from_args(args, 0, source);
+    let mut variables = extract_passed_variables_from_args(args, 0, source, var_class_map, imports);
     dedup_variables(&mut variables);
     variables
 }
@@ -1333,6 +1423,7 @@ fn extract_with_variables_from_text(args: &[String]) -> Vec<ViewVariable> {
             return vec![ViewVariable {
                 name,
                 default_value: literal_default_from_text(&args[1]),
+                class_name: None,
             }];
         }
     }
@@ -1531,6 +1622,7 @@ fn parse_public_properties(source: &str) -> Vec<ViewVariable> {
             props.push(ViewVariable {
                 name,
                 default_value,
+                class_name: None,
             });
         }
     }
@@ -1569,6 +1661,7 @@ fn parse_constructor_promoted_properties(source: &str) -> Vec<ViewVariable> {
             props.push(ViewVariable {
                 name,
                 default_value,
+                class_name: None,
             });
         }
     }
@@ -1646,11 +1739,13 @@ fn parse_array_like_variables(body: &str) -> Vec<ViewVariable> {
                 Some(ViewVariable {
                     name: trim_quotes(name.trim()).to_string(),
                     default_value: Some(default.trim().to_string()),
+                    class_name: None,
                 })
             } else {
                 Some(ViewVariable {
                     name: trim_quotes(trimmed).to_string(),
                     default_value: None,
+                    class_name: None,
                 })
             }
         })

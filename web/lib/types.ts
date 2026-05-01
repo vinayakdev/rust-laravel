@@ -354,6 +354,27 @@ export type DashboardReport = {
   features: DashboardFeatureMetric[]
 }
 
+export type VendorClass = {
+  fqn: string
+  file: string
+}
+
+export type VendorClassReport = {
+  class_count: number
+  classes: VendorClass[]
+}
+
+export type VendorMethod = {
+  name: string
+  source: string
+}
+
+export type VendorClassDetail = {
+  fqn: string
+  file: string
+  methods: VendorMethod[]
+}
+
 export type CommandId =
   | "dashboard"
   | "route:list"
@@ -368,6 +389,7 @@ export type CommandId =
   | "model:list"
   | "migration:list"
   | "public:list"
+  | "vendor:list"
 
 export type Payload = {
   project: string
@@ -385,6 +407,7 @@ export type Payload = {
     | ModelReport
     | MigrationReport
     | PublicAssetReport
+    | VendorClassReport
   comparison?: RouteComparison
   error?: string
 }
