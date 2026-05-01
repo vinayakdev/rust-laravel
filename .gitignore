@@ -13,3 +13,4 @@
 /web/out/
 /web/tsconfig.tsbuildinfo
 /laravel-example/.env
+.claude/worktrees/
