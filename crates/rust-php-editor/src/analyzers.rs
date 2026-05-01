@@ -106,6 +106,22 @@ pub mod routes {
     }
 }
 
+pub mod models {
+    use super::*;
+    use crate::types::ModelReport;
+
+    pub fn analyze(project: &LaravelProject) -> Result<ModelReport, String> {
+        let mappings = collect_psr4_mappings(&project.root)?;
+        let provider_report = providers::analyze(project, &mappings)?;
+        let migrations = rust_php_migrations::analyze(
+            project,
+            &provider_report.providers,
+            &FileOverrides::default(),
+        )?;
+        rust_php_models::analyze(project, &mappings, &migrations.migrations)
+    }
+}
+
 pub mod views {
     use super::*;
 

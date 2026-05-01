@@ -35,6 +35,257 @@
     ],
     "description": "Protected function"
   },
+
+  "pubf": {
+    "prefix": "pubf",
+    "body": [
+      "public function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Public function (unambiguous)"
+  },
+  "prof": {
+    "prefix": "prof",
+    "body": [
+      "protected function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Protected function"
+  },
+  "prif": {
+    "prefix": "prif",
+    "body": [
+      "private function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Private function"
+  },
+  "pubsf": {
+    "prefix": "pubsf",
+    "body": [
+      "public static function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Public static function"
+  },
+  "prosf": {
+    "prefix": "prosf",
+    "body": [
+      "protected static function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Protected static function"
+  },
+  "prisf": {
+    "prefix": "prisf",
+    "body": [
+      "private static function ${1:name}(${2}): ${3:void}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Private static function"
+  },
+  "abstf": {
+    "prefix": "abstf",
+    "body": [
+      "abstract public function ${1:name}(${2}): ${3:void};"
+    ],
+    "description": "Abstract public function signature"
+  },
+
+  "pubp": {
+    "prefix": "pubp",
+    "body": [
+      "public ${1:string} \\$$2 = ${3:''};"
+    ],
+    "description": "Public typed property"
+  },
+  "property": {
+    "prefix": "prop",
+    "body": [
+      "protected ${1:string} \\$$2;"
+    ],
+    "description": "Protected typed property"
+  },
+  "prip": {
+    "prefix": "prip",
+    "body": [
+      "private ${1:string} \\$$2;"
+    ],
+    "description": "Private typed property"
+  },
+  "rdp": {
+    "prefix": "rdp",
+    "body": [
+      "public readonly ${1:string} \\$$2;"
+    ],
+    "description": "Public readonly property"
+  },
+  "pubsp": {
+    "prefix": "pubsp",
+    "body": [
+      "public static ${1:string} \\$$2;"
+    ],
+    "description": "Public static property"
+  },
+
+  "__invoke": {
+    "prefix": "inv",
+    "body": [
+      "public function __invoke(${1}): ${2:mixed}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "__invoke magic method"
+  },
+  "__toString": {
+    "prefix": "tostr",
+    "body": [
+      "public function __toString(): string",
+      "{",
+      "\treturn $0;",
+      "}"
+    ],
+    "description": "__toString magic method"
+  },
+  "__get": {
+    "prefix": "gets",
+    "body": [
+      "public function __get(string \\$name): mixed",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "__get magic method"
+  },
+  "__set": {
+    "prefix": "sets",
+    "body": [
+      "public function __set(string \\$name, mixed \\$value): void",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "__set magic method"
+  },
+
+  "controller index": {
+    "prefix": "idx",
+    "body": [
+      "public function index(): View",
+      "{",
+      "\treturn view('${1:}');",
+      "}"
+    ],
+    "description": "Controller index action"
+  },
+  "controller show": {
+    "prefix": "shw",
+    "body": [
+      "public function show(${1:Model} \\$$2): View",
+      "{",
+      "\treturn view('${3:}', compact('$2'));",
+      "}"
+    ],
+    "description": "Controller show action"
+  },
+  "controller create": {
+    "prefix": "cre",
+    "body": [
+      "public function create(): View",
+      "{",
+      "\treturn view('${1:}');",
+      "}"
+    ],
+    "description": "Controller create action"
+  },
+  "controller store": {
+    "prefix": "sto",
+    "body": [
+      "public function store(${1:Request} \\$request): RedirectResponse",
+      "{",
+      "\t$0",
+      "",
+      "\treturn redirect()->route('${2:}');",
+      "}"
+    ],
+    "description": "Controller store action"
+  },
+  "controller edit": {
+    "prefix": "edi",
+    "body": [
+      "public function edit(${1:Model} \\$$2): View",
+      "{",
+      "\treturn view('${3:}', compact('$2'));",
+      "}"
+    ],
+    "description": "Controller edit action"
+  },
+  "controller update": {
+    "prefix": "upd",
+    "body": [
+      "public function update(${1:Request} \\$request, ${2:Model} \\$$3): RedirectResponse",
+      "{",
+      "\t$0",
+      "",
+      "\treturn redirect()->route('${4:}');",
+      "}"
+    ],
+    "description": "Controller update action"
+  },
+  "controller destroy": {
+    "prefix": "des",
+    "body": [
+      "public function destroy(${1:Model} \\$$2): RedirectResponse",
+      "{",
+      "\t$2->delete();",
+      "",
+      "\treturn redirect()->route('${3:}');",
+      "}"
+    ],
+    "description": "Controller destroy action"
+  },
+
+  "arrow function": {
+    "prefix": "fn",
+    "body": [
+      "fn(${1}) => ${2:$1}"
+    ],
+    "description": "PHP arrow function"
+  },
+  "match": {
+    "prefix": "match",
+    "body": [
+      "match (${1:\\$var}) {",
+      "\t${2:value} => ${3:result},",
+      "\tdefault => ${4:default},",
+      "}"
+    ],
+    "description": "PHP match expression"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name}${2:: ${3:string}}",
+      "{",
+      "\tcase ${4:Value} = ${5:'value'};",
+      "}"
+    ],
+    "description": "PHP 8.1 enum"
+  },
+
   "namespace": {
     "prefix": "namespace",
     "body": [
@@ -182,13 +433,6 @@
       "echo $1;"
     ],
     "description": "Echo statement"
-  },
-  "property": {
-    "prefix": "prop",
-    "body": [
-      "${1:public} ${2:string} \\$$3 = ${4:''};"
-    ],
-    "description": "Class property with visibility"
   },
   "Livewire component": {
     "prefix": "livewire:component",
