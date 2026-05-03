@@ -14,8 +14,9 @@ use super::context::{
     self, detect_blade_component_attr_context, detect_blade_component_tag_context,
     detect_blade_model_property_context, detect_blade_variable_context, detect_builder_arg_context,
     detect_foreach_alias_context, detect_helper_context, detect_livewire_component_tag_context,
-    detect_livewire_directive_value_context, detect_route_action_context, detect_symbol_context,
-    detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
+    detect_livewire_directive_value_context, detect_model_property_array_context,
+    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
+    detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -312,6 +313,16 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
                 .unwrap_or_default(),
             true,
         )
+    } else if let Some(context) = detect_model_property_array_context(uri, source, line, character)
+    {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=model-property-array model={:?} prefix={:?}",
+            line, character, context.model_class, context.prefix
+        ));
+        (
+            query::complete_model_property_array(index, &context, line),
+            true,
+        )
     } else if let Some(context) =
         detect_livewire_directive_value_context(uri, source, line, character)
     {
@@ -470,8 +481,7 @@ fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
     let Some(source) = state.documents.get(uri) else {
         return Value::Null;
     };
-    let lines: Vec<&str> = source.lines().collect();
-    let Some(line_text) = lines.get(trigger_line) else {
+    let Some(line_text) = source.lines().nth(trigger_line) else {
         return Value::Null;
     };
 
@@ -501,8 +511,7 @@ fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
     }
 
     // Check that the cursor is inside a builder method array argument.
-    // Scan backward for an unclosed `->method([` or `::method([`.
-    if !cursor_is_inside_builder_array(&lines, trigger_line, trigger_byte) {
+    if !cursor_is_inside_builder_array(&source, trigger_line, trigger_byte) {
         return Value::Null;
     }
 
@@ -518,35 +527,79 @@ fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
     }])
 }
 
-/// Returns true when `(line, col_byte)` appears to be inside a `->method([` or `::method([`
-/// array argument, by scanning backward up to 30 lines for an unclosed array opener.
-fn cursor_is_inside_builder_array(lines: &[&str], line: usize, col_byte: usize) -> bool {
-    let start = line.saturating_sub(30);
-    for idx in (start..=line).rev() {
-        let text = lines[idx];
-        let limit = if idx == line {
-            col_byte.min(text.len())
-        } else {
-            text.len()
-        };
-        let compact: String = text[..limit]
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
+/// Returns true when the cursor at `(trigger_line, line_trigger_byte)` is inside the array
+/// argument of a builder relation method call (`->method([...])` or `::method([...])`).
+///
+/// Uses a forward scan of `source[..cursor_byte]` that properly tracks single- and
+/// double-quoted string literals (skipping their contents) so bracket characters inside
+/// strings are never mistaken for array delimiters.  This handles multiline arrays and
+/// cases where the opening `(` and `[` appear on different lines.
+fn cursor_is_inside_builder_array(
+    source: &str,
+    trigger_line: usize,
+    line_trigger_byte: usize,
+) -> bool {
+    // Compute the absolute byte offset of the cursor in the full source.
+    let line_start: usize = source
+        .split('\n')
+        .take(trigger_line)
+        .map(|l| l.len() + 1) // +1 for the \n (works for both \n and \r\n)
+        .sum();
+    let cursor_byte = (line_start + line_trigger_byte).min(source.len());
 
-        for &method in context::BUILDER_RELATION_METHODS {
-            if compact.contains(&format!("->{method}(["))
-                || compact.contains(&format!("::{method}(["))
-            {
+    // Forward-scan source[..cursor_byte] tracking string literals and [ / ] depth.
+    let text = &source[..cursor_byte];
+    let mut bracket_stack: Vec<usize> = Vec::new(); // byte positions of unclosed [
+    let mut in_quote: Option<u8> = None;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if b == b'\\' {
+                i += 2; // skip escaped character
+                continue;
+            }
+            if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' => in_quote = Some(b),
+            b'[' => bracket_stack.push(i),
+            b']' => {
+                bracket_stack.pop();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    // The last entry is the innermost unclosed `[` — that is our enclosing array.
+    let Some(&array_open_byte) = bracket_stack.last() else {
+        return false;
+    };
+
+    // The `[` must be directly preceded by `(`, allowing whitespace between them.
+    let before_bracket = source[..array_open_byte].trim_end();
+    if !before_bracket.ends_with('(') {
+        return false;
+    }
+
+    // Strip the `(` and look for a builder method name preceded by `->` or `::`.
+    let before_paren = source[..before_bracket.len() - 1].trim_end();
+    for &method in context::BUILDER_RELATION_METHODS {
+        if before_paren.ends_with(method) {
+            let remainder = &before_paren[..before_paren.len() - method.len()];
+            if remainder.ends_with("->") || remainder.ends_with("::") {
                 return true;
             }
         }
-
-        // A closing `])` means the array ended before reaching the opener — stop.
-        if compact.ends_with("])") || compact.ends_with("]);") {
-            break;
-        }
     }
+
     false
 }
 
