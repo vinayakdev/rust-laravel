@@ -1914,21 +1914,25 @@ pub fn detect_builder_arg_context(
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();
-    let (method_name, call_separator) =
-        BUILDER_STRING_ARG_METHODS.iter().find_map(|&method_name| {
+    let lines: Vec<&str> = source.lines().collect();
+    let (method_name, call_separator, call_line, call_pos) = BUILDER_STRING_ARG_METHODS
+        .iter()
+        .find_map(|&method_name| {
             if compact_before.ends_with(&format!("->{method_name}(")) {
-                Some((method_name, "->"))
+                let call_needle = format!("->{method_name}(");
+                let call_pos = before_quote.rfind(&call_needle)?;
+                Some((method_name, "->", line, call_pos))
             } else if compact_before.ends_with(&format!("::{method_name}(")) {
-                Some((method_name, "::"))
+                let call_needle = format!("::{method_name}(");
+                let call_pos = before_quote.rfind(&call_needle)?;
+                Some((method_name, "::", line, call_pos))
             } else {
                 None
             }
-        })?;
-
-    // Find the chain segment before the current invocation.
-    let call_needle = format!("{call_separator}{method_name}(");
-    let call_pos = before_quote.rfind(&call_needle)?;
-    let before_call = &before_quote[..call_pos];
+        })
+        .or_else(|| find_enclosing_builder_array_call(&lines, line, quote_start))?;
+    let call_line_text = *lines.get(call_line)?;
+    let before_call = &call_line_text[..call_pos];
 
     let prefix = source_chars_slice(line_text, inner_start, cursor.min(inner_end));
 
@@ -1942,10 +1946,9 @@ pub fn detect_builder_arg_context(
     // Strategy 2: extract static origin class from `ClassName::` in the chain
     let model_class = model_class.or_else(|| {
         let class_short = if call_separator == "::" {
-            extract_class_before_static_call(before_quote, call_pos)?
+            extract_class_before_static_call(call_line_text, call_pos)?
         } else {
-            let lines: Vec<&str> = source.lines().collect();
-            find_chain_origin_class(&lines, line, line_text, call_pos)?
+            find_chain_origin_class(&lines, call_line, call_line_text, call_pos)?
         };
         if is_model_like_class(&class_short) {
             Some(class_short)
@@ -1967,6 +1970,39 @@ pub fn builder_method_uses_relation_name(method_name: &str) -> bool {
     BUILDER_STRING_ARG_METHODS.contains(&method_name)
         && !BUILDER_COLUMN_METHODS.contains(&method_name)
         || BUILDER_RELATION_METHODS.contains(&method_name)
+}
+
+fn find_enclosing_builder_array_call(
+    lines: &[&str],
+    current_line: usize,
+    quote_start: usize,
+) -> Option<(&'static str, &'static str, usize, usize)> {
+    let start = current_line.saturating_sub(30);
+
+    for idx in (start..=current_line).rev() {
+        let line_text = *lines.get(idx)?;
+        let limit = if idx == current_line {
+            quote_start.min(line_text.len())
+        } else {
+            line_text.len()
+        };
+        let before = &line_text[..limit];
+        let compact: String = before.chars().filter(|c| !c.is_whitespace()).collect();
+
+        for &method_name in BUILDER_RELATION_METHODS {
+            for separator in ["->", "::"] {
+                if !compact.contains(&format!("{separator}{method_name}([")) {
+                    continue;
+                }
+                let needle = format!("{separator}{method_name}");
+                if let Some(call_pos) = before.rfind(&needle) {
+                    return Some((method_name, separator, idx, call_pos));
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn extract_class_before_static_call(text: &str, static_pos: usize) -> Option<String> {
@@ -2498,6 +2534,30 @@ mod tests {
         assert_eq!(ctx.model_class, "Venue");
         assert_eq!(ctx.method_name, "with");
         assert_eq!(ctx.prefix, "");
+    }
+
+    #[test]
+    fn detects_builder_arg_context_for_array_relation_entrypoint() {
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with(['prop'])\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line");
+        let character = line_text.find("'prop'").expect("token") + "'prop".len();
+        let ctx = detect_builder_arg_context(source, line, character).expect("builder arg context");
+        assert_eq!(ctx.model_class, "Venue");
+        assert_eq!(ctx.method_name, "with");
+        assert_eq!(ctx.prefix, "prop");
+    }
+
+    #[test]
+    fn detects_builder_arg_context_for_multiline_array_relation_entrypoint() {
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with([\n    'prop',\n])\n";
+        let line = 4;
+        let line_text = source.lines().nth(line).expect("line");
+        let character = line_text.find("'prop'").expect("token") + "'prop".len();
+        let ctx = detect_builder_arg_context(source, line, character).expect("builder arg context");
+        assert_eq!(ctx.model_class, "Venue");
+        assert_eq!(ctx.method_name, "with");
+        assert_eq!(ctx.prefix, "prop");
     }
 
     #[test]

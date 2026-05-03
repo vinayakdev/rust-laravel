@@ -4354,6 +4354,57 @@ class ContactForm extends Component
     }
 
     #[test]
+    fn builder_array_relation_entrypoint_suggests_model_relations() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with(['prop'])\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("'prop'").expect("token") + "'prop".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let proposals = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("proposals"))
+            .expect("relation completion should exist");
+
+        assert_eq!(
+            proposals
+                .pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("proposals")
+        );
+    }
+
+    #[test]
+    fn builder_multiline_array_relation_projection_suggests_related_columns() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with([\n    'proposals:na',\n])\n";
+        let line = 4;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("'proposals:na'").expect("token") + "'proposals:na".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let name = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("name"))
+            .expect("projection column completion should exist");
+
+        assert_eq!(
+            name.pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("proposals:name")
+        );
+    }
+
+    #[test]
     fn builder_relation_methods_support_nested_relation_paths() {
         let project = builder_relation_project();
         let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())

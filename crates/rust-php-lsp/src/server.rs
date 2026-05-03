@@ -12,11 +12,10 @@ use serde_json::{Value, json};
 
 use super::context::{
     detect_blade_component_attr_context, detect_blade_component_tag_context,
-    detect_blade_model_property_context, detect_blade_variable_context,
-    detect_builder_arg_context, detect_foreach_alias_context, detect_helper_context,
-    detect_livewire_component_tag_context, detect_livewire_directive_value_context,
-    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
-    detect_vendor_make_context, detect_view_data_context,
+    detect_blade_model_property_context, detect_blade_variable_context, detect_builder_arg_context,
+    detect_foreach_alias_context, detect_helper_context, detect_livewire_component_tag_context,
+    detect_livewire_directive_value_context, detect_route_action_context, detect_symbol_context,
+    detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -275,7 +274,8 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
             line, character, context.collection_name, context.prefix
         ));
         (query::complete_foreach_alias(&context, line), false)
-    } else if let Some(context) = detect_blade_model_property_context(uri, source, line, character) {
+    } else if let Some(context) = detect_blade_model_property_context(uri, source, line, character)
+    {
         let relative = file_uri_to_path(uri).and_then(|path| {
             path.strip_prefix(&index.project_root)
                 .ok()
@@ -333,19 +333,28 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
             "completion uri={uri} line={} char={} context=builder-arg model={:?} prefix={:?}",
             line, character, context.model_class, context.prefix
         ));
-        (query::complete_builder_arg_columns(index, &context, line), true)
+        (
+            query::complete_builder_arg_columns(index, &context, line),
+            true,
+        )
     } else if let Some(context) = detect_vendor_chain_context(source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=vendor-chain class={:?} prefix={:?}",
             line, character, context.class_fqn, context.prefix
         ));
-        (query::complete_vendor_chain_methods(index, &context, line), true)
+        (
+            query::complete_vendor_chain_methods(index, &context, line),
+            true,
+        )
     } else if let Some(context) = detect_vendor_make_context(uri, source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=vendor-make class={:?} model={:?} prefix={:?}",
             line, character, context.class_short, context.model_class, context.prefix
         ));
-        (query::complete_vendor_make_columns(index, &context, line), true)
+        (
+            query::complete_vendor_make_columns(index, &context, line),
+            true,
+        )
     } else if let Some(context) = detect_symbol_context(source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=symbol prefix={:?}",
@@ -572,7 +581,14 @@ fn initialize_result() -> Value {
             },
             "completionProvider": {
                 "resolveProvider": false,
-                "triggerCharacters": ["'", "\"", ".", "(", "@", "[", ",", "$", "<", "-", " "]
+                "triggerCharacters": [
+                    "'", "\"", ".", "(", "@", "[", ",", "$", "<", "-", ">", " ", "_",
+                    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+                ]
             },
             "definitionProvider": true,
             "hoverProvider": true,
@@ -874,8 +890,9 @@ mod tests {
     use crate::project;
 
     use super::{
-        ServerState, completion_result, diagnostic_result, handle_message, path_affects_index,
-        php_document_has_parse_errors, php_document_parse_errors, route_reindex_guard_reason,
+        ServerState, completion_result, diagnostic_result, handle_message, initialize_result,
+        path_affects_index, php_document_has_parse_errors, php_document_parse_errors,
+        route_reindex_guard_reason,
     };
 
     fn workspace_root() -> PathBuf {
@@ -1217,6 +1234,36 @@ mod tests {
             Some("unsafe-string-adjacency")
         );
         assert!(php_document_has_parse_errors(uri, broken));
+    }
+
+    #[test]
+    fn completion_triggers_include_arrow_close() {
+        let result = initialize_result();
+        let triggers = result
+            .pointer("/capabilities/completionProvider/triggerCharacters")
+            .and_then(|value| value.as_array())
+            .expect("trigger characters should exist");
+
+        assert!(
+            triggers.iter().any(|value| value.as_str() == Some(">")),
+            "completion should trigger when `->` is completed",
+        );
+    }
+
+    #[test]
+    fn completion_triggers_include_identifier_characters() {
+        let result = initialize_result();
+        let triggers = result
+            .pointer("/capabilities/completionProvider/triggerCharacters")
+            .and_then(|value| value.as_array())
+            .expect("trigger characters should exist");
+
+        for ch in ["a", "Z", "_", "7"] {
+            assert!(
+                triggers.iter().any(|value| value.as_str() == Some(ch)),
+                "completion should retrigger while editing identifier strings: {ch}",
+            );
+        }
     }
 }
 
