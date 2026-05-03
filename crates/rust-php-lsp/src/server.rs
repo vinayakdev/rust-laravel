@@ -444,85 +444,110 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
 }
 
 fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
-    let params = match params {
-        Some(p) => p,
-        None => return Value::Null,
+    let Some(params) = params else {
+        return Value::Null;
     };
-    let uri = match params.pointer("/textDocument/uri").and_then(Value::as_str) {
-        Some(u) => u,
-        None => return Value::Null,
+    let Some(uri) = params.pointer("/textDocument/uri").and_then(Value::as_str) else {
+        return Value::Null;
     };
-    if params.pointer("/ch").and_then(Value::as_str).is_none() {
+    let Some(ch) = params.pointer("/ch").and_then(Value::as_str) else {
+        return Value::Null;
+    };
+    // Only handle quote characters.
+    if ch != "'" && ch != "\"" {
         return Value::Null;
     }
-    let trigger_line = match params.pointer("/position/line").and_then(Value::as_u64) {
-        Some(l) => l as usize,
-        None => return Value::Null,
+    let Some(trigger_line) = params.pointer("/position/line").and_then(Value::as_u64) else {
+        return Value::Null;
     };
-    let source = match state.documents.get(uri) {
-        Some(s) => s.clone(),
-        None => return Value::Null,
+    let Some(trigger_character) = params.pointer("/position/character").and_then(Value::as_u64)
+    else {
+        return Value::Null;
     };
+    let trigger_line = trigger_line as usize;
+    let trigger_character = trigger_character as usize;
 
-    // When the user presses Enter (ch == "\n"), the cursor has moved to the NEW line
-    // (trigger_line). The line that needs a comma is the one above: trigger_line - 1.
-    // When the user types ' or ", the trigger fires on the SAME line (trigger_line).
-    // In that case, we look at trigger_line - 1 (previous line that may be missing comma).
-    let target_line = match trigger_line.checked_sub(1) {
-        Some(l) => l,
-        None => return Value::Null,
+    let Some(source) = state.documents.get(uri) else {
+        return Value::Null;
     };
-
     let lines: Vec<&str> = source.lines().collect();
-
-    // For ' or " trigger: only insert on previous line when we're continuing an array
-    // (the typed character is an opening quote on trigger_line, hinting another element follows).
-    // For \n trigger: always check the previous line.
-    // Either way we check the same condition on `target_line`.
-    let target_text = match lines.get(target_line) {
-        Some(t) => *t,
-        None => return Value::Null,
+    let Some(line_text) = lines.get(trigger_line) else {
+        return Value::Null;
     };
 
-    let trimmed = target_text.trim_end();
-
-    // The line must end with a closing quote (' or ") with no trailing comma.
-    let ends_with_quote = trimmed.ends_with('\'') || trimmed.ends_with('"');
-    if !ends_with_quote {
-        return Value::Null;
-    }
-    // Already has a comma — nothing to do.
-    if trimmed.ends_with("',") || trimmed.ends_with("\",") {
-        return Value::Null;
-    }
-
-    // Confirm this string is inside a builder array by scanning upward for the array open.
-    let is_in_builder_array = (0..=target_line).rev().any(|idx| {
-        let l = lines[idx];
-        let compact: String = l.chars().filter(|c| !c.is_whitespace()).collect();
-        context::BUILDER_RELATION_METHODS.iter().any(|&m| {
-            compact.contains(&format!("->{m}([")) || compact.contains(&format!("::{m}(["))
-        })
-    });
-    if !is_in_builder_array {
-        return Value::Null;
-    }
-
-    // Insert a comma right after the closing quote (before any trailing whitespace).
-    let quote_end_char = target_text
+    // Convert trigger_character (LSP char index) to a byte offset.
+    // trigger_character points to the cursor position — which for an auto-paired quote is
+    // between the two quotes: ['|'] where | is the cursor.
+    // The closing auto-paired quote is therefore at exactly trigger_character.
+    let trigger_byte = line_text
         .char_indices()
-        .rev()
-        .find(|(_, c)| *c == '\'' || *c == '"')
-        .map(|(byte_idx, _)| target_text[..byte_idx].chars().count() + 1)
-        .unwrap_or_else(|| trimmed.chars().count());
+        .nth(trigger_character)
+        .map(|(b, _)| b)
+        .unwrap_or(line_text.len());
 
+    let quote_char = ch.chars().next().unwrap();
+
+    // Confirm the character at trigger_byte is the same quote — this is how we know the
+    // editor auto-paired it (opening typed → closing placed at cursor). If the user typed
+    // the closing quote manually, the cursor is past the quote and this check fails.
+    if line_text[trigger_byte..].chars().next() != Some(quote_char) {
+        return Value::Null;
+    }
+
+    // Already has a trailing comma after the closing quote — nothing to do.
+    let after_close_byte = trigger_byte + quote_char.len_utf8();
+    if line_text[after_close_byte..].trim_start().starts_with(',') {
+        return Value::Null;
+    }
+
+    // Check that the cursor is inside a builder method array argument.
+    // Scan backward for an unclosed `->method([` or `::method([`.
+    if !cursor_is_inside_builder_array(&lines, trigger_line, trigger_byte) {
+        return Value::Null;
+    }
+
+    // Insert ',' immediately after the closing quote.
+    // trigger_character is the column of the closing quote; +1 is the column after it.
+    let insert_character = trigger_character + 1;
     json!([{
         "range": {
-            "start": { "line": target_line, "character": quote_end_char },
-            "end":   { "line": target_line, "character": quote_end_char }
+            "start": { "line": trigger_line, "character": insert_character },
+            "end":   { "line": trigger_line, "character": insert_character }
         },
         "newText": ","
     }])
+}
+
+/// Returns true when `(line, col_byte)` appears to be inside a `->method([` or `::method([`
+/// array argument, by scanning backward up to 30 lines for an unclosed array opener.
+fn cursor_is_inside_builder_array(lines: &[&str], line: usize, col_byte: usize) -> bool {
+    let start = line.saturating_sub(30);
+    for idx in (start..=line).rev() {
+        let text = lines[idx];
+        let limit = if idx == line {
+            col_byte.min(text.len())
+        } else {
+            text.len()
+        };
+        let compact: String = text[..limit]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+
+        for &method in context::BUILDER_RELATION_METHODS {
+            if compact.contains(&format!("->{method}(["))
+                || compact.contains(&format!("::{method}(["))
+            {
+                return true;
+            }
+        }
+
+        // A closing `])` means the array ended before reaching the opener — stop.
+        if compact.ends_with("])") || compact.ends_with("]);") {
+            break;
+        }
+    }
+    false
 }
 
 fn diagnostic_result(state: &ServerState, params: Option<&Value>) -> Value {
@@ -679,8 +704,8 @@ fn initialize_result() -> Value {
             "hoverProvider": true,
             "codeActionProvider": true,
             "documentOnTypeFormattingProvider": {
-                "firstTriggerCharacter": "\n",
-                "moreTriggerCharacter": ["'", "\""]
+                "firstTriggerCharacter": "'",
+                "moreTriggerCharacter": ["\""]
             },
             "executeCommandProvider": {
                 "commands": ["rust-php.openAssetInZed"]
@@ -1128,6 +1153,74 @@ mod tests {
         let line_index = source
             .lines()
             .position(|line| line.contains("compact('')"))
+            .expect("compact line should exist");
+        let line_text = source.lines().nth(line_index).expect("line should exist");
+        let character = line_text.find("''").expect("compact token should exist") + 1;
+
+        let state = ServerState {
+            project_root: Some(project.root.clone()),
+            project: Some(project),
+            index: Some(index),
+            documents: HashMap::from([(uri.clone(), source)]),
+            dirty_documents: HashSet::new(),
+            parse_failed_documents: HashSet::new(),
+            shutdown_requested: false,
+            exiting: false,
+        };
+
+        let result = completion_result(
+            &state,
+            Some(&json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line_index, "character": character }
+            })),
+        );
+
+        let labels = result
+            .pointer("/items")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"currentUser"));
+        assert!(labels.contains(&"pageTitle"));
+        assert!(labels.contains(&"orders"));
+        assert!(labels.contains(&"filters"));
+        assert!(labels.contains(&"stats"));
+        assert!(labels.contains(&"teamMembers"));
+        assert!(labels.contains(&"breadcrumbs"));
+        assert!(labels.contains(&"flashMessage"));
+        assert!(labels.contains(&"internalAuditLog"));
+        assert!(labels.contains(&"draftInvoice"));
+    }
+
+    #[test]
+    fn completes_local_view_variables_inside_compact_array_strings() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let uri = format!(
+            "file://{}",
+            project
+                .root
+                .join("app/Http/Controllers/BladeSandboxController.php")
+                .display()
+        );
+        let source = std::fs::read_to_string(
+            project
+                .root
+                .join("app/Http/Controllers/BladeSandboxController.php"),
+        )
+        .expect("controller should load");
+        let source = source.replace(
+            "compact('pageTitle', 'currentUser', 'orders', 'filters')",
+            "compact([''])",
+        );
+        let line_index = source
+            .lines()
+            .position(|line| line.contains("compact([''])"))
             .expect("compact line should exist");
         let line_text = source.lines().nth(line_index).expect("line should exist");
         let character = line_text.find("''").expect("compact token should exist") + 1;
