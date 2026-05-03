@@ -475,8 +475,7 @@ pub fn detect_view_data_context(
     }
 
     let before = &source[..quote_start];
-    let compact: String = before.chars().filter(|ch| !ch.is_whitespace()).collect();
-    if !compact.ends_with("compact(") {
+    if !is_inside_compact_call(before) {
         return None;
     }
 
@@ -488,6 +487,31 @@ pub fn detect_view_data_context(
         end_character: byte_index_to_character_in_line(source, inner_end),
         cursor_offset: cursor,
     })
+}
+
+/// Returns true when `before` (source up to but not including the opening quote of the
+/// current string) places the cursor inside any argument position of a `compact(...)` call.
+/// Handles multiple arguments: `compact('a', 'b', ...)`.
+fn is_inside_compact_call(before: &str) -> bool {
+    let Some(compact_pos) = before.rfind("compact(") else {
+        return false;
+    };
+    // Count paren depth from after the opening `(` of compact(...).
+    let after_open = &before[compact_pos + "compact(".len()..];
+    let mut depth = 1i32;
+    for ch in after_open.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return false; // compact() already closed before cursor
+                }
+            }
+            _ => {}
+        }
+    }
+    depth > 0
 }
 
 pub fn detect_blade_variable_context(
@@ -1993,6 +2017,197 @@ pub fn builder_method_uses_relation_name(method_name: &str) -> bool {
         || BUILDER_RELATION_METHODS.contains(&method_name)
 }
 
+/// Eloquent model instance methods whose array argument contains attribute/property names.
+const MODEL_PROPERTY_ARRAY_METHODS: &[&str] = &[
+    "only",
+    "except",
+    "makeVisible",
+    "makeHidden",
+    "setVisible",
+    "setHidden",
+    "append",
+    "setAppends",
+];
+
+#[derive(Clone, Debug)]
+pub struct ModelPropertyArrayContext {
+    pub model_class: String,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+}
+
+/// Detect when the cursor is inside a string in an array argument of a model instance method
+/// that accepts property names (e.g. `->only([`, `->makeVisible([`).
+pub fn detect_model_property_array_context(
+    _uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<ModelPropertyArrayContext> {
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let (quote_start, quote_char) = find_quote_start(line_text, cursor)?;
+    let quote_end = find_quote_end(line_text, quote_start + quote_char.len_utf8(), quote_char)?;
+    let inner_start = quote_start + quote_char.len_utf8();
+    let inner_end = quote_end;
+
+    if cursor < inner_start || cursor > inner_end {
+        return None;
+    }
+
+    let lines: Vec<&str> = source.lines().collect();
+    let (call_pos, call_line) =
+        find_enclosing_model_property_array_call(&lines, line, quote_start)?;
+    let call_line_text = *lines.get(call_line)?;
+    let before_call = &call_line_text[..call_pos];
+
+    let prefix = source_chars_slice(line_text, inner_start, cursor.min(inner_end));
+
+    let var_name = extract_root_variable(before_call)?;
+    let model_class = resolve_variable_type(source, &var_name)?;
+
+    Some(ModelPropertyArrayContext {
+        model_class,
+        prefix,
+        start_character: line_text[..inner_start].chars().count(),
+        end_character: line_text[..inner_end].chars().count(),
+    })
+}
+
+/// Context for hovering over / jumping to a relation method inside a builder string.
+#[derive(Clone, Debug)]
+pub struct BuilderRelationHoverContext {
+    /// Root model class (e.g. "Proposal").
+    pub model_class: String,
+    /// Dot-path leading up to but not including the segment at cursor (e.g. "proposalServices").
+    pub path_to_segment: String,
+    /// The relation-method name the cursor is on (e.g. "menuItems").
+    pub segment: String,
+    /// Character position of the segment start (for originSelectionRange).
+    pub origin_start_character: usize,
+    /// Character position of the segment end (for originSelectionRange).
+    pub origin_end_character: usize,
+}
+
+/// Detect when the cursor is hovering over a relation segment inside a builder string such as
+/// `->with('proposalServices.menuItems')` or `->with(['proposalServices'])`.
+/// Returns the root model, the path up to the segment, and the segment itself.
+pub fn detect_builder_relation_hover_context(
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<BuilderRelationHoverContext> {
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let (quote_start, quote_char) = find_quote_start(line_text, cursor)?;
+    let quote_end = find_quote_end(line_text, quote_start + quote_char.len_utf8(), quote_char)?;
+    let inner_start = quote_start + quote_char.len_utf8();
+    let inner_end = quote_end;
+
+    if cursor < inner_start || cursor > inner_end {
+        return None;
+    }
+
+    let lines: Vec<&str> = source.lines().collect();
+    let before_quote = &line_text[..quote_start];
+    let compact_before: String = before_quote.chars().filter(|c| !c.is_whitespace()).collect();
+
+    let (call_separator, call_line, call_pos) = BUILDER_STRING_ARG_METHODS
+        .iter()
+        .find_map(|&method_name| {
+            if compact_before.ends_with(&format!("->{method_name}(")) {
+                let needle = format!("->{method_name}");
+                let pos = before_quote.rfind(&needle)?;
+                Some(("->", line, pos))
+            } else if compact_before.ends_with(&format!("::{method_name}(")) {
+                let needle = format!("::{method_name}");
+                let pos = before_quote.rfind(&needle)?;
+                Some(("::", line, pos))
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            find_enclosing_builder_array_call(&lines, line, quote_start)
+                .map(|(_, sep, l, p)| (sep, l, p))
+        })?;
+
+    let call_line_text = *lines.get(call_line)?;
+    let before_call = &call_line_text[..call_pos];
+
+    let model_class = extract_root_variable(before_call)
+        .and_then(|var| resolve_variable_type(source, &var))
+        .or_else(|| {
+            let class_short = if call_separator == "::" {
+                extract_class_before_static_call(call_line_text, call_pos)?
+            } else {
+                find_chain_origin_class(&lines, call_line, call_line_text, call_pos)?
+            };
+            if is_model_like_class(&class_short) { Some(class_short) } else { None }
+        })?;
+
+    // Use only the part before any ':' (ignore column-selection suffix like 'rel:col,col').
+    let full_content = &line_text[inner_start..inner_end];
+    let relation_part = full_content.split(':').next().unwrap_or(full_content);
+
+    // Find which dot-segment the cursor is in.
+    let cursor_offset = cursor - inner_start;
+    let mut byte_pos = 0usize;
+    let mut path_parts: Vec<&str> = Vec::new();
+
+    for seg in relation_part.split('.') {
+        let seg_end = byte_pos + seg.len();
+        if cursor_offset <= seg_end {
+            if seg.is_empty() {
+                return None;
+            }
+            let seg_start_char = line_text[..inner_start + byte_pos].chars().count();
+            let seg_end_char = line_text[..inner_start + seg_end].chars().count();
+            return Some(BuilderRelationHoverContext {
+                model_class,
+                path_to_segment: path_parts.join("."),
+                segment: seg.to_string(),
+                origin_start_character: seg_start_char,
+                origin_end_character: seg_end_char,
+            });
+        }
+        path_parts.push(seg);
+        byte_pos = seg_end + 1; // skip the '.'
+    }
+
+    None
+}
+
+fn find_enclosing_model_property_array_call(
+    lines: &[&str],
+    current_line: usize,
+    quote_start: usize,
+) -> Option<(usize, usize)> {
+    let start = current_line.saturating_sub(10);
+
+    for idx in (start..=current_line).rev() {
+        let line_text = *lines.get(idx)?;
+        let limit = if idx == current_line {
+            quote_start.min(line_text.len())
+        } else {
+            line_text.len()
+        };
+        let before = &line_text[..limit];
+        let compact: String = before.chars().filter(|c| !c.is_whitespace()).collect();
+
+        for &method_name in MODEL_PROPERTY_ARRAY_METHODS {
+            let needle = format!("->{method_name}([");
+            if compact.contains(&needle) {
+                if let Some(call_pos) = before.rfind(&format!("->{method_name}")) {
+                    return Some((call_pos, idx));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn find_enclosing_builder_array_call(
     lines: &[&str],
     current_line: usize,
@@ -2020,6 +2235,11 @@ fn find_enclosing_builder_array_call(
                     return Some((method_name, separator, idx, call_pos));
                 }
             }
+        }
+
+        // Stop at statement boundaries so we don't bleed into a previous statement.
+        if idx < current_line && compact.ends_with(';') {
+            break;
         }
     }
 

@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 
 use super::context::{
     BladeComponentAttrContext, BladeComponentTagContext, BladeModelPropertyContext,
-    BladeVariableContext, BuilderArgContext, ForeachAliasContext, HelperContext, HelperStyle,
-    LivewireComponentTagContext, LivewireDirectiveValueContext, LivewireDirectiveValueKind,
-    RouteActionContext, RouteActionKind, SymbolContext, SymbolKind, VendorChainContext,
-    VendorMakeContext, ViewDataContext, ViewDataKind, builder_method_uses_relation_name,
+    BladeVariableContext, BuilderArgContext, BuilderRelationHoverContext, ForeachAliasContext,
+    HelperContext, HelperStyle, LivewireComponentTagContext, LivewireDirectiveValueContext,
+    LivewireDirectiveValueKind, ModelPropertyArrayContext, RouteActionContext, RouteActionKind,
+    SymbolContext, SymbolKind, VendorChainContext, VendorMakeContext, ViewDataContext, ViewDataKind,
+    builder_method_uses_relation_name,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
@@ -2690,22 +2691,32 @@ fn local_view_data_variables(source: &str, cursor: usize) -> Vec<String> {
 }
 
 fn enclosing_function_bounds(source: &str, cursor: usize) -> Option<(usize, usize, usize)> {
-    let before = &source[..cursor.min(source.len())];
-    let function_start = before.rfind("function")?;
-    let signature = &source[function_start..];
-    let open_paren_rel = signature.find('(')?;
-    let open_paren = function_start + open_paren_rel;
-    let close_paren = find_matching_delimiter(source, open_paren, '(', ')')?;
-    let body_start = source[close_paren..]
-        .find('{')
-        .map(|rel| close_paren + rel)?;
-    let body_end = find_matching_delimiter(source, body_start, '{', '}')?;
+    // Search backward through nested `function` keywords until we find one whose body
+    // actually contains the cursor. This handles closures/arrow-functions that appear
+    // before the cursor but are already closed (e.g. ->each(static function(...) { })).
+    let mut search_end = cursor.min(source.len());
 
-    if cursor < body_start || cursor > body_end {
-        return None;
+    loop {
+        let function_start = source[..search_end].rfind("function")?;
+        let signature = &source[function_start..];
+        let open_paren_rel = signature.find('(')?;
+        let open_paren = function_start + open_paren_rel;
+        let close_paren = find_matching_delimiter(source, open_paren, '(', ')')?;
+        let body_start = source[close_paren..]
+            .find('{')
+            .map(|rel| close_paren + rel)?;
+        let body_end = find_matching_delimiter(source, body_start, '{', '}')?;
+
+        if cursor >= body_start + 1 && cursor <= body_end {
+            return Some((function_start, body_start + 1, body_end));
+        }
+
+        // This function doesn't contain the cursor; skip past its keyword and try again.
+        if function_start == 0 {
+            return None;
+        }
+        search_end = function_start;
     }
-
-    Some((function_start, body_start + 1, body_end))
 }
 
 fn extract_function_parameters(signature: &str) -> Vec<String> {
@@ -3265,6 +3276,54 @@ pub fn complete_builder_arg_columns(
         .collect()
 }
 
+/// Complete model column names inside a model instance method array (e.g. `->only([`, `->makeVisible([`).
+pub fn complete_model_property_array(
+    index: &ProjectIndex,
+    context: &ModelPropertyArrayContext,
+    line: usize,
+) -> Vec<Value> {
+    let Some(model) = index.model_for_class(&context.model_class) else {
+        return Vec::new();
+    };
+
+    let prefix = &context.prefix;
+    let mut matches: Vec<(u32, usize, String, String)> = model
+        .columns
+        .iter()
+        .filter_map(|col| {
+            let score = fuzzy_score(&col.name, prefix)?;
+            let detail = format!(
+                "{} {}",
+                col.column_type,
+                if col.nullable { "nullable" } else { "" }
+            )
+            .trim()
+            .to_string();
+            Some((score, col.name.len(), col.name.clone(), detail))
+        })
+        .collect();
+
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
+    matches.dedup_by(|a, b| a.2 == b.2);
+    matches
+        .into_iter()
+        .map(|(_, _, name, detail)| {
+            json!({
+                "label": name,
+                "kind": 5,
+                "detail": detail,
+                "textEdit": {
+                    "range": {
+                        "start": { "line": line, "character": context.start_character },
+                        "end":   { "line": line, "character": context.end_character }
+                    },
+                    "newText": name
+                }
+            })
+        })
+        .collect()
+}
+
 /// Methods that accept `'relation as alias' => fn($q)` key-value pairs in their array argument.
 const AGGREGATE_RELATION_METHODS: &[&str] = &[
     "withCount",
@@ -3482,6 +3541,81 @@ fn retrigger_suggest_command() -> Value {
         "title": "Trigger completion",
         "command": "editor.action.triggerSuggest",
     })
+}
+
+pub fn builder_relation_definitions(
+    index: &ProjectIndex,
+    context: &BuilderRelationHoverContext,
+    line: usize,
+) -> Vec<Value> {
+    let root_model = match index.model_for_class(&context.model_class) {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+
+    let containing_model = if context.path_to_segment.is_empty() {
+        root_model
+    } else {
+        match resolve_relation_path_model(index, root_model, &context.path_to_segment) {
+            Some(m) => m,
+            None => return Vec::new(),
+        }
+    };
+
+    let relation = match containing_model
+        .relations
+        .iter()
+        .find(|r| r.method == context.segment)
+    {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+
+    if relation.line == 0 {
+        return Vec::new();
+    }
+
+    vec![location_link(
+        &index.project_root,
+        &containing_model.file,
+        relation.line,
+        1,
+        line,
+        context.origin_start_character,
+        context.origin_end_character,
+    )]
+}
+
+pub fn builder_relation_hover(
+    index: &ProjectIndex,
+    context: &BuilderRelationHoverContext,
+    line: usize,
+) -> Option<Value> {
+    let root_model = index.model_for_class(&context.model_class)?;
+
+    let containing_model = if context.path_to_segment.is_empty() {
+        root_model
+    } else {
+        resolve_relation_path_model(index, root_model, &context.path_to_segment)?
+    };
+
+    let relation = containing_model
+        .relations
+        .iter()
+        .find(|r| r.method == context.segment)?;
+
+    let text = format!(
+        "**{}** — {} → {}",
+        relation.method, relation.relation_type, relation.related_model
+    );
+
+    Some(json!({
+        "contents": { "kind": "markdown", "value": text },
+        "range": {
+            "start": { "line": line, "character": context.origin_start_character },
+            "end":   { "line": line, "character": context.origin_end_character }
+        }
+    }))
 }
 
 fn resolve_relation_path_model<'a>(
@@ -3705,6 +3839,82 @@ class Panel
 "#,
         );
 
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn proposal_services_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+        write_file(&root, "composer.json", r#"{"autoload":{"psr-4":{"App\\":"app/"}}}"#);
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(&root, "database/migrations/2024_01_01_000000_create_proposals_table.php", r#"<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+return new class extends Migration {
+    public function up(): void {
+        Schema::create('proposals', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->timestamps();
+        });
+    }
+};
+"#);
+        write_file(&root, "database/migrations/2024_01_01_000001_create_proposal_services_table.php", r#"<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+return new class extends Migration {
+    public function up(): void {
+        Schema::create('proposal_services', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('proposal_id');
+            $table->string('title');
+            $table->timestamps();
+        });
+    }
+};
+"#);
+        write_file(&root, "database/migrations/2024_01_01_000002_create_menu_items_table.php", r#"<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+return new class extends Migration {
+    public function up(): void {
+        Schema::create('menu_items', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('proposal_service_id');
+            $table->string('name');
+            $table->timestamps();
+        });
+    }
+};
+"#);
+        write_file(&root, "app/Models/Proposal.php", r#"<?php
+namespace App\Models;
+use Illuminate\Database\Eloquent\Model;
+class Proposal extends Model {
+    public function proposalServices() {
+        return $this->hasMany(ProposalService::class);
+    }
+}
+"#);
+        write_file(&root, "app/Models/ProposalService.php", r#"<?php
+namespace App\Models;
+use Illuminate\Database\Eloquent\Model;
+class ProposalService extends Model {
+    public function menuItems() {
+        return $this->hasMany(MenuItem::class);
+    }
+}
+"#);
+        write_file(&root, "app/Models/MenuItem.php", r#"<?php
+namespace App\Models;
+use Illuminate\Database\Eloquent\Model;
+class MenuItem extends Model {}
+"#);
         project::from_root(root).expect("fixture project should resolve")
     }
 
@@ -4459,6 +4669,117 @@ class ContactForm extends Component
     }
 
     #[test]
+    fn proposal_services_dot_suggests_menu_items_relation() {
+        let project = proposal_services_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        // Mirrors the user's exact scenario: Proposal::with([...'proposalServices.'...])
+        let source = concat!(
+            "<?php\nuse App\\Models\\Proposal;\n\n",
+            "Proposal::with([\n",
+            "    'proposalServices.',\n",
+            "])\n",
+        );
+        let line = 4;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("'proposalServices.'").expect("token") + "'proposalServices.".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let menu_items = items
+            .iter()
+            .find(|item| item.get("label").and_then(|v| v.as_str()) == Some("menuItems"))
+            .expect("should suggest ProposalService relations (menuItems) after dot");
+
+        assert_eq!(
+            menu_items.pointer("/textEdit/newText").and_then(|v| v.as_str()),
+            Some("proposalServices.menuItems")
+        );
+    }
+
+    #[test]
+    fn builder_relation_dot_with_empty_fragment_suggests_nested_relations() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::query()->with('proposals.')\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("->with('proposals.')").expect("token")
+            + "->with('proposals.".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let comments = items
+            .iter()
+            .find(|item| item.get("label").and_then(|v| v.as_str()) == Some("comments"))
+            .expect("should suggest nested relations when fragment is empty after dot");
+
+        assert_eq!(
+            comments.pointer("/textEdit/newText").and_then(|v| v.as_str()),
+            Some("proposals.comments")
+        );
+    }
+
+    #[test]
+    fn builder_multiline_array_dot_with_empty_fragment_suggests_nested_relations() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with([\n    'proposals.',\n])\n";
+        let line = 4;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("'proposals.'").expect("token") + "'proposals.".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let comments = items
+            .iter()
+            .find(|item| item.get("label").and_then(|v| v.as_str()) == Some("comments"))
+            .expect("multiline array: should suggest nested relations when fragment is empty after dot");
+
+        assert_eq!(
+            comments.pointer("/textEdit/newText").and_then(|v| v.as_str()),
+            Some("proposals.comments")
+        );
+    }
+
+    #[test]
+    fn builder_chained_multiline_array_dot_suggests_nested_relations() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        // Matches the user's real-world chained structure:
+        //   Venue::with([...'proposals.',...])->with(['..'])->withCount([...])->latest()
+        let source = concat!(
+            "<?php\nuse App\\Models\\Venue;\n\n",
+            "Venue::with([\n",
+            "    'name',\n",
+            "    'proposals.',\n",   // ← cursor here
+            "])->with(['name'])->withCount(['proposals'])->latest();\n",
+        );
+        let line = 5;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("'proposals.'").expect("token") + "'proposals.".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let comments = items
+            .iter()
+            .find(|item| item.get("label").and_then(|v| v.as_str()) == Some("comments"))
+            .expect("chained call: should suggest nested relations after dot");
+
+        assert_eq!(
+            comments.pointer("/textEdit/newText").and_then(|v| v.as_str()),
+            Some("proposals.comments")
+        );
+    }
+
+    #[test]
     fn builder_relation_methods_support_nested_relation_paths() {
         let project = builder_relation_project();
         let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
@@ -4944,5 +5265,136 @@ class DemoController
 
         assert!(php_labels.contains(&"$headline"));
         assert!(!php_labels.contains(&"$cta"));
+    }
+
+    #[test]
+    fn compact_second_argument_gets_variable_completions() {
+        // Regression: detect_view_data_context previously required compact( to immediately
+        // precede the cursor quote, so only the first argument matched.
+        let source = r#"<?php
+
+class DemoController
+{
+    public function index()
+    {
+        $proposals = [];
+        $paginate = false;
+
+        return view('proposals.index', compact('proposals', ''));
+    }
+}
+"#;
+        let line = source
+            .lines()
+            .position(|line| line.contains("compact('proposals', '')"))
+            .expect("compact line should exist");
+        let line_text = source.lines().nth(line).expect("line should exist");
+        // Position cursor inside the second empty string ''
+        let second_empty = line_text
+            .find(", ''")
+            .expect("second empty string should exist");
+        let character = second_empty + ", '".len();
+
+        let context = crate::lsp::context::detect_view_data_context(
+            "file:///tmp/app/Http/Controllers/DemoController.php",
+            source,
+            line,
+            character,
+        )
+        .expect("view data context should fire for second compact argument");
+
+        let items = complete_view_data_variables(source, &context, line);
+        let labels = items
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|v| v.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"proposals"), "should suggest $proposals");
+        assert!(labels.contains(&"paginate"), "should suggest $paginate");
+    }
+
+    #[test]
+    fn compact_skips_inner_closure_and_finds_outer_function_variables() {
+        // Regression: enclosing_function_bounds used rfind("function") which found the
+        // nearest `static function` closure body (already closed before the cursor) and
+        // returned None, so compact() suggested nothing.
+        let source = r#"<?php
+
+class ProposalController
+{
+    public function index()
+    {
+        $proposals = [];
+        $paginate = false;
+
+        $proposals = collect($proposals)->each(static function ($item): void {
+            $item->doSomething();
+        });
+
+        return view('proposals.index', compact(''));
+    }
+}
+"#;
+        let line = source
+            .lines()
+            .position(|l| l.contains("compact('')"))
+            .expect("compact line");
+        let line_text = source.lines().nth(line).expect("line");
+        let character = line_text.find("''").expect("empty string") + 1;
+
+        let context = crate::lsp::context::detect_view_data_context(
+            "file:///tmp/app/Http/Controllers/ProposalController.php",
+            source,
+            line,
+            character,
+        )
+        .expect("view data context should fire");
+
+        let items = complete_view_data_variables(source, &context, line);
+        let labels: Vec<_> = items
+            .iter()
+            .filter_map(|item| item.get("label").and_then(|v| v.as_str()))
+            .collect();
+
+        assert!(labels.contains(&"proposals"), "should suggest $proposals from outer function");
+        assert!(labels.contains(&"paginate"), "should suggest $paginate from outer function");
+    }
+
+    #[test]
+    fn view_navigation_not_blocked_by_preceding_builder_chain() {
+        // Regression: find_enclosing_builder_array_call had no statement-boundary guard,
+        // so detect_builder_relation_hover_context fired on view('...') strings that
+        // appeared after a with([...]) call in the same function, swallowing the view
+        // navigation via the else-if chain in definition_result.
+        let source = concat!(
+            "<?php\nuse App\\Models\\Proposal;\n\n",
+            "class ProposalController {\n",
+            "    public function index() {\n",
+            "        $proposals = Proposal::with([\n",
+            "            'client',\n",
+            "            'venue',\n",
+            "        ])->latest();\n",    // ends with ';' — statement boundary
+            "        return view('proposals.index', compact('proposals'));\n",
+            "    }\n",
+            "}\n",
+        );
+        let line = source
+            .lines()
+            .position(|l| l.contains("view('proposals.index'"))
+            .expect("view line should exist");
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text
+            .find("'proposals.index'")
+            .expect("view token should exist")
+            + 1;
+
+        // Must NOT fire — view() strings are not relation strings.
+        let result = crate::lsp::context::detect_builder_relation_hover_context(
+            source, line, character,
+        );
+        assert!(
+            result.is_none(),
+            "detect_builder_relation_hover_context should not fire on a view() string"
+        );
     }
 }

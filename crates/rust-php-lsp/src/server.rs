@@ -13,10 +13,10 @@ use serde_json::{Value, json};
 use super::context::{
     self, detect_blade_component_attr_context, detect_blade_component_tag_context,
     detect_blade_model_property_context, detect_blade_variable_context, detect_builder_arg_context,
-    detect_foreach_alias_context, detect_helper_context, detect_livewire_component_tag_context,
-    detect_livewire_directive_value_context, detect_model_property_array_context,
-    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
-    detect_vendor_make_context, detect_view_data_context,
+    detect_builder_relation_hover_context, detect_foreach_alias_context, detect_helper_context,
+    detect_livewire_component_tag_context, detect_livewire_directive_value_context,
+    detect_model_property_array_context, detect_route_action_context, detect_symbol_context,
+    detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -415,6 +415,8 @@ fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
         query::livewire_component_definitions(index, &context, line)
     } else if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
         query::blade_component_definitions(index, &context, line)
+    } else if let Some(context) = detect_builder_relation_hover_context(source, line, character) {
+        query::builder_relation_definitions(index, &context, line)
     } else if let Some(context) = detect_symbol_context(source, line, character) {
         query::definitions(index, &context, line)
     } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
@@ -443,6 +445,9 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
     }
     if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
         return query::blade_component_hover(index, &context, line).unwrap_or(Value::Null);
+    }
+    if let Some(context) = detect_builder_relation_hover_context(source, line, character) {
+        return query::builder_relation_hover(index, &context, line).unwrap_or(Value::Null);
     }
     if let Some(context) = detect_symbol_context(source, line, character) {
         return query::hover(index, &context, line).unwrap_or(Value::Null);
