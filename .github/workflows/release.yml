@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build LSP binary
-        run: cargo build --release --bin rust-php
+        run: cargo build --release --bin rust-php --no-default-features
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

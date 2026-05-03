@@ -1,7 +1,9 @@
 pub mod analyzers;
+#[cfg(feature = "dev-tools")]
 mod benchmark;
 mod cli;
 pub mod core;
+#[cfg(feature = "dev-tools")]
 mod debug;
 mod export;
 pub mod lsp;
@@ -82,13 +84,16 @@ pub fn run() -> Result<(), String> {
         Command::ExportLsp => {
             export::run(&options.export)?;
         }
+        #[cfg(feature = "dev-tools")]
         Command::BenchmarkIndex => {
             let project = project::resolve(options.project.as_deref())?;
             benchmark::run(&project, options.json)?;
         }
+        #[cfg(feature = "dev-tools")]
         Command::DebugBrowse => {
             debug::run_browse(options.project.as_deref())?;
         }
+        #[cfg(feature = "dev-tools")]
         Command::DebugWeb => {
             debug::run_web(options.project.as_deref())?;
         }

@@ -17,8 +17,11 @@ pub enum Command {
     PublicList,
     Lsp,
     ExportLsp,
+    #[cfg(feature = "dev-tools")]
     BenchmarkIndex,
+    #[cfg(feature = "dev-tools")]
     DebugBrowse,
+    #[cfg(feature = "dev-tools")]
     DebugWeb,
 }
 
@@ -60,8 +63,11 @@ where
             "public:list" => command = Command::PublicList,
             "lsp" => command = Command::Lsp,
             "export:lsp" => command = Command::ExportLsp,
+            #[cfg(feature = "dev-tools")]
             "benchmark:index" => command = Command::BenchmarkIndex,
+            #[cfg(feature = "dev-tools")]
             "debug:browse" => command = Command::DebugBrowse,
+            #[cfg(feature = "dev-tools")]
             "debug:web" => command = Command::DebugWeb,
             "--json" => json = OutputMode::Json,
             "--project" => {

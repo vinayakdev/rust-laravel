@@ -7,17 +7,21 @@ name = "rust-php"
 version = "0.1.1"
 edition = "2024"
 
+[features]
+default = ["dev-tools"]
+dev-tools = ["dep:libc", "dep:rust-php-debug"]
+
 [dependencies]
 bumpalo = "3.19.0"
 comfy-table = "7.2.1"
 crossterm = "0.29.0"
 dialoguer = { version = "0.12.0", features = ["fuzzy-select"] }
-libc = "0.2"
+libc = { version = "0.2", optional = true }
 php-parser = "0.1.3"
 rayon = "1.11.0"
 rust-php-configs = { path = "crates/rust-php-configs" }
 rust-php-controllers = { path = "crates/rust-php-controllers" }
-rust-php-debug = { path = "crates/rust-php-debug" }
+rust-php-debug = { path = "crates/rust-php-debug", optional = true }
 rust-php-foundation = { path = "crates/rust-php-foundation" }
 rust-php-lsp = { path = "crates/rust-php-lsp" }
 rust-php-markdown = { path = "crates/rust-php-markdown" }
