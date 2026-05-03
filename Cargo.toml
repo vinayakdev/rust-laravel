@@ -41,9 +41,6 @@ zed_extension_api = "0.4.0"
 name = "debug-classmap"
 path = "src/debug_classmap.rs"
 
-[patch.crates-io]
-php-parser = { path = "vendor/php-parser" }
-
 [profile.release]
 codegen-units = 1
 lto = "thin"
