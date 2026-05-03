@@ -9,8 +9,19 @@ permissions:
   contents: write
 
 jobs:
-  release-mac:
-    runs-on: macos-14
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            bin_name: rust-php-macos-aarch64
+            exe_suffix: ""
+          - os: windows-latest
+            bin_name: rust-php-windows-x86_64
+            exe_suffix: ".exe"
+
+    runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4.2.2
 
@@ -19,7 +30,25 @@ jobs:
       - name: Build LSP binary
         run: cargo build --release --bin rust-php
 
-      - name: Assemble bundle
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.bin_name }}
+          path: target/release/rust-php${{ matrix.exe_suffix }}
+
+  release:
+    needs: build
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+
+      - name: Assemble bundle and create release
         run: |
           VERSION=$(grep '^version' zed-extension/extension.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
@@ -31,9 +60,11 @@ jobs:
           cp zed-extension/src/lib.rs       bundle/extension/src/
           cp -r zed-extension/languages     bundle/extension/
           cp -r zed-extension/snippets      bundle/extension/
-          cp target/release/rust-php        bundle/extension/bin/rust-php-macos-aarch64
-          chmod +x                          bundle/extension/bin/rust-php-macos-aarch64
           printf '\n[workspace]\n' >> bundle/extension/Cargo.toml
+
+          cp binaries/rust-php-macos-aarch64/rust-php       bundle/extension/bin/rust-php-macos-aarch64
+          cp binaries/rust-php-windows-x86_64/rust-php.exe  bundle/extension/bin/rust-php-windows-x86_64.exe
+          chmod +x bundle/extension/bin/rust-php-macos-aarch64
 
           cat > bundle/INSTALL.md << 'EOF'
           # rust-laravel — Install
@@ -46,7 +77,7 @@ jobs:
           The LSP binary is bundled — no PATH changes or config needed.
           EOF
 
-          zip -r rust-laravel-v${VERSION}-macos-aarch64.zip bundle
+          zip -r rust-laravel-v${VERSION}.zip bundle
 
       - uses: softprops/action-gh-release@v2.3.2
         with:
