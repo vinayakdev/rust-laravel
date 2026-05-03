@@ -8,7 +8,7 @@ use super::context::{
     BladeVariableContext, BuilderArgContext, ForeachAliasContext, HelperContext, HelperStyle,
     LivewireComponentTagContext, LivewireDirectiveValueContext, LivewireDirectiveValueKind,
     RouteActionContext, RouteActionKind, SymbolContext, SymbolKind, VendorChainContext,
-    VendorMakeContext, ViewDataContext, ViewDataKind,
+    VendorMakeContext, ViewDataContext, ViewDataKind, builder_method_uses_relation_name,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
@@ -49,7 +49,9 @@ pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> V
         SymbolKind::Livewire => index
             .livewire_component_matches(&context.prefix)
             .into_iter()
-            .map(|component| livewire_symbol_completion(component, context, line, &index.project_root))
+            .map(|component| {
+                livewire_symbol_completion(component, context, line, &index.project_root)
+            })
             .collect(),
         SymbolKind::Asset => index
             .public_asset_matches(&context.prefix)
@@ -169,14 +171,24 @@ pub fn complete_blade_model_properties(
             )
             .trim()
             .to_string();
-            candidates.push((score, col.name.len(), col.name.clone(), Kind::Column(detail)));
+            candidates.push((
+                score,
+                col.name.len(),
+                col.name.clone(),
+                Kind::Column(detail),
+            ));
         }
     }
 
     for rel in &model.relations {
         if let Some(score) = fuzzy_score(&rel.method, prefix) {
             let detail = format!("{} → {}", rel.relation_type, rel.related_model);
-            candidates.push((score, rel.method.len(), rel.method.clone(), Kind::Relation(detail)));
+            candidates.push((
+                score,
+                rel.method.len(),
+                rel.method.clone(),
+                Kind::Relation(detail),
+            ));
         }
     }
 
@@ -233,43 +245,85 @@ pub fn complete_blade_model_properties(
         .collect()
 }
 
-fn complete_loop_variable_properties(context: &BladeModelPropertyContext, line: usize) -> Vec<Value> {
+fn complete_loop_variable_properties(
+    context: &BladeModelPropertyContext,
+    line: usize,
+) -> Vec<Value> {
     struct LoopProp {
         name: &'static str,
         ty: &'static str,
         doc: &'static str,
     }
     const PROPS: &[LoopProp] = &[
-        LoopProp { name: "index",     ty: "int",   doc: "Zero-based index of the current iteration." },
-        LoopProp { name: "iteration", ty: "int",   doc: "One-based iteration count (starts at 1)." },
-        LoopProp { name: "remaining", ty: "int",   doc: "Iterations remaining in the loop." },
-        LoopProp { name: "count",     ty: "int",   doc: "Total number of items in the collection." },
-        LoopProp { name: "first",     ty: "bool",  doc: "Whether this is the first iteration." },
-        LoopProp { name: "last",      ty: "bool",  doc: "Whether this is the last iteration." },
-        LoopProp { name: "even",      ty: "bool",  doc: "Whether this is an even-numbered iteration." },
-        LoopProp { name: "odd",       ty: "bool",  doc: "Whether this is an odd-numbered iteration." },
-        LoopProp { name: "depth",     ty: "int",   doc: "Nesting level of the current loop (1 = outermost)." },
-        LoopProp { name: "parent",    ty: "?Loop", doc: "The parent loop's `$loop` variable when nested." },
+        LoopProp {
+            name: "index",
+            ty: "int",
+            doc: "Zero-based index of the current iteration.",
+        },
+        LoopProp {
+            name: "iteration",
+            ty: "int",
+            doc: "One-based iteration count (starts at 1).",
+        },
+        LoopProp {
+            name: "remaining",
+            ty: "int",
+            doc: "Iterations remaining in the loop.",
+        },
+        LoopProp {
+            name: "count",
+            ty: "int",
+            doc: "Total number of items in the collection.",
+        },
+        LoopProp {
+            name: "first",
+            ty: "bool",
+            doc: "Whether this is the first iteration.",
+        },
+        LoopProp {
+            name: "last",
+            ty: "bool",
+            doc: "Whether this is the last iteration.",
+        },
+        LoopProp {
+            name: "even",
+            ty: "bool",
+            doc: "Whether this is an even-numbered iteration.",
+        },
+        LoopProp {
+            name: "odd",
+            ty: "bool",
+            doc: "Whether this is an odd-numbered iteration.",
+        },
+        LoopProp {
+            name: "depth",
+            ty: "int",
+            doc: "Nesting level of the current loop (1 = outermost).",
+        },
+        LoopProp {
+            name: "parent",
+            ty: "?Loop",
+            doc: "The parent loop's `$loop` variable when nested.",
+        },
     ];
     PROPS
         .iter()
-        .filter(|p| {
-            context.prefix.is_empty()
-                || p.name.contains(context.prefix.as_str())
+        .filter(|p| context.prefix.is_empty() || p.name.contains(context.prefix.as_str()))
+        .map(|p| {
+            json!({
+                "label": p.name,
+                "kind": 5,
+                "detail": format!("{} — $loop", p.ty),
+                "documentation": { "kind": "markdown", "value": p.doc },
+                "textEdit": {
+                    "range": {
+                        "start": { "line": line, "character": context.start_character },
+                        "end":   { "line": line, "character": context.end_character },
+                    },
+                    "newText": p.name,
+                }
+            })
         })
-        .map(|p| json!({
-            "label": p.name,
-            "kind": 5,
-            "detail": format!("{} — $loop", p.ty),
-            "documentation": { "kind": "markdown", "value": p.doc },
-            "textEdit": {
-                "range": {
-                    "start": { "line": line, "character": context.start_character },
-                    "end":   { "line": line, "character": context.end_character },
-                },
-                "newText": p.name,
-            }
-        }))
         .collect()
 }
 
@@ -286,44 +340,149 @@ fn complete_paginator_methods(
         all_paginators: bool,
     }
     const METHODS: &[PaginatorMethod] = &[
-        PaginatorMethod { name: "links()",            insert: "links()",                         detail: "string",  doc: "Render the pagination links HTML.",                        all_paginators: true },
-        PaginatorMethod { name: "withQueryString()",  insert: "withQueryString()",               detail: "static",  doc: "Append the current query string to pagination links.",     all_paginators: true },
-        PaginatorMethod { name: "appends()",          insert: "appends([${1:key} => ${2:val}])", detail: "static",  doc: "Append key/value pairs to the pagination query string.",   all_paginators: true },
-        PaginatorMethod { name: "onEachSide()",       insert: "onEachSide(${1:3})",              detail: "static",  doc: "Number of links to show on each side of the current page.", all_paginators: true },
-        PaginatorMethod { name: "count()",            insert: "count()",                         detail: "int",     doc: "Number of items on the current page.",                    all_paginators: true },
-        PaginatorMethod { name: "perPage()",          insert: "perPage()",                       detail: "int",     doc: "Number of items per page.",                               all_paginators: true },
-        PaginatorMethod { name: "currentPage()",      insert: "currentPage()",                   detail: "int",     doc: "Current page number.",                                    all_paginators: true },
-        PaginatorMethod { name: "hasPages()",         insert: "hasPages()",                      detail: "bool",    doc: "Whether there are multiple pages.",                       all_paginators: true },
-        PaginatorMethod { name: "hasMorePages()",     insert: "hasMorePages()",                  detail: "bool",    doc: "Whether there are more pages after the current one.",     all_paginators: true },
-        PaginatorMethod { name: "nextPageUrl()",      insert: "nextPageUrl()",                   detail: "?string", doc: "URL of the next page, or null.",                          all_paginators: true },
-        PaginatorMethod { name: "previousPageUrl()",  insert: "previousPageUrl()",               detail: "?string", doc: "URL of the previous page, or null.",                      all_paginators: true },
-        PaginatorMethod { name: "url()",              insert: "url(${1:\\$page})",               detail: "string",  doc: "URL for the given page number.",                          all_paginators: true },
-        PaginatorMethod { name: "items()",            insert: "items()",                         detail: "array",   doc: "Items on the current page.",                              all_paginators: true },
-        PaginatorMethod { name: "isEmpty()",          insert: "isEmpty()",                       detail: "bool",    doc: "Whether the result set is empty.",                        all_paginators: true },
-        PaginatorMethod { name: "isNotEmpty()",       insert: "isNotEmpty()",                    detail: "bool",    doc: "Whether the result set is not empty.",                    all_paginators: true },
-        PaginatorMethod { name: "total()",            insert: "total()",                         detail: "int",     doc: "Total number of matching items (not available on SimplePaginator/CursorPaginator).", all_paginators: false },
-        PaginatorMethod { name: "lastPage()",         insert: "lastPage()",                      detail: "int",     doc: "Last available page number (not available on SimplePaginator/CursorPaginator).",     all_paginators: false },
+        PaginatorMethod {
+            name: "links()",
+            insert: "links()",
+            detail: "string",
+            doc: "Render the pagination links HTML.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "withQueryString()",
+            insert: "withQueryString()",
+            detail: "static",
+            doc: "Append the current query string to pagination links.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "appends()",
+            insert: "appends([${1:key} => ${2:val}])",
+            detail: "static",
+            doc: "Append key/value pairs to the pagination query string.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "onEachSide()",
+            insert: "onEachSide(${1:3})",
+            detail: "static",
+            doc: "Number of links to show on each side of the current page.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "count()",
+            insert: "count()",
+            detail: "int",
+            doc: "Number of items on the current page.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "perPage()",
+            insert: "perPage()",
+            detail: "int",
+            doc: "Number of items per page.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "currentPage()",
+            insert: "currentPage()",
+            detail: "int",
+            doc: "Current page number.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "hasPages()",
+            insert: "hasPages()",
+            detail: "bool",
+            doc: "Whether there are multiple pages.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "hasMorePages()",
+            insert: "hasMorePages()",
+            detail: "bool",
+            doc: "Whether there are more pages after the current one.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "nextPageUrl()",
+            insert: "nextPageUrl()",
+            detail: "?string",
+            doc: "URL of the next page, or null.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "previousPageUrl()",
+            insert: "previousPageUrl()",
+            detail: "?string",
+            doc: "URL of the previous page, or null.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "url()",
+            insert: "url(${1:\\$page})",
+            detail: "string",
+            doc: "URL for the given page number.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "items()",
+            insert: "items()",
+            detail: "array",
+            doc: "Items on the current page.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "isEmpty()",
+            insert: "isEmpty()",
+            detail: "bool",
+            doc: "Whether the result set is empty.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "isNotEmpty()",
+            insert: "isNotEmpty()",
+            detail: "bool",
+            doc: "Whether the result set is not empty.",
+            all_paginators: true,
+        },
+        PaginatorMethod {
+            name: "total()",
+            insert: "total()",
+            detail: "int",
+            doc: "Total number of matching items (not available on SimplePaginator/CursorPaginator).",
+            all_paginators: false,
+        },
+        PaginatorMethod {
+            name: "lastPage()",
+            insert: "lastPage()",
+            detail: "int",
+            doc: "Last available page number (not available on SimplePaginator/CursorPaginator).",
+            all_paginators: false,
+        },
     ];
     let is_length_aware = class_name == "LengthAwarePaginator";
     METHODS
         .iter()
-        .filter(|m| (m.all_paginators || is_length_aware) && (
-            context.prefix.is_empty() || m.name.contains(context.prefix.as_str())
-        ))
-        .map(|m| json!({
-            "label": m.name,
-            "kind": 2,
-            "detail": format!("{} — {}", m.detail, class_name),
-            "insertTextFormat": 2,
-            "documentation": { "kind": "markdown", "value": m.doc },
-            "textEdit": {
-                "range": {
-                    "start": { "line": line, "character": context.start_character },
-                    "end":   { "line": line, "character": context.end_character },
-                },
-                "newText": m.insert,
-            }
-        }))
+        .filter(|m| {
+            (m.all_paginators || is_length_aware)
+                && (context.prefix.is_empty() || m.name.contains(context.prefix.as_str()))
+        })
+        .map(|m| {
+            json!({
+                "label": m.name,
+                "kind": 2,
+                "detail": format!("{} — {}", m.detail, class_name),
+                "insertTextFormat": 2,
+                "documentation": { "kind": "markdown", "value": m.doc },
+                "textEdit": {
+                    "range": {
+                        "start": { "line": line, "character": context.start_character },
+                        "end":   { "line": line, "character": context.end_character },
+                    },
+                    "newText": m.insert,
+                }
+            })
+        })
         .collect()
 }
 
@@ -355,10 +514,20 @@ pub fn complete_foreach_alias(context: &ForeachAliasContext, line: usize) -> Vec
 }
 
 pub fn helper_snippets(context: &HelperContext, line: usize) -> Vec<Value> {
-    ranked_helper_specs(&context.prefix)
+    let mut items: Vec<Value> = ranked_helper_specs(&context.prefix)
         .into_iter()
         .map(|helper| helper_completion(helper, context, line))
-        .collect()
+        .collect();
+
+    if matches!(context.style, HelperStyle::Php) {
+        items.extend(
+            ranked_php_snippet_specs(&context.prefix)
+                .into_iter()
+                .map(|spec| php_snippet_completion(spec, context, line)),
+        );
+    }
+
+    items
 }
 
 pub fn complete_route_actions(
@@ -493,7 +662,11 @@ pub fn blade_component_definitions(
     else {
         return vec![];
     };
-    let Some(file) = component.class_file.as_ref().or(component.view_file.as_ref()) else {
+    let Some(file) = component
+        .class_file
+        .as_ref()
+        .or(component.view_file.as_ref())
+    else {
         return vec![];
     };
     vec![json!({
@@ -712,7 +885,11 @@ pub fn hover(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Opti
         }
         SymbolKind::View => {
             if let Some(component) = index.livewire_component_for_view_name(&context.full_text) {
-                return Some(livewire_symbol_hover_from_component(component, &index.project_root, range));
+                return Some(livewire_symbol_hover_from_component(
+                    component,
+                    &index.project_root,
+                    range,
+                ));
             }
             let view = index
                 .view_definitions(&context.full_text)
@@ -847,7 +1024,9 @@ pub fn blade_component_create_actions(
 
     // dots → directory separators, kebab segments kept as-is
     let rel_path: std::path::PathBuf = name.split('.').collect();
-    let view_rel = std::path::Path::new("resources/views/components").join(&rel_path).with_extension("blade.php");
+    let view_rel = std::path::Path::new("resources/views/components")
+        .join(&rel_path)
+        .with_extension("blade.php");
     let view_abs = root.join(&view_rel);
     let view_uri = path_to_file_uri(&view_abs);
 
@@ -873,7 +1052,10 @@ pub fn blade_component_create_actions(
 
     let short_class = class_segments.last().cloned().unwrap_or_default();
     let namespace = if class_segments.len() > 1 {
-        format!("App\\View\\Components\\{}", class_segments[..class_segments.len() - 1].join("\\"))
+        format!(
+            "App\\View\\Components\\{}",
+            class_segments[..class_segments.len() - 1].join("\\")
+        )
     } else {
         "App\\View\\Components".to_string()
     };
@@ -1420,7 +1602,10 @@ fn livewire_component_detail(component: &LivewireComponentEntry) -> String {
         .unwrap_or_else(|| format!("Livewire component ({})", component.kind))
 }
 
-fn livewire_component_hover_text(component: &LivewireComponentEntry, project_root: &Path) -> String {
+fn livewire_component_hover_text(
+    component: &LivewireComponentEntry,
+    project_root: &Path,
+) -> String {
     let class_uri = component
         .class_file
         .as_ref()
@@ -1434,12 +1619,19 @@ fn livewire_component_hover_text(component: &LivewireComponentEntry, project_roo
         class_name: component.class_name.clone(),
         class_uri,
         view_name: component.view_name.clone(),
-        view_file: component.view_file.as_ref().map(|f| f.display().to_string()),
+        view_file: component
+            .view_file
+            .as_ref()
+            .map(|f| f.display().to_string()),
         view_file_uri,
-        properties: component.state.iter().map(|s| match &s.default_value {
-            Some(default) => format!("{} = {}", s.name, default),
-            None => s.name.clone(),
-        }).collect(),
+        properties: component
+            .state
+            .iter()
+            .map(|s| match &s.default_value {
+                Some(default) => format!("{} = {}", s.name, default),
+                None => s.name.clone(),
+            })
+            .collect(),
         actions: component.actions.iter().map(|a| a.name.clone()).collect(),
         detail: None,
     })
@@ -1451,7 +1643,11 @@ fn livewire_symbol_hover(index: &ProjectIndex, name: &str, range: Value) -> Opti
         .livewire_component_definitions(name)
         .into_iter()
         .next()?;
-    Some(livewire_symbol_hover_from_component(component, &index.project_root, range))
+    Some(livewire_symbol_hover_from_component(
+        component,
+        &index.project_root,
+        range,
+    ))
 }
 
 fn livewire_symbol_hover_from_component(
@@ -1472,10 +1668,18 @@ fn livewire_component_locations(
     start_character: usize,
     end_character: usize,
 ) -> Vec<Value> {
-    let Some(component) = index.livewire_component_definitions(name).into_iter().next() else {
+    let Some(component) = index
+        .livewire_component_definitions(name)
+        .into_iter()
+        .next()
+    else {
         return vec![];
     };
-    let Some(file) = component.class_file.as_ref().or(component.view_file.as_ref()) else {
+    let Some(file) = component
+        .class_file
+        .as_ref()
+        .or(component.view_file.as_ref())
+    else {
         return vec![];
     };
     vec![location_link(
@@ -1623,7 +1827,10 @@ fn blade_component_hover_text(component: &BladeComponentEntry, project_root: &Pa
         component: component.component.clone(),
         class_name: component.class_name.clone(),
         class_uri,
-        view_file: component.view_file.as_ref().map(|f| f.display().to_string()),
+        view_file: component
+            .view_file
+            .as_ref()
+            .map(|f| f.display().to_string()),
         view_file_uri,
         props,
         detail: None,
@@ -2119,6 +2326,355 @@ fn ranked_helper_specs(query: &str) -> Vec<&'static HelperSpec> {
         .collect()
 }
 
+struct PhpSnippetSpec {
+    name: &'static str,
+    detail: &'static str,
+    documentation: &'static str,
+    body: &'static str,
+}
+
+fn php_snippet_specs() -> &'static [PhpSnippetSpec] {
+    &[
+        PhpSnippetSpec {
+            name: "pubf",
+            detail: "Public function",
+            documentation: "Insert a `public function` stub.",
+            body: "public function ${1:name}(${2}): ${3:void}\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "prof",
+            detail: "Protected function",
+            documentation: "Insert a `protected function` stub.",
+            body: "protected function ${1:name}(${2}): ${3:void}\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "prif",
+            detail: "Private function",
+            documentation: "Insert a `private function` stub.",
+            body: "private function ${1:name}(${2}): ${3:void}\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "pubsf",
+            detail: "Public static function",
+            documentation: "Insert a `public static function` stub.",
+            body: "public static function ${1:name}(${2}): ${3:void}\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "prosf",
+            detail: "Protected static function",
+            documentation: "Insert a `protected static function` stub.",
+            body: "protected static function ${1:name}(${2}): ${3:void}\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "prisf",
+            detail: "Private static function",
+            documentation: "Insert a `private static function` stub.",
+            body: "private static function ${1:name}(${2}): ${3:void}\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "abstf",
+            detail: "Abstract public function",
+            documentation: "Insert an `abstract public function` signature.",
+            body: "abstract public function ${1:name}(${2}): ${3:void};",
+        },
+        PhpSnippetSpec {
+            name: "pub",
+            detail: "Public function (inline)",
+            documentation: "Insert a compact `public function` stub.",
+            body: "public function $1($2)${3:: $4} {\n\t$5\n}",
+        },
+        PhpSnippetSpec {
+            name: "priv",
+            detail: "Private function (inline)",
+            documentation: "Insert a compact `private function` stub.",
+            body: "private function $1($2)${3:: $4} {\n\t$5\n}",
+        },
+        PhpSnippetSpec {
+            name: "prot",
+            detail: "Protected function (inline)",
+            documentation: "Insert a compact `protected function` stub.",
+            body: "protected function $1($2)${3:: $4} {\n\t$5\n}",
+        },
+        PhpSnippetSpec {
+            name: "pubp",
+            detail: "Public typed property",
+            documentation: "Insert a `public` typed property declaration.",
+            body: "public ${1:string} \\$$2 = ${3:''};",
+        },
+        PhpSnippetSpec {
+            name: "prop",
+            detail: "Protected typed property",
+            documentation: "Insert a `protected` typed property declaration.",
+            body: "protected ${1:string} \\$$2;",
+        },
+        PhpSnippetSpec {
+            name: "prip",
+            detail: "Private typed property",
+            documentation: "Insert a `private` typed property declaration.",
+            body: "private ${1:string} \\$$2;",
+        },
+        PhpSnippetSpec {
+            name: "rdp",
+            detail: "Public readonly property",
+            documentation: "Insert a `public readonly` property declaration.",
+            body: "public readonly ${1:string} \\$$2;",
+        },
+        PhpSnippetSpec {
+            name: "pubsp",
+            detail: "Public static property",
+            documentation: "Insert a `public static` property declaration.",
+            body: "public static ${1:string} \\$$2;",
+        },
+        PhpSnippetSpec {
+            name: "inv",
+            detail: "__invoke method",
+            documentation: "Insert a `public function __invoke` stub.",
+            body: "public function __invoke(${1}): ${2:mixed}\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "tostr",
+            detail: "__toString method",
+            documentation: "Insert a `public function __toString` stub.",
+            body: "public function __toString(): string\n{\n\treturn $0;\n}",
+        },
+        PhpSnippetSpec {
+            name: "gets",
+            detail: "__get magic method",
+            documentation: "Insert a `public function __get` stub.",
+            body: "public function __get(string \\$name): mixed\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "sets",
+            detail: "__set magic method",
+            documentation: "Insert a `public function __set` stub.",
+            body: "public function __set(string \\$name, mixed \\$value): void\n{\n\t$0\n}",
+        },
+        PhpSnippetSpec {
+            name: "construct",
+            detail: "Constructor method",
+            documentation: "Insert a `public function __construct` stub.",
+            body: "public function __construct($1)\n{\n\t$2\n}",
+        },
+        PhpSnippetSpec {
+            name: "idx",
+            detail: "Controller index action",
+            documentation: "Insert a controller `index` action stub.",
+            body: "public function index(): View\n{\n\treturn view('${1:}');\n}",
+        },
+        PhpSnippetSpec {
+            name: "shw",
+            detail: "Controller show action",
+            documentation: "Insert a controller `show` action stub.",
+            body: "public function show(${1:Model} \\$$2): View\n{\n\treturn view('${3:}', compact('$2'));\n}",
+        },
+        PhpSnippetSpec {
+            name: "cre",
+            detail: "Controller create action",
+            documentation: "Insert a controller `create` action stub.",
+            body: "public function create(): View\n{\n\treturn view('${1:}');\n}",
+        },
+        PhpSnippetSpec {
+            name: "sto",
+            detail: "Controller store action",
+            documentation: "Insert a controller `store` action stub.",
+            body: "public function store(${1:Request} \\$request): RedirectResponse\n{\n\t$0\n\n\treturn redirect()->route('${2:}');\n}",
+        },
+        PhpSnippetSpec {
+            name: "edi",
+            detail: "Controller edit action",
+            documentation: "Insert a controller `edit` action stub.",
+            body: "public function edit(${1:Model} \\$$2): View\n{\n\treturn view('${3:}', compact('$2'));\n}",
+        },
+        PhpSnippetSpec {
+            name: "upd",
+            detail: "Controller update action",
+            documentation: "Insert a controller `update` action stub.",
+            body: "public function update(${1:Request} \\$request, ${2:Model} \\$$3): RedirectResponse\n{\n\t$0\n\n\treturn redirect()->route('${4:}');\n}",
+        },
+        PhpSnippetSpec {
+            name: "des",
+            detail: "Controller destroy action",
+            documentation: "Insert a controller `destroy` action stub.",
+            body: "public function destroy(${1:Model} \\$$2): RedirectResponse\n{\n\t$2->delete();\n\n\treturn redirect()->route('${3:}');\n}",
+        },
+        PhpSnippetSpec {
+            name: "afunc",
+            detail: "Anonymous function",
+            documentation: "Insert an anonymous/lambda function.",
+            body: "function($1) {\n\t$2\n}",
+        },
+        PhpSnippetSpec {
+            name: "arr",
+            detail: "Array declaration",
+            documentation: "Insert a short-form array `[...]`.",
+            body: "[$1]",
+        },
+        // Class-level declarations
+        PhpSnippetSpec {
+            name: "class",
+            detail: "PHP class definition",
+            documentation: "Insert a `class` declaration.",
+            body: "class $1 ${2:extends $3} ${4:implements $5} {\n\t$6\n}",
+        },
+        PhpSnippetSpec {
+            name: "interface",
+            detail: "PHP interface",
+            documentation: "Insert an `interface` declaration.",
+            body: "interface $1 ${2:extends $3} {\n\t$4\n}",
+        },
+        PhpSnippetSpec {
+            name: "trait",
+            detail: "PHP trait",
+            documentation: "Insert a `trait` declaration.",
+            body: "trait $1 {\n\t$2\n}",
+        },
+        PhpSnippetSpec {
+            name: "enum",
+            detail: "PHP 8.1 enum",
+            documentation: "Insert an `enum` declaration.",
+            body: "enum ${1:Name}${2:: ${3:string}}\n{\n\tcase ${4:Value} = ${5:'value'};\n}",
+        },
+        PhpSnippetSpec {
+            name: "namespace",
+            detail: "PHP namespace declaration",
+            documentation: "Insert a `namespace` statement.",
+            body: "namespace $1;",
+        },
+        PhpSnippetSpec {
+            name: "use",
+            detail: "PHP use statement",
+            documentation: "Insert a `use` statement.",
+            body: "use $1;",
+        },
+        // Control flow
+        PhpSnippetSpec {
+            name: "if",
+            detail: "If statement",
+            documentation: "Insert an `if` block.",
+            body: "if ($1) {\n\t$2\n}",
+        },
+        PhpSnippetSpec {
+            name: "ifelse",
+            detail: "If-else statement",
+            documentation: "Insert an `if/else` block.",
+            body: "if ($1) {\n\t$2\n} else {\n\t$3\n}",
+        },
+        PhpSnippetSpec {
+            name: "else",
+            detail: "Else block",
+            documentation: "Insert an `else` block.",
+            body: "else {\n\t$1\n}",
+        },
+        PhpSnippetSpec {
+            name: "elseif",
+            detail: "Else-if block",
+            documentation: "Insert an `elseif` block.",
+            body: "elseif ($1) {\n\t$2\n}",
+        },
+        PhpSnippetSpec {
+            name: "switch",
+            detail: "Switch statement",
+            documentation: "Insert a `switch` statement.",
+            body: "switch ($1) {\n\tcase $2:\n\t\t$3\n\t\tbreak;\n\tdefault:\n\t\t$4\n}",
+        },
+        PhpSnippetSpec {
+            name: "match",
+            detail: "PHP match expression",
+            documentation: "Insert a `match` expression.",
+            body: "match (${1:\\$var}) {\n\t${2:value} => ${3:result},\n\tdefault => ${4:default},\n}",
+        },
+        PhpSnippetSpec {
+            name: "foreach",
+            detail: "Foreach loop",
+            documentation: "Insert a `foreach` loop.",
+            body: "foreach ($1 as $2) {\n\t$3\n}",
+        },
+        PhpSnippetSpec {
+            name: "for",
+            detail: "For loop",
+            documentation: "Insert a `for` loop.",
+            body: "for ($1 = 0; $1 < $2; $1++) {\n\t$3\n}",
+        },
+        PhpSnippetSpec {
+            name: "while",
+            detail: "While loop",
+            documentation: "Insert a `while` loop.",
+            body: "while ($1) {\n\t$2\n}",
+        },
+        PhpSnippetSpec {
+            name: "try",
+            detail: "Try-catch block",
+            documentation: "Insert a `try/catch` block.",
+            body: "try {\n\t$1\n} catch (${2:Exception} \\$e) {\n\t$3\n}",
+        },
+        PhpSnippetSpec {
+            name: "tryf",
+            detail: "Try-catch-finally block",
+            documentation: "Insert a `try/catch/finally` block.",
+            body: "try {\n\t$1\n} catch (${2:Exception} \\$e) {\n\t$3\n} finally {\n\t$4\n}",
+        },
+        // Expressions
+        PhpSnippetSpec {
+            name: "fn",
+            detail: "PHP arrow function",
+            documentation: "Insert an arrow function `fn(...) => ...`.",
+            body: "fn(${1}) => ${2:$1}",
+        },
+        PhpSnippetSpec {
+            name: "return",
+            detail: "Return statement",
+            documentation: "Insert a `return` statement.",
+            body: "return $1;",
+        },
+        PhpSnippetSpec {
+            name: "echo",
+            detail: "Echo statement",
+            documentation: "Insert an `echo` statement.",
+            body: "echo $1;",
+        },
+    ]
+}
+
+fn ranked_php_snippet_specs(query: &str) -> Vec<&'static PhpSnippetSpec> {
+    let mut matches = php_snippet_specs()
+        .iter()
+        .filter_map(|spec| {
+            let score = fuzzy_score(spec.name, query)?;
+            Some((score, spec.name.len(), spec.name, spec))
+        })
+        .collect::<Vec<_>>();
+
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, *label));
+    matches.into_iter().map(|(_, _, _, spec)| spec).collect()
+}
+
+fn php_snippet_completion(spec: &PhpSnippetSpec, context: &HelperContext, line: usize) -> Value {
+    let doc = MarkdownDoc::new()
+        .title(spec.name)
+        .blank()
+        .separator()
+        .blank()
+        .line(spec.documentation);
+    json!({
+        "label": spec.name,
+        "kind": 15,
+        "detail": spec.detail,
+        "insertTextFormat": 2,
+        "filterText": spec.name,
+        "documentation": {
+            "kind": "markdown",
+            "value": doc.finish_markdown(),
+        },
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end": { "line": line, "character": context.end_character },
+            },
+            "newText": spec.body,
+        }
+    })
+}
+
 fn local_view_data_variables(source: &str, cursor: usize) -> Vec<String> {
     let Some((signature_start, body_start, body_end)) = enclosing_function_bounds(source, cursor)
     else {
@@ -2500,12 +3056,13 @@ fn vendor_chain_method_completion(name: &str, context: &VendorChainContext, line
     json!({
         "label": name,
         "kind": 2,  // Method
+        "insertTextFormat": 2,
         "textEdit": {
             "range": {
                 "start": { "line": line, "character": context.start_character },
                 "end":   { "line": line, "character": context.end_character }
             },
-            "newText": name
+            "newText": format!("{name}($0)")
         }
     })
 }
@@ -2515,13 +3072,17 @@ pub fn complete_vendor_make_columns(
     context: &VendorMakeContext,
     line: usize,
 ) -> Vec<Value> {
-    let resolved_model = context.model_class.as_deref().map(str::to_string).or_else(|| {
-        find_model_via_sibling_resource(
-            context.current_file.as_deref(),
-            context.current_class_name.as_deref(),
-            &index.project_root,
-        )
-    });
+    let resolved_model = context
+        .model_class
+        .as_deref()
+        .map(str::to_string)
+        .or_else(|| {
+            find_model_via_sibling_resource(
+                context.current_file.as_deref(),
+                context.current_class_name.as_deref(),
+                &index.project_root,
+            )
+        });
     let model_class = match resolved_model.as_deref() {
         Some(c) if !c.is_empty() => c,
         _ => return Vec::new(),
@@ -2570,20 +3131,40 @@ pub fn complete_vendor_make_columns(
     }
 
     // Flat suggestions: columns + relation names + scopes.
-    enum Kind { Column(String), Relation(String, String), Scope }
+    enum Kind {
+        Column(String),
+        Relation(String, String),
+        Scope,
+    }
     let mut candidates: Vec<(u32, usize, String, Kind)> = Vec::new();
 
     for col in &model.columns {
         if let Some(score) = fuzzy_score(&col.name, prefix) {
-            let detail = format!("{} {}", col.column_type, if col.nullable { "nullable" } else { "" }).trim().to_string();
-            candidates.push((score, col.name.len(), col.name.clone(), Kind::Column(detail)));
+            let detail = format!(
+                "{} {}",
+                col.column_type,
+                if col.nullable { "nullable" } else { "" }
+            )
+            .trim()
+            .to_string();
+            candidates.push((
+                score,
+                col.name.len(),
+                col.name.clone(),
+                Kind::Column(detail),
+            ));
         }
     }
 
     for rel in &model.relations {
         if let Some(score) = fuzzy_score(&rel.method, prefix) {
             let detail = format!("{} {}", rel.relation_type, rel.related_model);
-            candidates.push((score, rel.method.len(), rel.method.clone(), Kind::Relation(detail, rel.related_model.clone())));
+            candidates.push((
+                score,
+                rel.method.len(),
+                rel.method.clone(),
+                Kind::Relation(detail, rel.related_model.clone()),
+            ));
         }
     }
 
@@ -2598,8 +3179,12 @@ pub fn complete_vendor_make_columns(
     candidates
         .into_iter()
         .map(|(_, _, name, kind)| match kind {
-            Kind::Column(detail) => vendor_make_field_completion(&name, &name, 5, &detail, context, line),
-            Kind::Relation(detail, _related) => vendor_make_field_completion(&name, &name, 18, &detail, context, line),
+            Kind::Column(detail) => {
+                vendor_make_field_completion(&name, &name, 5, &detail, context, line)
+            }
+            Kind::Relation(detail, _related) => {
+                vendor_make_field_completion(&name, &name, 18, &detail, context, line)
+            }
             Kind::Scope => vendor_make_field_completion(&name, &name, 3, "scope", context, line),
         })
         .collect()
@@ -2636,6 +3221,10 @@ pub fn complete_builder_arg_columns(
         return Vec::new();
     };
 
+    if builder_method_uses_relation_name(&context.method_name) {
+        return complete_builder_arg_relations(index, model, context, line);
+    }
+
     let prefix = &context.prefix;
     let mut matches: Vec<(u32, usize, String, String)> = model
         .columns
@@ -2658,7 +3247,7 @@ pub fn complete_builder_arg_columns(
     matches
         .into_iter()
         .map(|(_, _, name, detail)| {
-            json!({
+            let mut item = json!({
                 "label": name,
                 "kind": 5,  // Field
                 "detail": detail,
@@ -2669,9 +3258,194 @@ pub fn complete_builder_arg_columns(
                     },
                     "newText": name
                 }
-            })
+            });
+            item["command"] = retrigger_suggest_command();
+            item
         })
         .collect()
+}
+
+fn complete_builder_arg_relations(
+    index: &ProjectIndex,
+    model: &crate::types::ModelEntry,
+    context: &BuilderArgContext,
+    line: usize,
+) -> Vec<Value> {
+    let prefix = &context.prefix;
+
+    if let Some((relation_path, selected_columns)) = prefix.rsplit_once(':') {
+        let Some(target_model) = resolve_relation_path_model(index, model, relation_path) else {
+            return Vec::new();
+        };
+        return complete_builder_related_columns(
+            target_model,
+            relation_path,
+            selected_columns,
+            context,
+            line,
+            ':',
+        );
+    }
+
+    let (base_path, segment_prefix, relation_model) =
+        if let Some((path, fragment)) = prefix.rsplit_once('.') {
+            let Some(target_model) = resolve_relation_path_model(index, model, path) else {
+                return Vec::new();
+            };
+            (Some(path), fragment, target_model)
+        } else {
+            (None, prefix.as_str(), model)
+        };
+
+    enum Kind {
+        Relation(String),
+        Column(String),
+    }
+    let mut matches: Vec<(u32, usize, String, Kind)> = relation_model
+        .relations
+        .iter()
+        .filter_map(|relation| {
+            let score = fuzzy_score(&relation.method, segment_prefix)?;
+            let detail = format!("{} {}", relation.relation_type, relation.related_model);
+            Some((
+                score,
+                relation.method.len(),
+                relation.method.clone(),
+                Kind::Relation(detail),
+            ))
+        })
+        .collect();
+
+    if base_path.is_some() {
+        matches.extend(relation_model.columns.iter().filter_map(|column| {
+            let score = fuzzy_score(&column.name, segment_prefix)?;
+            Some((
+                score,
+                column.name.len(),
+                column.name.clone(),
+                Kind::Column(column_detail(column)),
+            ))
+        }));
+    }
+
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
+    matches.dedup_by(|a, b| a.2 == b.2);
+    matches
+        .into_iter()
+        .map(|(_, _, name, kind)| {
+            let new_text = match base_path {
+                Some(path) => format!("{path}.{name}"),
+                None => name.clone(),
+            };
+            let (kind_id, detail) = match kind {
+                Kind::Relation(detail) => (18, detail),
+                Kind::Column(detail) => (5, detail),
+            };
+            let mut item = json!({
+                "label": name,
+                "kind": kind_id,
+                "detail": detail,
+                "textEdit": {
+                    "range": {
+                        "start": { "line": line, "character": context.start_character },
+                        "end":   { "line": line, "character": context.end_character }
+                    },
+                    "newText": new_text
+                }
+            });
+            item["command"] = retrigger_suggest_command();
+            item
+        })
+        .collect()
+}
+
+fn complete_builder_related_columns(
+    target_model: &crate::types::ModelEntry,
+    relation_path: &str,
+    selected_columns: &str,
+    context: &BuilderArgContext,
+    line: usize,
+    separator: char,
+) -> Vec<Value> {
+    let (existing_columns, column_prefix) = match selected_columns.rsplit_once(',') {
+        Some((existing, prefix)) => (Some(existing), prefix),
+        None => (None, selected_columns),
+    };
+
+    let mut matches: Vec<(u32, usize, String, String)> = target_model
+        .columns
+        .iter()
+        .filter_map(|column| {
+            let score = fuzzy_score(&column.name, column_prefix)?;
+            Some((
+                score,
+                column.name.len(),
+                column.name.clone(),
+                column_detail(column),
+            ))
+        })
+        .collect();
+
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
+    matches.dedup_by(|a, b| a.2 == b.2);
+    matches
+        .into_iter()
+        .map(|(_, _, column_name, detail)| {
+            let suffix = match existing_columns {
+                Some(existing) if !existing.is_empty() => format!("{existing},{column_name}"),
+                _ => column_name.clone(),
+            };
+            let mut item = json!({
+                "label": column_name,
+                "kind": 5,  // Field
+                "detail": detail,
+                "textEdit": {
+                    "range": {
+                        "start": { "line": line, "character": context.start_character },
+                        "end":   { "line": line, "character": context.end_character }
+                    },
+                    "newText": format!("{relation_path}{separator}{suffix}")
+                }
+            });
+            item["command"] = retrigger_suggest_command();
+            item
+        })
+        .collect()
+}
+
+fn column_detail(column: &crate::types::ColumnEntry) -> String {
+    format!(
+        "{} {}",
+        column.column_type,
+        if column.nullable { "nullable" } else { "" }
+    )
+    .trim()
+    .to_string()
+}
+
+fn retrigger_suggest_command() -> Value {
+    json!({
+        "title": "Trigger completion",
+        "command": "editor.action.triggerSuggest",
+    })
+}
+
+fn resolve_relation_path_model<'a>(
+    index: &'a ProjectIndex,
+    root_model: &'a crate::types::ModelEntry,
+    path: &str,
+) -> Option<&'a crate::types::ModelEntry> {
+    let mut current_model = root_model;
+
+    for segment in path.split('.').filter(|segment| !segment.is_empty()) {
+        let relation = current_model
+            .relations
+            .iter()
+            .find(|relation| relation.method == segment)?;
+        current_model = index.model_for_class(&relation.related_model)?;
+    }
+
+    Some(current_model)
 }
 
 fn path_to_file_uri(path: &std::path::Path) -> String {
@@ -2700,9 +3474,9 @@ mod tests {
 
     use crate::lsp::context::{
         HelperContext, HelperStyle, SymbolKind, detect_blade_component_tag_context,
-        detect_blade_variable_context, detect_livewire_component_tag_context,
-        detect_livewire_directive_value_context, detect_route_action_context,
-        detect_symbol_context,
+        detect_blade_variable_context, detect_builder_arg_context,
+        detect_livewire_component_tag_context, detect_livewire_directive_value_context,
+        detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
     };
     use crate::lsp::index::ProjectIndex;
     use crate::lsp::overrides::FileOverrides;
@@ -2710,7 +3484,8 @@ mod tests {
 
     use super::{
         blade_component_definitions, complete, complete_blade_view_variables,
-        complete_livewire_components, complete_livewire_directive_values, complete_route_actions,
+        complete_builder_arg_columns, complete_livewire_components,
+        complete_livewire_directive_values, complete_route_actions, complete_vendor_chain_methods,
         complete_view_data_variables, definitions, helper_snippets, hover,
         livewire_component_definitions, route_action_code_actions, route_action_definitions,
         route_diagnostics,
@@ -2817,6 +3592,260 @@ class ViewController
             &root,
             "resources/views/pages/workspaces/virtual-office/index.blade.php",
             "<x-profile-card />\n",
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn vendor_chain_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(
+            &root,
+            "vendor/composer/autoload_classmap.php",
+            r#"<?php
+
+return array(
+    'Filament\\Panel' => $vendorDir . '/filament/panel/src/Panel.php',
+);
+"#,
+        );
+        write_file(
+            &root,
+            "vendor/filament/panel/src/Panel.php",
+            r#"<?php
+
+namespace Filament;
+
+class Panel
+{
+    public function default(): static
+    {
+        return $this;
+    }
+
+    public function when(bool $condition, ?callable $callback = null): static
+    {
+        return $this;
+    }
+
+    public function getId(): string
+    {
+        return 'admin';
+    }
+}
+"#,
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn builder_relation_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(
+            &root,
+            "database/migrations/2024_01_01_000000_create_venues_table.php",
+            r#"<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('venues', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->timestamps();
+        });
+    }
+};
+"#,
+        );
+        write_file(
+            &root,
+            "database/migrations/2024_01_01_000001_create_proposals_table.php",
+            r#"<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('proposals', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('venue_id');
+            $table->string('name');
+            $table->timestamps();
+        });
+    }
+};
+"#,
+        );
+        write_file(
+            &root,
+            "database/migrations/2024_01_01_000002_create_comments_table.php",
+            r#"<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('comments', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('proposal_id');
+            $table->string('body');
+            $table->timestamps();
+        });
+    }
+};
+"#,
+        );
+        write_file(
+            &root,
+            "app/Models/Venue.php",
+            r#"<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Venue extends Model
+{
+    public function proposals()
+    {
+        return $this->hasMany(Proposal::class);
+    }
+}
+"#,
+        );
+        write_file(
+            &root,
+            "app/Models/Proposal.php",
+            r#"<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Proposal extends Model
+{
+    public function comments()
+    {
+        return $this->hasMany(Comment::class);
+    }
+}
+"#,
+        );
+        write_file(
+            &root,
+            "app/Models/Comment.php",
+            r#"<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Comment extends Model
+{
+}
+"#,
+        );
+
+        project::from_root(root).expect("fixture project should resolve")
+    }
+
+    fn builder_column_project() -> project::LaravelProject {
+        let root = unique_temp_project_root();
+        fs::create_dir_all(&root).expect("fixture root should exist");
+
+        write_file(
+            &root,
+            "composer.json",
+            r#"{
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}"#,
+        );
+        write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
+        write_file(&root, "routes/web.php", "<?php\n");
+        write_file(
+            &root,
+            "app/Models/Article.php",
+            r#"<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Article extends Model
+{
+}
+"#,
+        );
+        write_file(
+            &root,
+            "database/migrations/2024_01_01_000000_create_articles_table.php",
+            r#"<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('articles', function (Blueprint $table) {
+            $table->id();
+            $table->string('title');
+            $table->string('phone')->nullable();
+            $table->timestamps();
+        });
+    }
+};
+"#,
         );
 
         project::from_root(root).expect("fixture project should resolve")
@@ -3178,7 +4207,10 @@ class ContactForm extends Component
         assert_eq!(context.full_text, "livewire.contact-form");
 
         let result = hover(&index, &context, 0);
-        assert!(result.is_some(), "hover should return a result for livewire view name");
+        assert!(
+            result.is_some(),
+            "hover should return a result for livewire view name"
+        );
 
         let definitions = definitions(&index, &context, 0);
         let first = definitions.first().expect("definition expected");
@@ -3219,6 +4251,233 @@ class ContactForm extends Component
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .ends_with("/resources/views/components/layouts/app.blade.php")
+        );
+    }
+
+    #[test]
+    fn vendor_chain_methods_insert_snippets_inside_parentheses() {
+        let project = vendor_chain_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse Filament\\Panel;\n\npublic function panel(Panel $panel): Panel\n{\n    return $panel\n        ->wh\n}\n";
+        let line = 6;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("->wh").expect("token") + "->wh".len();
+        let context =
+            detect_vendor_chain_context(source, line, character).expect("vendor chain context");
+
+        let items = complete_vendor_chain_methods(&index, &context, line);
+        let when = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("when"))
+            .expect("when completion should exist");
+
+        assert_eq!(
+            when.pointer("/insertTextFormat")
+                .and_then(|value| value.as_u64()),
+            Some(2)
+        );
+        assert_eq!(
+            when.pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("when($0)")
+        );
+        assert!(
+            items.iter().all(|item| {
+                item.get("label").and_then(|value| value.as_str()) != Some("getId")
+            }),
+            "non-chainable vendor methods should stay excluded",
+        );
+    }
+
+    #[test]
+    fn builder_relation_methods_suggest_model_relations() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::query()->withCount('prop')\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character =
+            line_text.find("->withCount('prop')").expect("token") + "->withCount('prop".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let proposals = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("proposals"))
+            .expect("relation completion should exist");
+
+        assert_eq!(
+            proposals.pointer("/kind").and_then(|value| value.as_u64()),
+            Some(18)
+        );
+        assert_eq!(
+            proposals
+                .pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("proposals")
+        );
+        assert_eq!(
+            proposals
+                .pointer("/command/command")
+                .and_then(|value| value.as_str()),
+            Some("editor.action.triggerSuggest")
+        );
+    }
+
+    #[test]
+    fn builder_static_relation_entrypoint_suggests_model_relations() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with('')\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("''").expect("token") + 1;
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let proposals = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("proposals"))
+            .expect("relation completion should exist");
+
+        assert_eq!(
+            proposals
+                .pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("proposals")
+        );
+    }
+
+    #[test]
+    fn builder_relation_methods_support_nested_relation_paths() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::query()->with('proposals.com')\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("->with('proposals.com')").expect("token")
+            + "->with('proposals.com".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let comments = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("comments"))
+            .expect("nested relation completion should exist");
+
+        assert_eq!(
+            comments
+                .pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("proposals.comments")
+        );
+    }
+
+    #[test]
+    fn builder_nested_relation_path_suggests_related_columns() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with('proposals.na')\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character =
+            line_text.find("::with('proposals.na')").expect("token") + "::with('proposals.na".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let name = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("name"))
+            .expect("related column completion should exist");
+
+        assert_eq!(
+            name.pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("proposals.name")
+        );
+    }
+
+    #[test]
+    fn builder_relation_projection_suggests_related_columns_after_colon() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with('proposals:na')\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character =
+            line_text.find("::with('proposals:na')").expect("token") + "::with('proposals:na".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let name = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("name"))
+            .expect("projection column completion should exist");
+
+        assert_eq!(
+            name.pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("proposals:name")
+        );
+    }
+
+    #[test]
+    fn builder_relation_projection_supports_comma_separated_columns() {
+        let project = builder_relation_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::with('proposals:id,na')\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("::with('proposals:id,na')").expect("token")
+            + "::with('proposals:id,na".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let name = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("name"))
+            .expect("projection column completion should exist");
+
+        assert_eq!(
+            name.pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("proposals:id,name")
+        );
+    }
+
+    #[test]
+    fn builder_column_methods_retrigger_completion_after_accept() {
+        let project = builder_column_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\n/** @var Article $article */\n$article->where('tit')\n";
+        let line = 2;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("->where('tit')").expect("token") + "->where('tit".len();
+        let context =
+            detect_builder_arg_context(source, line, character).expect("builder arg context");
+
+        let items = complete_builder_arg_columns(&index, &context, line);
+        let first = items.first().expect("column completion should exist");
+
+        assert_eq!(
+            first
+                .pointer("/command/command")
+                .and_then(|value| value.as_str()),
+            Some("editor.action.triggerSuggest")
         );
     }
 
