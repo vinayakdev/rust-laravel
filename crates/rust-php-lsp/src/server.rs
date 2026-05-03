@@ -11,12 +11,12 @@ use php_parser::parser::Parser;
 use serde_json::{Value, json};
 
 use super::context::{
-    detect_blade_component_attr_context, detect_blade_component_tag_context,
-    detect_blade_model_property_context, detect_blade_variable_context,
-    detect_builder_arg_context, detect_foreach_alias_context, detect_helper_context,
+    self, detect_blade_component_attr_context, detect_blade_component_tag_context,
+    detect_blade_model_property_context, detect_blade_variable_context, detect_builder_arg_context,
+    detect_builder_relation_hover_context, detect_foreach_alias_context, detect_helper_context,
     detect_livewire_component_tag_context, detect_livewire_directive_value_context,
-    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
-    detect_vendor_make_context, detect_view_data_context,
+    detect_model_property_array_context, detect_route_action_context, detect_symbol_context,
+    detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -173,6 +173,9 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
         Some("textDocument/codeAction") => {
             Ok(id.map(|id| success(id, code_action_result(state, message.get("params")))))
         }
+        Some("textDocument/onTypeFormatting") => {
+            Ok(id.map(|id| success(id, on_type_format_result(state, message.get("params")))))
+        }
         Some("workspace/executeCommand") => {
             Ok(id.map(
                 |id| match execute_command_result(state, message.get("params")) {
@@ -275,7 +278,8 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
             line, character, context.collection_name, context.prefix
         ));
         (query::complete_foreach_alias(&context, line), false)
-    } else if let Some(context) = detect_blade_model_property_context(uri, source, line, character) {
+    } else if let Some(context) = detect_blade_model_property_context(uri, source, line, character)
+    {
         let relative = file_uri_to_path(uri).and_then(|path| {
             path.strip_prefix(&index.project_root)
                 .ok()
@@ -309,6 +313,16 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
                 .unwrap_or_default(),
             true,
         )
+    } else if let Some(context) = detect_model_property_array_context(uri, source, line, character)
+    {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=model-property-array model={:?} prefix={:?}",
+            line, character, context.model_class, context.prefix
+        ));
+        (
+            query::complete_model_property_array(index, &context, line),
+            true,
+        )
     } else if let Some(context) =
         detect_livewire_directive_value_context(uri, source, line, character)
     {
@@ -333,19 +347,28 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
             "completion uri={uri} line={} char={} context=builder-arg model={:?} prefix={:?}",
             line, character, context.model_class, context.prefix
         ));
-        (query::complete_builder_arg_columns(index, &context, line), true)
+        (
+            query::complete_builder_arg_columns(index, &context, line),
+            true,
+        )
     } else if let Some(context) = detect_vendor_chain_context(source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=vendor-chain class={:?} prefix={:?}",
             line, character, context.class_fqn, context.prefix
         ));
-        (query::complete_vendor_chain_methods(index, &context, line), true)
+        (
+            query::complete_vendor_chain_methods(index, &context, line),
+            true,
+        )
     } else if let Some(context) = detect_vendor_make_context(uri, source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=vendor-make class={:?} model={:?} prefix={:?}",
             line, character, context.class_short, context.model_class, context.prefix
         ));
-        (query::complete_vendor_make_columns(index, &context, line), true)
+        (
+            query::complete_vendor_make_columns(index, &context, line),
+            true,
+        )
     } else if let Some(context) = detect_symbol_context(source, line, character) {
         log_lsp_event(format!(
             "completion uri={uri} line={} char={} context=symbol prefix={:?}",
@@ -392,6 +415,8 @@ fn definition_result(state: &ServerState, params: Option<&Value>) -> Value {
         query::livewire_component_definitions(index, &context, line)
     } else if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
         query::blade_component_definitions(index, &context, line)
+    } else if let Some(context) = detect_builder_relation_hover_context(source, line, character) {
+        query::builder_relation_definitions(index, &context, line)
     } else if let Some(context) = detect_symbol_context(source, line, character) {
         query::definitions(index, &context, line)
     } else if let Some(context) = detect_route_action_context(uri, source, line, character) {
@@ -421,6 +446,9 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
     if let Some(context) = detect_blade_component_tag_context(uri, source, line, character) {
         return query::blade_component_hover(index, &context, line).unwrap_or(Value::Null);
     }
+    if let Some(context) = detect_builder_relation_hover_context(source, line, character) {
+        return query::builder_relation_hover(index, &context, line).unwrap_or(Value::Null);
+    }
     if let Some(context) = detect_symbol_context(source, line, character) {
         return query::hover(index, &context, line).unwrap_or(Value::Null);
     }
@@ -429,6 +457,182 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
     }
 
     Value::Null
+}
+
+fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
+    let Some(params) = params else {
+        return Value::Null;
+    };
+    let Some(uri) = params.pointer("/textDocument/uri").and_then(Value::as_str) else {
+        return Value::Null;
+    };
+    let Some(ch) = params.pointer("/ch").and_then(Value::as_str) else {
+        return Value::Null;
+    };
+    if ch != "'" && ch != "\"" {
+        return Value::Null;
+    }
+    let Some(trigger_line) = params.pointer("/position/line").and_then(Value::as_u64) else {
+        return Value::Null;
+    };
+    let Some(trigger_character) = params.pointer("/position/character").and_then(Value::as_u64)
+    else {
+        return Value::Null;
+    };
+    let trigger_line = trigger_line as usize;
+    let trigger_character = trigger_character as usize;
+
+    let Some(source) = state.documents.get(uri) else {
+        return Value::Null;
+    };
+    let Some(line_text) = source.lines().nth(trigger_line) else {
+        return Value::Null;
+    };
+
+    let quote_char = ch.chars().next().unwrap();
+
+    // Rather than trusting the exact cursor column (different editors report either the
+    // typed-char column or the cursor-after-insertion column), scan the line for an actual
+    // empty pair '' / "" whose opening quote is within 1 column of trigger_character.
+    // This makes the handler robust to both position conventions and to Zed firing the
+    // trigger for the auto-inserted closing quote as well.
+    let Some((open_char, close_char)) =
+        find_empty_pair(line_text, trigger_character, quote_char)
+    else {
+        return Value::Null; // not an auto-paired empty string
+    };
+
+    // Already has a trailing comma — nothing to do.
+    let after_close_byte = line_text
+        .char_indices()
+        .nth(close_char)
+        .map(|(b, _)| b + quote_char.len_utf8())
+        .unwrap_or(line_text.len());
+
+    if line_text[after_close_byte..].trim_start().starts_with(',') {
+        return Value::Null;
+    }
+
+    // Confirm the opening quote is inside a builder method array.
+    let open_byte = line_text
+        .char_indices()
+        .nth(open_char)
+        .map(|(b, _)| b)
+        .unwrap_or(line_text.len());
+
+    if !cursor_is_inside_builder_array(&source, trigger_line, open_byte) {
+        return Value::Null;
+    }
+
+    // Insert ',' right after the closing quote.
+    let insert_character = close_char + 1;
+    json!([{
+        "range": {
+            "start": { "line": trigger_line, "character": insert_character },
+            "end":   { "line": trigger_line, "character": insert_character }
+        },
+        "newText": ","
+    }])
+}
+
+/// Looks for an empty quote pair (`''` or `""`) on `line` whose opening quote is at
+/// `trigger_char`, `trigger_char - 1`, or `trigger_char + 1`.  Returns `(open_char,
+/// close_char)` — the LSP character indices of both quotes — when found.
+///
+/// Accepting a ±1 window makes the handler work regardless of whether the editor reports
+/// the position of the typed character or the cursor-after-insertion.
+fn find_empty_pair(line: &str, trigger_char: usize, quote: char) -> Option<(usize, usize)> {
+    let chars: Vec<char> = line.chars().collect();
+    let low = trigger_char.saturating_sub(1);
+    let high = (trigger_char + 1).min(chars.len().saturating_sub(1));
+
+    for open in low..=high {
+        if chars.get(open) == Some(&quote) && chars.get(open + 1) == Some(&quote) {
+            // Make sure it really is empty — not the first two of `'''` etc.
+            let third = chars.get(open + 2);
+            if third == Some(&quote) {
+                continue; // triple-quote edge case, skip
+            }
+            return Some((open, open + 1));
+        }
+    }
+    None
+}
+
+/// Returns true when the cursor at `(trigger_line, line_trigger_byte)` is inside the array
+/// argument of a builder relation method call (`->method([...])` or `::method([...])`).
+///
+/// Uses a forward scan of `source[..cursor_byte]` that properly tracks single- and
+/// double-quoted string literals (skipping their contents) so bracket characters inside
+/// strings are never mistaken for array delimiters.  This handles multiline arrays and
+/// cases where the opening `(` and `[` appear on different lines.
+fn cursor_is_inside_builder_array(
+    source: &str,
+    trigger_line: usize,
+    line_trigger_byte: usize,
+) -> bool {
+    // Compute the absolute byte offset of the cursor in the full source.
+    let line_start: usize = source
+        .split('\n')
+        .take(trigger_line)
+        .map(|l| l.len() + 1) // +1 for the \n (works for both \n and \r\n)
+        .sum();
+    let cursor_byte = (line_start + line_trigger_byte).min(source.len());
+
+    // Forward-scan source[..cursor_byte] tracking string literals and [ / ] depth.
+    let text = &source[..cursor_byte];
+    let mut bracket_stack: Vec<usize> = Vec::new(); // byte positions of unclosed [
+    let mut in_quote: Option<u8> = None;
+    let bytes = text.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if b == b'\\' {
+                i += 2; // skip escaped character
+                continue;
+            }
+            if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' => in_quote = Some(b),
+            b'[' => bracket_stack.push(i),
+            b']' => {
+                bracket_stack.pop();
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    // The last entry is the innermost unclosed `[` — that is our enclosing array.
+    let Some(&array_open_byte) = bracket_stack.last() else {
+        return false;
+    };
+
+    // The `[` must be directly preceded by `(`, allowing whitespace between them.
+    let before_bracket = source[..array_open_byte].trim_end();
+    if !before_bracket.ends_with('(') {
+        return false;
+    }
+
+    // Strip the `(` and look for a builder method name preceded by `->` or `::`.
+    let before_paren = source[..before_bracket.len() - 1].trim_end();
+    for &method in context::BUILDER_RELATION_METHODS {
+        if before_paren.ends_with(method) {
+            let remainder = &before_paren[..before_paren.len() - method.len()];
+            if remainder.ends_with("->") || remainder.ends_with("::") {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 fn diagnostic_result(state: &ServerState, params: Option<&Value>) -> Value {
@@ -572,11 +776,22 @@ fn initialize_result() -> Value {
             },
             "completionProvider": {
                 "resolveProvider": false,
-                "triggerCharacters": ["'", "\"", ".", "(", "@", "[", ",", "$", "<", "-", " "]
+                "triggerCharacters": [
+                    "'", "\"", ".", "(", "@", "[", ",", "$", "<", "-", ">", " ", "_",
+                    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+                ]
             },
             "definitionProvider": true,
             "hoverProvider": true,
             "codeActionProvider": true,
+            "documentOnTypeFormattingProvider": {
+                "firstTriggerCharacter": "'",
+                "moreTriggerCharacter": ["\""]
+            },
             "executeCommandProvider": {
                 "commands": ["rust-php.openAssetInZed"]
             },
@@ -874,8 +1089,9 @@ mod tests {
     use crate::project;
 
     use super::{
-        ServerState, completion_result, diagnostic_result, handle_message, path_affects_index,
-        php_document_has_parse_errors, php_document_parse_errors, route_reindex_guard_reason,
+        ServerState, completion_result, diagnostic_result, handle_message, initialize_result,
+        path_affects_index, php_document_has_parse_errors, php_document_parse_errors,
+        route_reindex_guard_reason,
     };
 
     fn workspace_root() -> PathBuf {
@@ -1022,6 +1238,74 @@ mod tests {
         let line_index = source
             .lines()
             .position(|line| line.contains("compact('')"))
+            .expect("compact line should exist");
+        let line_text = source.lines().nth(line_index).expect("line should exist");
+        let character = line_text.find("''").expect("compact token should exist") + 1;
+
+        let state = ServerState {
+            project_root: Some(project.root.clone()),
+            project: Some(project),
+            index: Some(index),
+            documents: HashMap::from([(uri.clone(), source)]),
+            dirty_documents: HashSet::new(),
+            parse_failed_documents: HashSet::new(),
+            shutdown_requested: false,
+            exiting: false,
+        };
+
+        let result = completion_result(
+            &state,
+            Some(&json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line_index, "character": character }
+            })),
+        );
+
+        let labels = result
+            .pointer("/items")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("label").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"currentUser"));
+        assert!(labels.contains(&"pageTitle"));
+        assert!(labels.contains(&"orders"));
+        assert!(labels.contains(&"filters"));
+        assert!(labels.contains(&"stats"));
+        assert!(labels.contains(&"teamMembers"));
+        assert!(labels.contains(&"breadcrumbs"));
+        assert!(labels.contains(&"flashMessage"));
+        assert!(labels.contains(&"internalAuditLog"));
+        assert!(labels.contains(&"draftInvoice"));
+    }
+
+    #[test]
+    fn completes_local_view_variables_inside_compact_array_strings() {
+        let project = sandbox_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let uri = format!(
+            "file://{}",
+            project
+                .root
+                .join("app/Http/Controllers/BladeSandboxController.php")
+                .display()
+        );
+        let source = std::fs::read_to_string(
+            project
+                .root
+                .join("app/Http/Controllers/BladeSandboxController.php"),
+        )
+        .expect("controller should load");
+        let source = source.replace(
+            "compact('pageTitle', 'currentUser', 'orders', 'filters')",
+            "compact([''])",
+        );
+        let line_index = source
+            .lines()
+            .position(|line| line.contains("compact([''])"))
             .expect("compact line should exist");
         let line_text = source.lines().nth(line_index).expect("line should exist");
         let character = line_text.find("''").expect("compact token should exist") + 1;
@@ -1217,6 +1501,36 @@ mod tests {
             Some("unsafe-string-adjacency")
         );
         assert!(php_document_has_parse_errors(uri, broken));
+    }
+
+    #[test]
+    fn completion_triggers_include_arrow_close() {
+        let result = initialize_result();
+        let triggers = result
+            .pointer("/capabilities/completionProvider/triggerCharacters")
+            .and_then(|value| value.as_array())
+            .expect("trigger characters should exist");
+
+        assert!(
+            triggers.iter().any(|value| value.as_str() == Some(">")),
+            "completion should trigger when `->` is completed",
+        );
+    }
+
+    #[test]
+    fn completion_triggers_include_identifier_characters() {
+        let result = initialize_result();
+        let triggers = result
+            .pointer("/capabilities/completionProvider/triggerCharacters")
+            .and_then(|value| value.as_array())
+            .expect("trigger characters should exist");
+
+        for ch in ["a", "Z", "_", "7"] {
+            assert!(
+                triggers.iter().any(|value| value.as_str() == Some(ch)),
+                "completion should retrigger while editing identifier strings: {ch}",
+            );
+        }
     }
 }
 

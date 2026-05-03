@@ -1,6 +1,6 @@
 id = "rust-laravel"
 name = "Rust Laravel"
-version = "0.1.2"
+version = "0.1.3"
 schema_version = 1
 authors = ["vinayakdev"]
 description = "Laravel route/config navigation and completion powered by rust-php."

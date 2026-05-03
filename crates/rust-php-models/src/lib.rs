@@ -341,9 +341,11 @@ fn build_model_entry(
                     }
                 }
 
-                if let Some(relation) =
+                if let Some(mut relation) =
                     extract_relation(&method_name, body, source, imports, mappings, &project.root)
                 {
+                    let (method_line, _) = byte_offset_to_line_col(source, name.span.start);
+                    relation.line = method_line;
                     relations.push(relation);
                     continue;
                 }
