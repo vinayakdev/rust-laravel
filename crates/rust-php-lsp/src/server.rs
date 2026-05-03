@@ -11,7 +11,7 @@ use php_parser::parser::Parser;
 use serde_json::{Value, json};
 
 use super::context::{
-    detect_blade_component_attr_context, detect_blade_component_tag_context,
+    self, detect_blade_component_attr_context, detect_blade_component_tag_context,
     detect_blade_model_property_context, detect_blade_variable_context, detect_builder_arg_context,
     detect_foreach_alias_context, detect_helper_context, detect_livewire_component_tag_context,
     detect_livewire_directive_value_context, detect_route_action_context, detect_symbol_context,
@@ -171,6 +171,9 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
         }
         Some("textDocument/codeAction") => {
             Ok(id.map(|id| success(id, code_action_result(state, message.get("params")))))
+        }
+        Some("textDocument/onTypeFormatting") => {
+            Ok(id.map(|id| success(id, on_type_format_result(state, message.get("params")))))
         }
         Some("workspace/executeCommand") => {
             Ok(id.map(
@@ -440,6 +443,88 @@ fn hover_result(state: &ServerState, params: Option<&Value>) -> Value {
     Value::Null
 }
 
+fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
+    let params = match params {
+        Some(p) => p,
+        None => return Value::Null,
+    };
+    let uri = match params.pointer("/textDocument/uri").and_then(Value::as_str) {
+        Some(u) => u,
+        None => return Value::Null,
+    };
+    if params.pointer("/ch").and_then(Value::as_str).is_none() {
+        return Value::Null;
+    }
+    let trigger_line = match params.pointer("/position/line").and_then(Value::as_u64) {
+        Some(l) => l as usize,
+        None => return Value::Null,
+    };
+    let source = match state.documents.get(uri) {
+        Some(s) => s.clone(),
+        None => return Value::Null,
+    };
+
+    // When the user presses Enter (ch == "\n"), the cursor has moved to the NEW line
+    // (trigger_line). The line that needs a comma is the one above: trigger_line - 1.
+    // When the user types ' or ", the trigger fires on the SAME line (trigger_line).
+    // In that case, we look at trigger_line - 1 (previous line that may be missing comma).
+    let target_line = match trigger_line.checked_sub(1) {
+        Some(l) => l,
+        None => return Value::Null,
+    };
+
+    let lines: Vec<&str> = source.lines().collect();
+
+    // For ' or " trigger: only insert on previous line when we're continuing an array
+    // (the typed character is an opening quote on trigger_line, hinting another element follows).
+    // For \n trigger: always check the previous line.
+    // Either way we check the same condition on `target_line`.
+    let target_text = match lines.get(target_line) {
+        Some(t) => *t,
+        None => return Value::Null,
+    };
+
+    let trimmed = target_text.trim_end();
+
+    // The line must end with a closing quote (' or ") with no trailing comma.
+    let ends_with_quote = trimmed.ends_with('\'') || trimmed.ends_with('"');
+    if !ends_with_quote {
+        return Value::Null;
+    }
+    // Already has a comma — nothing to do.
+    if trimmed.ends_with("',") || trimmed.ends_with("\",") {
+        return Value::Null;
+    }
+
+    // Confirm this string is inside a builder array by scanning upward for the array open.
+    let is_in_builder_array = (0..=target_line).rev().any(|idx| {
+        let l = lines[idx];
+        let compact: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+        context::BUILDER_RELATION_METHODS.iter().any(|&m| {
+            compact.contains(&format!("->{m}([")) || compact.contains(&format!("::{m}(["))
+        })
+    });
+    if !is_in_builder_array {
+        return Value::Null;
+    }
+
+    // Insert a comma right after the closing quote (before any trailing whitespace).
+    let quote_end_char = target_text
+        .char_indices()
+        .rev()
+        .find(|(_, c)| *c == '\'' || *c == '"')
+        .map(|(byte_idx, _)| target_text[..byte_idx].chars().count() + 1)
+        .unwrap_or_else(|| trimmed.chars().count());
+
+    json!([{
+        "range": {
+            "start": { "line": target_line, "character": quote_end_char },
+            "end":   { "line": target_line, "character": quote_end_char }
+        },
+        "newText": ","
+    }])
+}
+
 fn diagnostic_result(state: &ServerState, params: Option<&Value>) -> Value {
     let Some(params) = params else {
         return json!({ "kind": "full", "items": [] });
@@ -593,6 +678,10 @@ fn initialize_result() -> Value {
             "definitionProvider": true,
             "hoverProvider": true,
             "codeActionProvider": true,
+            "documentOnTypeFormattingProvider": {
+                "firstTriggerCharacter": "\n",
+                "moreTriggerCharacter": ["'", "\""]
+            },
             "executeCommandProvider": {
                 "commands": ["rust-php.openAssetInZed"]
             },

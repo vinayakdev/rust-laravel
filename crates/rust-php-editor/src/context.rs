@@ -1787,7 +1787,7 @@ const BUILDER_COLUMN_METHODS: &[&str] = &[
 ];
 
 /// Known Eloquent methods whose first string arg is a relation name.
-const BUILDER_RELATION_METHODS: &[&str] = &[
+pub const BUILDER_RELATION_METHODS: &[&str] = &[
     "with",
     "without",
     "withOnly",
