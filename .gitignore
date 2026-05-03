@@ -2,7 +2,7 @@
 **/.DS_Store
 /target/
 /dist/
-/vendor/
+/vendor/*/target/
 /test/
 /test.md
 /graphify-out

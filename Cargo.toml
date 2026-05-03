@@ -41,6 +41,11 @@ zed_extension_api = "0.4.0"
 name = "debug-classmap"
 path = "src/debug_classmap.rs"
 
+# php-parser 0.1.3 incorrectly lists pprof (Unix-only) in [dependencies] instead of
+# [dev-dependencies], breaking Windows builds. The vendored copy has it stripped out.
+[patch.crates-io]
+php-parser = { path = "vendor/php-parser" }
+
 [profile.release]
 codegen-units = 1
 lto = "thin"
