@@ -3265,6 +3265,22 @@ pub fn complete_builder_arg_columns(
         .collect()
 }
 
+/// Methods that accept `'relation as alias' => fn($q)` key-value pairs in their array argument.
+const AGGREGATE_RELATION_METHODS: &[&str] = &[
+    "withCount",
+    "withSum",
+    "withMin",
+    "withMax",
+    "withAvg",
+    "withExists",
+    "withAggregate",
+    "loadCount",
+    "loadSum",
+    "loadMin",
+    "loadMax",
+    "loadAvg",
+];
+
 fn complete_builder_arg_relations(
     index: &ProjectIndex,
     model: &crate::types::ModelEntry,
@@ -3277,6 +3293,7 @@ fn complete_builder_arg_relations(
         let Some(target_model) = resolve_relation_path_model(index, model, relation_path) else {
             return Vec::new();
         };
+        // Column sub-selection: never add trailing comma here, user is still building 'rel:col,col'
         return complete_builder_related_columns(
             target_model,
             relation_path,
@@ -3330,33 +3347,70 @@ fn complete_builder_arg_relations(
 
     matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
     matches.dedup_by(|a, b| a.2 == b.2);
-    matches
-        .into_iter()
-        .map(|(_, _, name, kind)| {
-            let new_text = match base_path {
-                Some(path) => format!("{path}.{name}"),
-                None => name.clone(),
-            };
-            let (kind_id, detail) = match kind {
-                Kind::Relation(detail) => (18, detail),
-                Kind::Column(detail) => (5, detail),
-            };
-            let mut item = json!({
-                "label": name,
-                "kind": kind_id,
-                "detail": detail,
-                "textEdit": {
-                    "range": {
-                        "start": { "line": line, "character": context.start_character },
-                        "end":   { "line": line, "character": context.end_character }
-                    },
-                    "newText": new_text
-                }
-            });
-            item["command"] = retrigger_suggest_command();
-            item
-        })
-        .collect()
+
+    // Build the trailing-comma additionalTextEdit once, reused for each item.
+    let trailing_comma_edit = if context.in_array && !context.has_trailing_comma {
+        Some(json!([{
+            "range": {
+                "start": { "line": line, "character": context.quote_end_character },
+                "end":   { "line": line, "character": context.quote_end_character }
+            },
+            "newText": ","
+        }]))
+    } else {
+        None
+    };
+
+    let mut items: Vec<Value> = Vec::new();
+
+    // Key-value snippet for aggregate methods in array context.
+    if context.in_array && AGGREGATE_RELATION_METHODS.contains(&context.method_name.as_str()) {
+        items.push(json!({
+            "label": "'relation as alias' => fn",
+            "kind": 15,
+            "detail": "Constrained aggregate",
+            "sortText": "0",
+            "insertTextFormat": 2,
+            "filterText": context.prefix,
+            "textEdit": {
+                "range": {
+                    "start": { "line": line, "character": context.quote_start_character },
+                    "end":   { "line": line, "character": context.quote_end_character }
+                },
+                "newText": "'${1:relation} as ${2:alias}' => static fn(\\$q) => \\$q->$0,"
+            }
+        }));
+    }
+
+    items.extend(matches.into_iter().map(|(_, _, name, kind)| {
+        let new_text = match base_path {
+            Some(path) => format!("{path}.{name}"),
+            None => name.clone(),
+        };
+        let (kind_id, detail) = match kind {
+            Kind::Relation(detail) => (18, detail),
+            Kind::Column(detail) => (5, detail),
+        };
+        let mut item = json!({
+            "label": name,
+            "kind": kind_id,
+            "detail": detail,
+            "textEdit": {
+                "range": {
+                    "start": { "line": line, "character": context.start_character },
+                    "end":   { "line": line, "character": context.end_character }
+                },
+                "newText": new_text
+            }
+        });
+        if let Some(ref edit) = trailing_comma_edit {
+            item["additionalTextEdits"] = edit.clone();
+        }
+        item["command"] = retrigger_suggest_command();
+        item
+    }));
+
+    items
 }
 
 fn complete_builder_related_columns(

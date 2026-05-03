@@ -1749,6 +1749,14 @@ pub struct BuilderArgContext {
     pub prefix: String,
     pub start_character: usize,
     pub end_character: usize,
+    /// Character position of the opening quote itself (used for whole-string replacement in snippets).
+    pub quote_start_character: usize,
+    /// Character position immediately after the closing quote.
+    pub quote_end_character: usize,
+    /// True when a `,` already follows the closing quote on the same line.
+    pub has_trailing_comma: bool,
+    /// True when the string is an element of an array arg (`method([...])`) vs a direct string arg.
+    pub in_array: bool,
 }
 
 /// Known Eloquent/Collection builder methods whose first string arg is a column name.
@@ -1915,6 +1923,7 @@ pub fn detect_builder_arg_context(
         .filter(|c| !c.is_whitespace())
         .collect();
     let lines: Vec<&str> = source.lines().collect();
+    let mut in_array = false;
     let (method_name, call_separator, call_line, call_pos) = BUILDER_STRING_ARG_METHODS
         .iter()
         .find_map(|&method_name| {
@@ -1930,7 +1939,10 @@ pub fn detect_builder_arg_context(
                 None
             }
         })
-        .or_else(|| find_enclosing_builder_array_call(&lines, line, quote_start))?;
+        .or_else(|| {
+            in_array = true;
+            find_enclosing_builder_array_call(&lines, line, quote_start)
+        })?;
     let call_line_text = *lines.get(call_line)?;
     let before_call = &call_line_text[..call_pos];
 
@@ -1957,12 +1969,21 @@ pub fn detect_builder_arg_context(
         }
     })?;
 
+    let after_closing_quote = quote_end + quote_char.len_utf8();
+    let has_trailing_comma = line_text[after_closing_quote..].trim_start().starts_with(',');
+    let quote_start_character = line_text[..quote_start].chars().count();
+    let quote_end_character = line_text[..after_closing_quote].chars().count();
+
     Some(BuilderArgContext {
         model_class,
         method_name: (*method_name).to_string(),
         prefix,
         start_character: line_text[..inner_start].chars().count(),
         end_character: line_text[..inner_end].chars().count(),
+        quote_start_character,
+        quote_end_character,
+        has_trailing_comma,
+        in_array,
     })
 }
 
