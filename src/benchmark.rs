@@ -193,6 +193,7 @@ struct ResourceSnapshot {
     peak_rss_bytes: u64,
 }
 
+#[cfg(unix)]
 impl ResourceSnapshot {
     fn capture() -> Result<Self, String> {
         let usage = current_usage()?;
@@ -200,6 +201,17 @@ impl ResourceSnapshot {
             user_cpu_sec: timeval_to_sec(usage.ru_utime),
             system_cpu_sec: timeval_to_sec(usage.ru_stime),
             peak_rss_bytes: peak_rss_bytes(&usage),
+        })
+    }
+}
+
+#[cfg(not(unix))]
+impl ResourceSnapshot {
+    fn capture() -> Result<Self, String> {
+        Ok(Self {
+            user_cpu_sec: 0.0,
+            system_cpu_sec: 0.0,
+            peak_rss_bytes: 0,
         })
     }
 }
