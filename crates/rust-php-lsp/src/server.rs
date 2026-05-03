@@ -464,7 +464,6 @@ fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
     let Some(ch) = params.pointer("/ch").and_then(Value::as_str) else {
         return Value::Null;
     };
-    // Only handle quote characters.
     if ch != "'" && ch != "\"" {
         return Value::Null;
     }
@@ -485,39 +484,43 @@ fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
         return Value::Null;
     };
 
-    // Convert trigger_character (LSP char index) to a byte offset.
-    // trigger_character points to the cursor position — which for an auto-paired quote is
-    // between the two quotes: ['|'] where | is the cursor.
-    // The closing auto-paired quote is therefore at exactly trigger_character.
-    let trigger_byte = line_text
-        .char_indices()
-        .nth(trigger_character)
-        .map(|(b, _)| b)
-        .unwrap_or(line_text.len());
-
     let quote_char = ch.chars().next().unwrap();
 
-    // Confirm the character at trigger_byte is the same quote — this is how we know the
-    // editor auto-paired it (opening typed → closing placed at cursor). If the user typed
-    // the closing quote manually, the cursor is past the quote and this check fails.
-    if line_text[trigger_byte..].chars().next() != Some(quote_char) {
-        return Value::Null;
-    }
+    // Rather than trusting the exact cursor column (different editors report either the
+    // typed-char column or the cursor-after-insertion column), scan the line for an actual
+    // empty pair '' / "" whose opening quote is within 1 column of trigger_character.
+    // This makes the handler robust to both position conventions and to Zed firing the
+    // trigger for the auto-inserted closing quote as well.
+    let Some((open_char, close_char)) =
+        find_empty_pair(line_text, trigger_character, quote_char)
+    else {
+        return Value::Null; // not an auto-paired empty string
+    };
 
-    // Already has a trailing comma after the closing quote — nothing to do.
-    let after_close_byte = trigger_byte + quote_char.len_utf8();
+    // Already has a trailing comma — nothing to do.
+    let after_close_byte = line_text
+        .char_indices()
+        .nth(close_char)
+        .map(|(b, _)| b + quote_char.len_utf8())
+        .unwrap_or(line_text.len());
+
     if line_text[after_close_byte..].trim_start().starts_with(',') {
         return Value::Null;
     }
 
-    // Check that the cursor is inside a builder method array argument.
-    if !cursor_is_inside_builder_array(&source, trigger_line, trigger_byte) {
+    // Confirm the opening quote is inside a builder method array.
+    let open_byte = line_text
+        .char_indices()
+        .nth(open_char)
+        .map(|(b, _)| b)
+        .unwrap_or(line_text.len());
+
+    if !cursor_is_inside_builder_array(&source, trigger_line, open_byte) {
         return Value::Null;
     }
 
-    // Insert ',' immediately after the closing quote.
-    // trigger_character is the column of the closing quote; +1 is the column after it.
-    let insert_character = trigger_character + 1;
+    // Insert ',' right after the closing quote.
+    let insert_character = close_char + 1;
     json!([{
         "range": {
             "start": { "line": trigger_line, "character": insert_character },
@@ -525,6 +528,30 @@ fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
         },
         "newText": ","
     }])
+}
+
+/// Looks for an empty quote pair (`''` or `""`) on `line` whose opening quote is at
+/// `trigger_char`, `trigger_char - 1`, or `trigger_char + 1`.  Returns `(open_char,
+/// close_char)` — the LSP character indices of both quotes — when found.
+///
+/// Accepting a ±1 window makes the handler work regardless of whether the editor reports
+/// the position of the typed character or the cursor-after-insertion.
+fn find_empty_pair(line: &str, trigger_char: usize, quote: char) -> Option<(usize, usize)> {
+    let chars: Vec<char> = line.chars().collect();
+    let low = trigger_char.saturating_sub(1);
+    let high = (trigger_char + 1).min(chars.len().saturating_sub(1));
+
+    for open in low..=high {
+        if chars.get(open) == Some(&quote) && chars.get(open + 1) == Some(&quote) {
+            // Make sure it really is empty — not the first two of `'''` etc.
+            let third = chars.get(open + 2);
+            if third == Some(&quote) {
+                continue; // triple-quote edge case, skip
+            }
+            return Some((open, open + 1));
+        }
+    }
+    None
 }
 
 /// Returns true when the cursor at `(trigger_line, line_trigger_byte)` is inside the array
