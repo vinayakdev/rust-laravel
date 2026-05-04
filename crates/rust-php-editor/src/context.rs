@@ -761,9 +761,18 @@ fn detect_kind(before: &str) -> Option<SymbolKind> {
         return Some(SymbolKind::Env);
     }
 
-    if ["view(", "View::make(", "view()->make("]
-        .iter()
-        .any(|needle| compact.ends_with(needle))
+    if [
+        "view(",
+        "View::make(",
+        "view()->make(",
+        "@extends(",
+        "@include(",
+        "@includeIf(",
+        "@component(",
+        "@each(",
+    ]
+    .iter()
+    .any(|needle| compact.ends_with(needle))
     {
         return Some(SymbolKind::View);
     }
@@ -781,6 +790,13 @@ fn detect_kind(before: &str) -> Option<SymbolKind> {
     }
 
     if compact.contains("Route::view(") && route_argument_index(before) >= 1 {
+        return Some(SymbolKind::View);
+    }
+
+    // @includeWhen($cond, 'view') and @includeUnless($cond, 'view') — view is the 2nd argument
+    if (compact.contains("@includeWhen(") || compact.contains("@includeUnless("))
+        && route_argument_index(before) == 1
+    {
         return Some(SymbolKind::View);
     }
 
