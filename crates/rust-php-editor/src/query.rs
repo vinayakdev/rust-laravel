@@ -3607,7 +3607,12 @@ pub fn builder_relation_hover(
     let model_uri = relation
         .related_model_file
         .as_deref()
-        .map(path_to_file_uri);
+        .map(path_to_file_uri)
+        .or_else(|| {
+            index
+                .model_for_class(&relation.related_model)
+                .map(|m| path_to_file_uri(&index.project_root.join(&m.file)))
+        });
 
     let text = relation::build(relation::RelationHoverInput {
         method: relation.method.clone(),
