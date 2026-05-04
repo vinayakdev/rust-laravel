@@ -22,7 +22,7 @@ use rust_php_markdown::{
     DocBundle, MarkdownDoc,
     asset::{self, AssetHoverInput},
     blade::{self, BladeComponentHoverInput, LivewireComponentHoverInput},
-    config, controller, env, route, view,
+    config, controller, env, relation, route, view,
 };
 
 pub fn complete(index: &ProjectIndex, context: &SymbolContext, line: usize) -> Vec<Value> {
@@ -3604,10 +3604,18 @@ pub fn builder_relation_hover(
         .iter()
         .find(|r| r.method == context.segment)?;
 
-    let text = format!(
-        "**{}** — {} → {}",
-        relation.method, relation.relation_type, relation.related_model
-    );
+    let model_uri = relation
+        .related_model_file
+        .as_deref()
+        .map(path_to_file_uri);
+
+    let text = relation::build(relation::RelationHoverInput {
+        method: relation.method.clone(),
+        relation_type: relation.relation_type.clone(),
+        related_model: relation.related_model.clone(),
+        model_uri,
+    })
+    .hover_markdown();
 
     Some(json!({
         "contents": { "kind": "markdown", "value": text },

@@ -5,6 +5,7 @@ pub mod config;
 pub mod controller;
 pub mod doc;
 pub mod env;
+pub mod relation;
 pub mod route;
 pub mod view;
 
