@@ -83,6 +83,9 @@ pub(crate) fn render_text_report(
         DebugCommand::VendorList => Err(
             "vendor:list is only available in the web debugger".to_string(),
         ),
+        DebugCommand::ClassPropsList => Err(
+            "class-props:list is only available in the web debugger".to_string(),
+        ),
     }
 }
 
@@ -195,6 +198,14 @@ pub(crate) fn render_json_report(
             let count = classes.len();
             (
                 json_payload(project, command, json!({ "report": { "class_count": count, "classes": classes } })),
+                Some(count),
+            )
+        }
+        DebugCommand::ClassPropsList => {
+            let entries = crate::vendor::list_class_properties(&project.root);
+            let count = entries.len();
+            (
+                json_payload(project, command, json!({ "report": { "class_count": count, "classes": entries } })),
                 Some(count),
             )
         }

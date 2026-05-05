@@ -41,6 +41,7 @@ import { MigrationsView } from "@/components/app/views/migrations-view"
 import { PublicFilesView } from "@/components/app/views/public-files-view"
 import { DashboardView } from "@/components/app/views/dashboard-view"
 import { VendorClassesView } from "@/components/app/views/vendor-classes-view"
+import { ClassPropsView } from "@/components/app/views/class-props-view"
 import type { CommandId, Payload, Project } from "@/lib/types"
 import {
   IconAlertTriangle,
@@ -58,6 +59,7 @@ import {
   IconShieldLock,
   IconTable,
   IconTimeline,
+  IconVariable,
 } from "@tabler/icons-react"
 import { cn } from "@/lib/utils"
 
@@ -167,6 +169,13 @@ const COMMANDS: CommandDef[] = [
     label: "Vendor Classes",
     description: "Composer vendor classes with chainable method browser",
     icon: IconPackage,
+    group: "Application",
+  },
+  {
+    id: "class-props:list",
+    label: "Class Props",
+    description: "Vendor-inherited class properties available for completion",
+    icon: IconVariable,
     group: "Application",
   },
 ]
@@ -511,6 +520,8 @@ function ReportView({ payload }: { payload: Payload }) {
       return <PublicFilesView payload={payload} />
     case "vendor:list":
       return <VendorClassesView payload={payload} />
+    case "class-props:list":
+      return <ClassPropsView payload={payload} />
     default:
       return (
         <Card>

@@ -488,6 +488,18 @@ impl ProjectIndex {
         foundation_vendor::collect_chainable_methods(fqn, &self.vendor_classmap)
     }
 
+    pub fn vendor_class_properties(&self, fqn: &str) -> Vec<String> {
+        foundation_vendor::collect_class_properties(fqn, &self.vendor_classmap)
+    }
+
+    pub fn vendor_class_properties_with_source(&self, fqn: &str) -> Vec<(String, String)> {
+        foundation_vendor::collect_class_properties_with_source(fqn, &self.vendor_classmap)
+    }
+
+    pub fn vendor_class_property_stubs(&self, fqn: &str) -> Vec<(String, String, String)> {
+        foundation_vendor::collect_class_property_stubs_with_source(fqn, &self.vendor_classmap)
+    }
+
     pub fn model_columns_for_class<'a>(&'a self, class_name: &str) -> Vec<&'a ColumnEntry> {
         let normalized = class_name.trim_start_matches('\\');
         let short = normalized.rsplit('\\').next().unwrap_or(normalized);

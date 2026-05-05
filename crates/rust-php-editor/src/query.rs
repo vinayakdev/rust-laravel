@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use super::context::{
     BladeComponentAttrContext, BladeComponentTagContext, BladeModelPropertyContext,
-    BladeVariableContext, BuilderArgContext, BuilderRelationHoverContext, ForeachAliasContext,
-    HelperContext, HelperStyle, LivewireComponentTagContext, LivewireDirectiveValueContext,
-    LivewireDirectiveValueKind, ModelPropertyArrayContext, RouteActionContext, RouteActionKind,
-    SymbolContext, SymbolKind, VendorChainContext, VendorMakeContext, ViewDataContext, ViewDataKind,
-    builder_method_uses_relation_name,
+    BladeVariableContext, BuilderArgContext, BuilderRelationHoverContext, ClassPropertyContext,
+    ForeachAliasContext, HelperContext, HelperStyle, LivewireComponentTagContext,
+    LivewireDirectiveValueContext, LivewireDirectiveValueKind, ModelPropertyArrayContext,
+    RouteActionContext, RouteActionKind, SymbolContext, SymbolKind, VendorChainContext,
+    VendorMakeContext, ViewDataContext, ViewDataKind, builder_method_uses_relation_name,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
@@ -3076,6 +3076,45 @@ fn vendor_chain_method_completion(name: &str, context: &VendorChainContext, line
             "newText": format!("{name}($0)")
         }
     })
+}
+
+pub fn complete_class_properties(
+    index: &ProjectIndex,
+    context: &ClassPropertyContext,
+    line: usize,
+) -> Vec<Value> {
+    let props = index.vendor_class_property_stubs(&context.parent_fqn);
+    let mut matches: Vec<(u32, usize, String, String, String)> = props
+        .into_iter()
+        .filter_map(|(name, stub, source_class)| {
+            let score = fuzzy_score(&name, &context.prefix)?;
+            let len = name.len();
+            Some((score, len, name, stub, source_class))
+        })
+        .collect();
+    matches.sort_by_key(|(score, len, label, _, _)| (Reverse(*score), *len, label.clone()));
+    matches.dedup_by(|a, b| a.2 == b.2);
+    matches
+        .into_iter()
+        .map(|(_, _, _name, stub, source_class)| {
+            // Escape `$` in the stub so LSP snippet engine treats it as literal text,
+            // then append ` = $0` to place the cursor right after the equals sign.
+            let snippet = format!("{} = $0", stub.replace('$', "\\$"));
+            json!({
+                "label": stub,
+                "kind": 10,
+                "detail": format!("from {source_class}"),
+                "insertTextFormat": 2,
+                "textEdit": {
+                    "range": {
+                        "start": { "line": line, "character": context.declaration_start_character },
+                        "end":   { "line": line, "character": context.end_character }
+                    },
+                    "newText": snippet
+                }
+            })
+        })
+        .collect()
 }
 
 pub fn complete_vendor_make_columns(

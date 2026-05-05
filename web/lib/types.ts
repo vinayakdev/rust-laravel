@@ -369,10 +369,33 @@ export type VendorMethod = {
   source: string
 }
 
+export type VendorProperty = {
+  name: string
+  source: string
+}
+
 export type VendorClassDetail = {
   fqn: string
   file: string
   methods: VendorMethod[]
+  properties: VendorProperty[]
+}
+
+export type ClassPropEntry = {
+  name: string
+  source_class: string
+}
+
+export type ClassWithProperties = {
+  class_fqn: string
+  parent_fqn: string
+  file: string
+  properties: ClassPropEntry[]
+}
+
+export type ClassPropsReport = {
+  class_count: number
+  classes: ClassWithProperties[]
 }
 
 export type CommandId =
@@ -390,6 +413,7 @@ export type CommandId =
   | "migration:list"
   | "public:list"
   | "vendor:list"
+  | "class-props:list"
 
 export type Payload = {
   project: string
@@ -408,6 +432,7 @@ export type Payload = {
     | MigrationReport
     | PublicAssetReport
     | VendorClassReport
+    | ClassPropsReport
   comparison?: RouteComparison
   error?: string
 }

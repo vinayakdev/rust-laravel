@@ -17,6 +17,7 @@ import type {
   VendorClass,
   VendorClassDetail,
   VendorClassReport,
+  VendorProperty,
 } from "@/lib/types"
 
 export function VendorClassesView({ payload }: { payload: Payload }) {
@@ -159,20 +160,20 @@ function DetailPanel({
   error: string | null
   onBack: () => void
 }) {
-  const [methodSearch, setMethodSearch] = useState("")
+  const [search, setSearch] = useState("")
 
   const filteredMethods = useMemo(() => {
     if (!detail) return []
-    const q = methodSearch.toLowerCase()
+    const q = search.toLowerCase()
     if (!q) return detail.methods
     return detail.methods.filter(
       (m) =>
         m.name.toLowerCase().includes(q) ||
         m.source.toLowerCase().includes(q)
     )
-  }, [detail, methodSearch])
+  }, [detail, search])
 
-  const grouped = useMemo(() => {
+  const groupedMethods = useMemo(() => {
     const map = new Map<string, string[]>()
     for (const m of filteredMethods) {
       const list = map.get(m.source) ?? []
@@ -181,6 +182,27 @@ function DetailPanel({
     }
     return map
   }, [filteredMethods])
+
+  const filteredProperties = useMemo(() => {
+    if (!detail) return []
+    const q = search.toLowerCase()
+    if (!q) return detail.properties
+    return detail.properties.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.source.toLowerCase().includes(q)
+    )
+  }, [detail, search])
+
+  const groupedProperties = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const p of filteredProperties) {
+      const list = map.get(p.source) ?? []
+      list.push(p.name)
+      map.set(p.source, list)
+    }
+    return map
+  }, [filteredProperties])
 
   const parts = cls.fqn.split("\\")
   const className = parts.pop() ?? cls.fqn
@@ -228,59 +250,118 @@ function DetailPanel({
 
       {detail && (
         <>
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Chainable Methods</h3>
-            <Badge variant="secondary" className="font-mono text-xs">
-              {filteredMethods.length} / {detail.methods.length}
-            </Badge>
-          </div>
-
           <div className="relative">
             <IconSearch className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
-              placeholder="Filter methods or source trait…"
+              placeholder="Filter methods, properties, or source…"
               className="h-8 pl-8 font-mono text-xs"
-              value={methodSearch}
-              onChange={(e) => setMethodSearch(e.target.value)}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               autoFocus
             />
           </div>
 
-          <div className="flex flex-col gap-3">
-            {grouped.size === 0 && (
-              <Card>
-                <CardContent className="py-8 text-center text-sm text-muted-foreground">
-                  No methods match &ldquo;{methodSearch}&rdquo;
-                </CardContent>
-              </Card>
-            )}
-            {Array.from(grouped.entries()).map(([source, methods]) => (
-              <div key={source} className="rounded-md border">
-                <div className="border-b bg-muted/40 px-3 py-1.5">
-                  <span className="font-mono text-[0.65rem] font-semibold text-muted-foreground">
-                    {source}
-                  </span>
-                  <Badge
-                    variant="outline"
-                    className="ml-2 h-4 rounded-sm font-mono text-[0.6rem]"
-                  >
-                    {methods.length}
-                  </Badge>
-                </div>
-                <div className="flex flex-wrap gap-1.5 p-2">
-                  {methods.map((name) => (
-                    <Badge
-                      key={name}
-                      variant="secondary"
-                      className="h-5 rounded-sm font-mono text-[0.65rem]"
-                    >
-                      -{`>`}{name}()
-                    </Badge>
-                  ))}
-                </div>
+          {detail.properties.length > 0 && (
+            <>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Properties</h3>
+                <Badge variant="secondary" className="font-mono text-xs">
+                  {filteredProperties.length} / {detail.properties.length}
+                </Badge>
               </div>
-            ))}
-          </div>
+
+              <div className="flex flex-col gap-3">
+                {groupedProperties.size === 0 && search && (
+                  <Card>
+                    <CardContent className="py-4 text-center text-sm text-muted-foreground">
+                      No properties match &ldquo;{search}&rdquo;
+                    </CardContent>
+                  </Card>
+                )}
+                {Array.from(groupedProperties.entries()).map(([source, props]) => (
+                  <div key={source} className="rounded-md border">
+                    <div className="border-b bg-muted/40 px-3 py-1.5">
+                      <span className="font-mono text-[0.65rem] font-semibold text-muted-foreground">
+                        {source}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className="ml-2 h-4 rounded-sm font-mono text-[0.6rem]"
+                      >
+                        {props.length}
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 p-2">
+                      {props.map((name) => (
+                        <Badge
+                          key={name}
+                          variant="secondary"
+                          className="h-5 rounded-sm font-mono text-[0.65rem]"
+                        >
+                          ${name}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {detail.methods.length > 0 && (
+            <>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Chainable Methods</h3>
+                <Badge variant="secondary" className="font-mono text-xs">
+                  {filteredMethods.length} / {detail.methods.length}
+                </Badge>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                {groupedMethods.size === 0 && search && (
+                  <Card>
+                    <CardContent className="py-4 text-center text-sm text-muted-foreground">
+                      No methods match &ldquo;{search}&rdquo;
+                    </CardContent>
+                  </Card>
+                )}
+                {Array.from(groupedMethods.entries()).map(([source, methods]) => (
+                  <div key={source} className="rounded-md border">
+                    <div className="border-b bg-muted/40 px-3 py-1.5">
+                      <span className="font-mono text-[0.65rem] font-semibold text-muted-foreground">
+                        {source}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className="ml-2 h-4 rounded-sm font-mono text-[0.6rem]"
+                      >
+                        {methods.length}
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 p-2">
+                      {methods.map((name) => (
+                        <Badge
+                          key={name}
+                          variant="secondary"
+                          className="h-5 rounded-sm font-mono text-[0.65rem]"
+                        >
+                          -{`>`}{name}()
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {detail.properties.length === 0 && detail.methods.length === 0 && (
+            <Card>
+              <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                No properties or chainable methods found
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </div>

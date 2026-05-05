@@ -1543,6 +1543,113 @@ pub fn detect_vendor_make_context(
     })
 }
 
+#[derive(Clone, Debug)]
+pub struct ClassPropertyContext {
+    /// Resolved FQN of the parent class (e.g. `Illuminate\Database\Eloquent\Model`).
+    pub parent_fqn: String,
+    /// Identifier typed after `$` (used for fuzzy scoring).
+    pub prefix: String,
+    /// Character position of the start of the full declaration: the visibility modifier
+    /// (`public`/`protected`/`private`) if already typed, otherwise the `$` itself.
+    /// This is the start of the text-edit replacement range.
+    pub declaration_start_character: usize,
+    pub end_character: usize,
+}
+
+/// Detect when the cursor is at a class property declaration site.
+///
+/// Fires in `.php` files (not `.blade.php`) when:
+/// - The line before cursor is `(public|protected|private ...) $prefix` — with visibility, OR
+/// - The line before cursor is just `$prefix` (indented) — without visibility yet
+///
+/// Scans backwards for `class ... extends Parent` to resolve the parent FQN.
+pub fn detect_class_property_context(
+    uri: &str,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<ClassPropertyContext> {
+    if uri.ends_with(".blade.php") || !uri.ends_with(".php") {
+        return None;
+    }
+
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let before = &line_text[..cursor];
+
+    let dollar_byte = before.rfind('$')?;
+    let before_dollar = &before[..dollar_byte];
+
+    // Reject if there are statement-ending chars before `$` (we'd be in a method body)
+    if before_dollar.contains(';') || before_dollar.contains('{') || before_dollar.contains('}') {
+        return None;
+    }
+
+    // What comes before `$` (ignoring leading whitespace) must be either:
+    // - empty → bare `$prefix` (user hasn't typed visibility yet)
+    // - a visibility modifier and optional modifiers/type hint
+    let trimmed_before_dollar = before_dollar.trim_start();
+    let has_visibility = trimmed_before_dollar.starts_with("public ")
+        || trimmed_before_dollar.starts_with("protected ")
+        || trimmed_before_dollar.starts_with("private ");
+
+    if !trimmed_before_dollar.is_empty() && !has_visibility {
+        return None;
+    }
+
+    // After `$` must be valid identifier chars only
+    let after_dollar = &before[dollar_byte + 1..];
+    if !after_dollar.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let prefix = after_dollar.to_string();
+
+    // Extend to end of current identifier token
+    let mut end = cursor;
+    while end < line_text.len() {
+        match line_text[end..].chars().next() {
+            Some(c) if c.is_alphanumeric() || c == '_' => end += c.len_utf8(),
+            _ => break,
+        }
+    }
+
+    // If visibility was typed, replacement starts at the visibility keyword;
+    // otherwise it starts at `$` so the inserted stub replaces `$prefix`.
+    let decl_start_byte = if has_visibility {
+        before.len() - before.trim_start().len()
+    } else {
+        dollar_byte
+    };
+
+    // Scan backwards for the enclosing class declaration with `extends`
+    let lines: Vec<&str> = source.lines().collect();
+    let search_start = line.saturating_sub(50);
+    let parent_short = lines[search_start..=line].iter().rev().find_map(|l| {
+        let t = l.trim();
+        if (t.starts_with("class ") || t.starts_with("abstract class ")) && t.contains("extends") {
+            let after = t.split("extends").nth(1)?;
+            let word = after
+                .split_whitespace()
+                .next()?
+                .trim_matches(|c| c == '{' || c == ',');
+            if word.is_empty() { None } else { Some(word.to_string()) }
+        } else {
+            None
+        }
+    })?;
+
+    let use_map = extract_use_map(source);
+    let namespace = rust_php_foundation::vendor::parse_namespace_pub(source);
+    let parent_fqn = rust_php_foundation::vendor::resolve_fqn(&parent_short, &namespace, &use_map);
+
+    Some(ClassPropertyContext {
+        parent_fqn,
+        prefix,
+        declaration_start_character: line_text[..decl_start_byte].chars().count(),
+        end_character: line_text[..end].chars().count(),
+    })
+}
+
 fn file_uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
     let path = uri.strip_prefix("file://")?;
     let decoded = percent_decode_simple(path);

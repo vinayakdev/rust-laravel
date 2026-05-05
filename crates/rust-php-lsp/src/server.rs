@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 use super::context::{
     self, detect_blade_component_attr_context, detect_blade_component_tag_context,
     detect_blade_model_property_context, detect_blade_variable_context, detect_builder_arg_context,
-    detect_builder_relation_hover_context, detect_foreach_alias_context, detect_helper_context,
+    detect_builder_relation_hover_context, detect_class_property_context,
+    detect_foreach_alias_context, detect_helper_context,
     detect_livewire_component_tag_context, detect_livewire_directive_value_context,
     detect_model_property_array_context, detect_route_action_context, detect_symbol_context,
     detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
@@ -349,6 +350,15 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
         ));
         (
             query::complete_builder_arg_columns(index, &context, line),
+            true,
+        )
+    } else if let Some(context) = detect_class_property_context(uri, source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=class-property parent={:?} prefix={:?}",
+            line, character, context.parent_fqn, context.prefix
+        ));
+        (
+            query::complete_class_properties(index, &context, line),
             true,
         )
     } else if let Some(context) = detect_vendor_chain_context(source, line, character) {
