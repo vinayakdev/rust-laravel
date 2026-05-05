@@ -1,6 +1,14 @@
+use crate::php::ast::span_text;
+use bumpalo::Bump;
+use php_parser::ast::{ClassMember, Name, Stmt, Type, UseKind};
+use php_parser::lexer::Lexer;
+use php_parser::lexer::token::Token;
+use php_parser::parser::Parser;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 pub fn load_classmap(project_root: &Path) -> HashMap<String, PathBuf> {
     let vendor_dir = project_root.join("vendor");
@@ -33,6 +41,213 @@ pub fn load_classmap(project_root: &Path) -> HashMap<String, PathBuf> {
     }
 
     map
+}
+
+#[derive(Debug)]
+pub struct VendorClassIndex {
+    classmap: HashMap<String, PathBuf>,
+    parsed_cache: Mutex<HashMap<String, CachedVendorClass>>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedVendorClass {
+    stamp: FileStamp,
+    parsed: ParsedVendorClass,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileStamp {
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl VendorClassIndex {
+    pub fn load(project_root: &Path) -> Self {
+        Self::from_classmap(load_classmap(project_root))
+    }
+
+    pub fn from_classmap(classmap: HashMap<String, PathBuf>) -> Self {
+        Self {
+            classmap,
+            parsed_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn classmap(&self) -> &HashMap<String, PathBuf> {
+        &self.classmap
+    }
+
+    pub fn class_path(&self, fqn: &str) -> Option<&Path> {
+        self.classmap.get(fqn).map(PathBuf::as_path)
+    }
+
+    pub fn collect_chainable_methods(&self, fqn: &str) -> Vec<String> {
+        collect_chainable_methods(fqn, &self.classmap)
+    }
+
+    pub fn collect_chainable_methods_with_source(&self, fqn: &str) -> Vec<(String, String)> {
+        collect_chainable_methods_with_source(fqn, &self.classmap)
+    }
+
+    pub fn collect_class_properties(&self, fqn: &str) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut properties = Vec::new();
+        self.collect_properties_recursive(fqn, &mut visited, &mut properties);
+        properties.dedup();
+        properties
+    }
+
+    pub fn collect_class_properties_with_source(&self, fqn: &str) -> Vec<(String, String)> {
+        let mut visited = HashSet::new();
+        let mut properties = Vec::new();
+        self.collect_properties_with_source_recursive(fqn, &mut visited, &mut properties);
+        properties
+    }
+
+    pub fn collect_class_property_stubs_with_source(
+        &self,
+        fqn: &str,
+    ) -> Vec<(String, String, String)> {
+        let mut visited = HashSet::new();
+        let mut out = Vec::new();
+        self.collect_property_stubs_recursive(fqn, &mut visited, &mut out);
+        out
+    }
+
+    pub fn warm_common_laravel_classes(&self) {
+        const COMMON_CLASSES: &[&str] = &[
+            "Illuminate\\Database\\Eloquent\\Model",
+            "Illuminate\\Foundation\\Auth\\User",
+            "Illuminate\\Database\\Eloquent\\Relations\\Pivot",
+            "Illuminate\\Database\\Eloquent\\Relations\\MorphPivot",
+        ];
+
+        for class in COMMON_CLASSES {
+            let _ = self.collect_class_property_stubs_with_source(class);
+            let _ = self.collect_chainable_methods(class);
+        }
+    }
+
+    fn parse_vendor_class(&self, class_fqn: &str) -> Option<ParsedVendorClass> {
+        let path = self.classmap.get(class_fqn)?;
+        let stamp = file_stamp(path)?;
+
+        if let Some(parsed) = self.cached_vendor_class(class_fqn, &stamp) {
+            return Some(parsed);
+        }
+
+        let source = fs::read(path).ok()?;
+        let parsed = parse_vendor_class_from_source(class_fqn, &source)?;
+        self.store_vendor_class(class_fqn, stamp, parsed.clone());
+        Some(parsed)
+    }
+
+    fn cached_vendor_class(&self, class_fqn: &str, stamp: &FileStamp) -> Option<ParsedVendorClass> {
+        let cache = self.parsed_cache.lock().ok()?;
+        let cached = cache.get(class_fqn)?;
+        if cached.stamp == *stamp {
+            Some(cached.parsed.clone())
+        } else {
+            None
+        }
+    }
+
+    fn store_vendor_class(&self, class_fqn: &str, stamp: FileStamp, parsed: ParsedVendorClass) {
+        let Ok(mut cache) = self.parsed_cache.lock() else {
+            return;
+        };
+        cache.insert(class_fqn.to_string(), CachedVendorClass { stamp, parsed });
+    }
+
+    fn collect_properties_with_source_recursive(
+        &self,
+        class_fqn: &str,
+        visited: &mut HashSet<String>,
+        properties: &mut Vec<(String, String)>,
+    ) {
+        if !visited.insert(class_fqn.to_string()) {
+            return;
+        }
+        let short = class_fqn
+            .split('\\')
+            .last()
+            .unwrap_or(class_fqn)
+            .to_string();
+        let Some(parsed) = self.parse_vendor_class(class_fqn) else {
+            return;
+        };
+
+        for property in parsed.properties {
+            properties.push((property.name, short.clone()));
+        }
+        for trait_fqn in parsed.used_traits {
+            self.collect_properties_with_source_recursive(&trait_fqn, visited, properties);
+        }
+        if let Some(parent_fqn) = parsed.parent_fqn {
+            self.collect_properties_with_source_recursive(&parent_fqn, visited, properties);
+        }
+    }
+
+    fn collect_properties_recursive(
+        &self,
+        class_fqn: &str,
+        visited: &mut HashSet<String>,
+        properties: &mut Vec<String>,
+    ) {
+        if !visited.insert(class_fqn.to_string()) {
+            return;
+        }
+        let Some(parsed) = self.parse_vendor_class(class_fqn) else {
+            return;
+        };
+
+        for property in parsed.properties {
+            properties.push(property.name);
+        }
+        for fqn in parsed.used_traits {
+            self.collect_properties_recursive(&fqn, visited, properties);
+        }
+        if let Some(fqn) = parsed.parent_fqn {
+            self.collect_properties_recursive(&fqn, visited, properties);
+        }
+    }
+
+    fn collect_property_stubs_recursive(
+        &self,
+        class_fqn: &str,
+        visited: &mut HashSet<String>,
+        out: &mut Vec<(String, String, String)>,
+    ) {
+        if !visited.insert(class_fqn.to_string()) {
+            return;
+        }
+        let short = class_fqn
+            .split('\\')
+            .last()
+            .unwrap_or(class_fqn)
+            .to_string();
+        let Some(parsed) = self.parse_vendor_class(class_fqn) else {
+            return;
+        };
+
+        for property in parsed.properties {
+            out.push((property.name, property.stub, short.clone()));
+        }
+        for fqn in parsed.used_traits {
+            self.collect_property_stubs_recursive(&fqn, visited, out);
+        }
+        if let Some(fqn) = parsed.parent_fqn {
+            self.collect_property_stubs_recursive(&fqn, visited, out);
+        }
+    }
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = fs::metadata(path).ok()?;
+    Some(FileStamp {
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+    })
 }
 
 pub fn collect_chainable_methods(fqn: &str, classmap: &HashMap<String, PathBuf>) -> Vec<String> {
@@ -71,7 +286,11 @@ fn collect_methods_with_source_recursive(
 
     let namespace = parse_namespace(&source);
     let use_map = parse_use_statements(&source);
-    let short = class_fqn.split('\\').last().unwrap_or(class_fqn).to_string();
+    let short = class_fqn
+        .split('\\')
+        .last()
+        .unwrap_or(class_fqn)
+        .to_string();
 
     for name in parse_chainable_methods(&source) {
         methods.push((name, short.clone()));
@@ -237,131 +456,254 @@ fn parse_chainable_methods(source: &str) -> Vec<String> {
     methods
 }
 
-pub fn collect_class_properties(fqn: &str, classmap: &HashMap<String, PathBuf>) -> Vec<String> {
-    let mut visited = HashSet::new();
+#[derive(Clone, Debug)]
+struct ParsedVendorClass {
+    parent_fqn: Option<String>,
+    used_traits: Vec<String>,
+    properties: Vec<ParsedVendorProperty>,
+}
+
+#[derive(Clone, Debug)]
+struct ParsedVendorProperty {
+    name: String,
+    stub: String,
+}
+
+fn parse_vendor_class_from_source(class_fqn: &str, source: &[u8]) -> Option<ParsedVendorClass> {
+    let arena = Bump::new();
+    let lexer = Lexer::new(source);
+    let mut parser = Parser::new(lexer, &arena);
+    let program = parser.parse_program();
+    find_vendor_class_in_stmts(&program.statements, source, class_fqn, "", &HashMap::new())
+}
+
+fn find_vendor_class_in_stmts(
+    stmts: &[php_parser::ast::StmtId<'_>],
+    source: &[u8],
+    target_fqn: &str,
+    current_namespace: &str,
+    inherited_imports: &HashMap<String, String>,
+) -> Option<ParsedVendorClass> {
+    let mut namespace = current_namespace.to_string();
+    let mut imports = inherited_imports.clone();
+
+    for stmt in stmts.iter().copied() {
+        match stmt {
+            Stmt::Namespace { name, body, .. } => {
+                let next_namespace = name
+                    .map(|value| name_to_string(&value, source))
+                    .unwrap_or_default();
+                if let Some(body) = body {
+                    if let Some(parsed) = find_vendor_class_in_stmts(
+                        body,
+                        source,
+                        target_fqn,
+                        &next_namespace,
+                        &HashMap::new(),
+                    ) {
+                        return Some(parsed);
+                    }
+                } else {
+                    namespace = next_namespace;
+                    imports.clear();
+                }
+            }
+            Stmt::Use { uses, kind, .. } if *kind == UseKind::Normal => {
+                for item in *uses {
+                    let fqn = name_to_string(&item.name, source);
+                    let key = if let Some(alias) = item.alias {
+                        span_text(alias.span, source)
+                    } else {
+                        fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
+                    };
+                    imports.insert(key, fqn);
+                }
+            }
+            Stmt::Class {
+                name,
+                extends,
+                members,
+                ..
+            } => {
+                if qualify_name(&namespace, &span_text(name.span, source)) == target_fqn {
+                    return Some(build_parsed_vendor_class(
+                        members,
+                        extends.as_ref(),
+                        source,
+                        &namespace,
+                        &imports,
+                    ));
+                }
+            }
+            Stmt::Trait { name, members, .. } => {
+                if qualify_name(&namespace, &span_text(name.span, source)) == target_fqn {
+                    return Some(build_parsed_vendor_class(
+                        members, None, source, &namespace, &imports,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn build_parsed_vendor_class(
+    members: &[ClassMember<'_>],
+    extends: Option<&Name<'_>>,
+    source: &[u8],
+    namespace: &str,
+    imports: &HashMap<String, String>,
+) -> ParsedVendorClass {
+    let parent_fqn =
+        extends.map(|name| resolve_fqn(&name_to_string(name, source), namespace, imports));
+    let mut used_traits = Vec::new();
     let mut properties = Vec::new();
-    collect_properties_recursive(fqn, classmap, &mut visited, &mut properties);
-    properties.dedup();
-    properties
+
+    for member in members {
+        match member {
+            ClassMember::Property {
+                modifiers,
+                ty,
+                entries,
+                ..
+            } => collect_property_entries(&mut properties, modifiers, *ty, entries, source),
+            ClassMember::PropertyHook {
+                modifiers,
+                ty,
+                name,
+                ..
+            } => collect_property_hook(&mut properties, modifiers, *ty, name, source),
+            ClassMember::TraitUse { traits, .. } => {
+                for used_trait in *traits {
+                    used_traits.push(resolve_fqn(
+                        &name_to_string(&used_trait, source),
+                        namespace,
+                        imports,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ParsedVendorClass {
+        parent_fqn,
+        used_traits,
+        properties,
+    }
+}
+
+fn collect_property_entries(
+    out: &mut Vec<ParsedVendorProperty>,
+    modifiers: &[Token],
+    ty: Option<&Type<'_>>,
+    entries: &[php_parser::ast::PropertyEntry<'_>],
+    source: &[u8],
+) {
+    let modifiers = modifiers
+        .iter()
+        .map(|token| span_text(token.span, source))
+        .collect::<Vec<_>>();
+    let ty = ty.map(|ty| type_to_string(ty, source));
+
+    for entry in entries {
+        let name = span_text(entry.name.span, source)
+            .trim_start_matches('$')
+            .to_string();
+        if name.is_empty() || name.starts_with('_') {
+            continue;
+        }
+        out.push(ParsedVendorProperty {
+            stub: build_property_stub(&modifiers, ty.as_deref(), &name),
+            name,
+        });
+    }
+}
+
+fn collect_property_hook(
+    out: &mut Vec<ParsedVendorProperty>,
+    modifiers: &[Token],
+    ty: Option<&Type<'_>>,
+    name: &Token,
+    source: &[u8],
+) {
+    let property_name = span_text(name.span, source)
+        .trim_start_matches('$')
+        .to_string();
+    if property_name.is_empty() || property_name.starts_with('_') {
+        return;
+    }
+
+    let modifiers = modifiers
+        .iter()
+        .map(|token| span_text(token.span, source))
+        .collect::<Vec<_>>();
+    let ty = ty.map(|ty| type_to_string(ty, source));
+
+    out.push(ParsedVendorProperty {
+        stub: build_property_stub(&modifiers, ty.as_deref(), &property_name),
+        name: property_name,
+    });
+}
+
+fn build_property_stub(modifiers: &[String], ty: Option<&str>, name: &str) -> String {
+    let mut parts = Vec::with_capacity(3);
+    if !modifiers.is_empty() {
+        parts.push(modifiers.join(" "));
+    }
+    if let Some(ty) = ty {
+        parts.push(ty.to_string());
+    }
+    parts.push(format!("${name}"));
+    parts.join(" ")
+}
+
+fn type_to_string(ty: &Type<'_>, source: &[u8]) -> String {
+    match ty {
+        Type::Simple(token) => span_text(token.span, source),
+        Type::Name(name) => name_to_string(name, source),
+        Type::Union(types) => types
+            .iter()
+            .map(|inner| type_to_string(inner, source))
+            .collect::<Vec<_>>()
+            .join("|"),
+        Type::Intersection(types) => types
+            .iter()
+            .map(|inner| type_to_string(inner, source))
+            .collect::<Vec<_>>()
+            .join("&"),
+        Type::Nullable(inner) => format!("?{}", type_to_string(inner, source)),
+    }
+}
+
+fn name_to_string(name: &Name<'_>, source: &[u8]) -> String {
+    name.parts
+        .iter()
+        .map(|token| span_text(token.span, source))
+        .collect::<String>()
+        .trim_start_matches('\\')
+        .to_string()
+}
+
+fn qualify_name(namespace: &str, short_name: &str) -> String {
+    if namespace.is_empty() {
+        short_name.to_string()
+    } else {
+        format!("{namespace}\\{short_name}")
+    }
+}
+
+pub fn collect_class_properties(fqn: &str, classmap: &HashMap<String, PathBuf>) -> Vec<String> {
+    VendorClassIndex::from_classmap(classmap.clone()).collect_class_properties(fqn)
 }
 
 pub fn collect_class_properties_with_source(
     fqn: &str,
     classmap: &HashMap<String, PathBuf>,
 ) -> Vec<(String, String)> {
-    let mut visited = HashSet::new();
-    let mut properties = Vec::new();
-    collect_properties_with_source_recursive(fqn, classmap, &mut visited, &mut properties);
-    properties
-}
-
-fn collect_properties_with_source_recursive(
-    class_fqn: &str,
-    classmap: &HashMap<String, PathBuf>,
-    visited: &mut HashSet<String>,
-    properties: &mut Vec<(String, String)>,
-) {
-    if !visited.insert(class_fqn.to_string()) {
-        return;
-    }
-    let Some(path) = classmap.get(class_fqn) else { return; };
-    let Ok(source) = fs::read_to_string(path) else { return; };
-
-    let namespace = parse_namespace(&source);
-    let use_map = parse_use_statements(&source);
-    let short = class_fqn.split('\\').last().unwrap_or(class_fqn).to_string();
-
-    for name in parse_class_properties(&source) {
-        properties.push((name, short.clone()));
-    }
-    for trait_short in parse_used_traits(&source) {
-        let trait_fqn = resolve_fqn(&trait_short, &namespace, &use_map);
-        collect_properties_with_source_recursive(&trait_fqn, classmap, visited, properties);
-    }
-    if let Some(parent_short) = parse_extends(&source) {
-        let parent_fqn = resolve_fqn(&parent_short, &namespace, &use_map);
-        collect_properties_with_source_recursive(&parent_fqn, classmap, visited, properties);
-    }
-}
-
-fn collect_properties_recursive(
-    class_fqn: &str,
-    classmap: &HashMap<String, PathBuf>,
-    visited: &mut HashSet<String>,
-    properties: &mut Vec<String>,
-) {
-    if !visited.insert(class_fqn.to_string()) {
-        return;
-    }
-    let Some(path) = classmap.get(class_fqn) else { return; };
-    let Ok(source) = fs::read_to_string(path) else { return; };
-
-    let namespace = parse_namespace(&source);
-    let use_map = parse_use_statements(&source);
-
-    for name in parse_class_properties(&source) {
-        properties.push(name);
-    }
-    for trait_short in parse_used_traits(&source) {
-        let fqn = resolve_fqn(&trait_short, &namespace, &use_map);
-        collect_properties_recursive(&fqn, classmap, visited, properties);
-    }
-    if let Some(parent_short) = parse_extends(&source) {
-        let fqn = resolve_fqn(&parent_short, &namespace, &use_map);
-        collect_properties_recursive(&fqn, classmap, visited, properties);
-    }
-}
-
-fn parse_class_properties(source: &str) -> Vec<String> {
-    let mut properties = Vec::new();
-    let mut in_body = false;
-    let mut depth = 0i32;
-
-    for line in source.lines() {
-        let t = line.trim();
-        if !in_body {
-            if t.contains('{')
-                && (t.starts_with("class ")
-                    || t.starts_with("abstract class ")
-                    || t.starts_with("trait "))
-            {
-                in_body = true;
-                depth = 1;
-                continue;
-            }
-            if t == "{" {
-                in_body = true;
-                depth = 1;
-                continue;
-            }
-            continue;
-        }
-        for ch in t.chars() {
-            match ch {
-                '{' => depth += 1,
-                '}' => depth -= 1,
-                _ => {}
-            }
-        }
-        if depth == 1
-            && t.contains('$')
-            && (t.starts_with("public ")
-                || t.starts_with("protected ")
-                || t.starts_with("private "))
-        {
-            if let Some(dollar_pos) = t.find('$') {
-                let after_dollar = &t[dollar_pos + 1..];
-                let name: String = after_dollar
-                    .chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_')
-                    .collect();
-                if !name.is_empty() && !name.starts_with('_') {
-                    properties.push(name);
-                }
-            }
-        }
-    }
-    properties
+    VendorClassIndex::from_classmap(classmap.clone()).collect_class_properties_with_source(fqn)
 }
 
 /// Returns `(name, stub, source_class)` tuples walking the full hierarchy.
@@ -371,109 +713,7 @@ pub fn collect_class_property_stubs_with_source(
     fqn: &str,
     classmap: &HashMap<String, PathBuf>,
 ) -> Vec<(String, String, String)> {
-    let mut visited = HashSet::new();
-    let mut out = Vec::new();
-    collect_property_stubs_recursive(fqn, classmap, &mut visited, &mut out);
-    out
-}
-
-fn collect_property_stubs_recursive(
-    class_fqn: &str,
-    classmap: &HashMap<String, PathBuf>,
-    visited: &mut HashSet<String>,
-    out: &mut Vec<(String, String, String)>,
-) {
-    if !visited.insert(class_fqn.to_string()) {
-        return;
-    }
-    let Some(path) = classmap.get(class_fqn) else { return; };
-    let Ok(source) = fs::read_to_string(path) else { return; };
-
-    let namespace = parse_namespace(&source);
-    let use_map = parse_use_statements(&source);
-    let short = class_fqn.split('\\').last().unwrap_or(class_fqn).to_string();
-
-    for (name, stub) in parse_class_property_stubs(&source) {
-        out.push((name, stub, short.clone()));
-    }
-    for trait_short in parse_used_traits(&source) {
-        let fqn = resolve_fqn(&trait_short, &namespace, &use_map);
-        collect_property_stubs_recursive(&fqn, classmap, visited, out);
-    }
-    if let Some(parent_short) = parse_extends(&source) {
-        let fqn = resolve_fqn(&parent_short, &namespace, &use_map);
-        collect_property_stubs_recursive(&fqn, classmap, visited, out);
-    }
-}
-
-/// Parse property declarations, returning `(name, stub)` where `stub` is the
-/// full declaration up to (but not including) `=`, trimmed.
-/// E.g. `protected $fillable = [];` → `("fillable", "protected $fillable")`.
-fn parse_class_property_stubs(source: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut in_body = false;
-    let mut depth = 0i32;
-
-    for line in source.lines() {
-        let t = line.trim();
-        if !in_body {
-            if t.contains('{')
-                && (t.starts_with("class ")
-                    || t.starts_with("abstract class ")
-                    || t.starts_with("trait "))
-            {
-                in_body = true;
-                depth = 1;
-                continue;
-            }
-            if t == "{" {
-                in_body = true;
-                depth = 1;
-                continue;
-            }
-            continue;
-        }
-        for ch in t.chars() {
-            match ch {
-                '{' => depth += 1,
-                '}' => depth -= 1,
-                _ => {}
-            }
-        }
-        if depth == 1
-            && t.contains('$')
-            && (t.starts_with("public ")
-                || t.starts_with("protected ")
-                || t.starts_with("private "))
-        {
-            if let Some(pair) = extract_property_stub(t) {
-                if !pair.0.starts_with('_') {
-                    out.push(pair);
-                }
-            }
-        }
-    }
-    out
-}
-
-fn extract_property_stub(t: &str) -> Option<(String, String)> {
-    let dollar_pos = t.find('$')?;
-    let after_dollar = &t[dollar_pos + 1..];
-    let name: String = after_dollar
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
-    if name.is_empty() {
-        return None;
-    }
-    let stub = if let Some(eq_pos) = t.find('=') {
-        t[..eq_pos].trim_end().to_string()
-    } else if let Some(semi_pos) = t.find(';') {
-        t[..semi_pos].trim_end().to_string()
-    } else {
-        t[..dollar_pos + 1 + name.len()].to_string()
-    };
-    Some((name, stub))
+    VendorClassIndex::from_classmap(classmap.clone()).collect_class_property_stubs_with_source(fqn)
 }
 
 pub fn parse_namespace_pub(source: &str) -> String {
@@ -518,4 +758,109 @@ fn extract_path<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
     let start = line.find(marker)? + marker.len();
     let end = line[start..].find('\'')?;
     Some(&line[start..start + end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{VendorClassIndex, parse_vendor_class_from_source};
+    use std::collections::HashMap;
+    use std::fs;
+
+    #[test]
+    fn parses_multiline_trait_use_blocks() {
+        let source = br#"<?php
+namespace Illuminate\Database\Eloquent;
+
+abstract class Model
+{
+    use Concerns\HasAttributes,
+        Concerns\GuardsAttributes,
+        Concerns\HidesAttributes;
+}
+"#;
+
+        let parsed =
+            parse_vendor_class_from_source("Illuminate\\Database\\Eloquent\\Model", source)
+                .unwrap();
+
+        assert_eq!(
+            parsed.used_traits,
+            vec![
+                "Illuminate\\Database\\Eloquent\\Concerns\\HasAttributes",
+                "Illuminate\\Database\\Eloquent\\Concerns\\GuardsAttributes",
+                "Illuminate\\Database\\Eloquent\\Concerns\\HidesAttributes",
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_method_parameters_when_collecting_properties() {
+        let source = br#"<?php
+namespace Illuminate\Database\Eloquent\Concerns;
+
+trait GuardsAttributes
+{
+    protected $fillable = [];
+    protected $guarded = ['*'];
+
+    public function fill(array $attributes)
+    {
+        return $this;
+    }
+}
+"#;
+
+        let parsed = parse_vendor_class_from_source(
+            "Illuminate\\Database\\Eloquent\\Concerns\\GuardsAttributes",
+            source,
+        )
+        .unwrap();
+
+        let names = parsed
+            .properties
+            .iter()
+            .map(|property| property.name.as_str())
+            .collect::<Vec<_>>();
+        let stubs = parsed
+            .properties
+            .iter()
+            .map(|property| property.stub.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["fillable", "guarded"]);
+        assert_eq!(stubs, vec!["protected $fillable", "protected $guarded"]);
+    }
+
+    #[test]
+    fn reparses_cached_vendor_class_when_file_stamp_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("rust-php-vendor-cache-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Foo.php");
+        fs::write(
+            &file,
+            "<?php\nnamespace App;\nclass Foo\n{\n    protected $first = [];\n}\n",
+        )
+        .unwrap();
+
+        let index = VendorClassIndex::from_classmap(HashMap::from([(
+            "App\\Foo".to_string(),
+            file.clone(),
+        )]));
+        assert_eq!(index.collect_class_properties("App\\Foo"), vec!["first"]);
+
+        fs::write(
+            &file,
+            "<?php\nnamespace App;\nclass Foo\n{\n    protected $secondProperty = [];\n}\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            index.collect_class_properties("App\\Foo"),
+            vec!["secondProperty"]
+        );
+
+        let _ = fs::remove_file(file);
+        let _ = fs::remove_dir(dir);
+    }
 }

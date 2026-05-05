@@ -3,6 +3,7 @@ use std::fs::OpenOptions;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Instant;
 
 use bumpalo::Bump;
@@ -14,16 +15,17 @@ use super::context::{
     self, detect_blade_component_attr_context, detect_blade_component_tag_context,
     detect_blade_model_property_context, detect_blade_variable_context, detect_builder_arg_context,
     detect_builder_relation_hover_context, detect_class_property_context,
-    detect_foreach_alias_context, detect_helper_context,
-    detect_livewire_component_tag_context, detect_livewire_directive_value_context,
-    detect_model_property_array_context, detect_route_action_context, detect_symbol_context,
-    detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
+    detect_foreach_alias_context, detect_helper_context, detect_livewire_component_tag_context,
+    detect_livewire_directive_value_context, detect_model_property_array_context,
+    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
+    detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
 use super::query;
 use crate::analyzers::routes;
 use crate::project;
+use rust_php_foundation::vendor::VendorClassIndex;
 
 pub fn run_stdio() -> Result<(), String> {
     let stdin = io::stdin();
@@ -49,6 +51,7 @@ struct ServerState {
     project_root: Option<PathBuf>,
     project: Option<project::LaravelProject>,
     index: Option<ProjectIndex>,
+    vendor_index: Option<Arc<VendorClassIndex>>,
     documents: HashMap<String, String>,
     dirty_documents: HashSet<String>,
     parse_failed_documents: HashSet<String>,
@@ -133,7 +136,13 @@ fn handle_message(state: &mut ServerState, message: Value) -> Result<Option<Valu
                 } else {
                     state.parse_failed_documents.remove(uri);
                 }
-                if uri_affects_index(state, uri) && !state.parse_failed_documents.contains(uri) {
+                let affects_vendor_index = uri_affects_vendor_index(state, uri);
+                if affects_vendor_index {
+                    reset_vendor_index(state);
+                }
+                if (uri_affects_index(state, uri) || affects_vendor_index)
+                    && !state.parse_failed_documents.contains(uri)
+                {
                     reindex_for_uri(state, uri);
                 }
             }
@@ -223,6 +232,7 @@ fn initialize(state: &mut ServerState, params: Value) {
             .map(|project| project.root.display().to_string())
             .unwrap_or_else(|| "<unresolved>".to_string())
     ));
+    reset_vendor_index(state);
     state.index = rebuild_index(state).ok();
 }
 
@@ -485,7 +495,9 @@ fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
     let Some(trigger_line) = params.pointer("/position/line").and_then(Value::as_u64) else {
         return Value::Null;
     };
-    let Some(trigger_character) = params.pointer("/position/character").and_then(Value::as_u64)
+    let Some(trigger_character) = params
+        .pointer("/position/character")
+        .and_then(Value::as_u64)
     else {
         return Value::Null;
     };
@@ -506,8 +518,7 @@ fn on_type_format_result(state: &ServerState, params: Option<&Value>) -> Value {
     // empty pair '' / "" whose opening quote is within 1 column of trigger_character.
     // This makes the handler robust to both position conventions and to Zed firing the
     // trigger for the auto-inserted closing quote as well.
-    let Some((open_char, close_char)) =
-        find_empty_pair(line_text, trigger_character, quote_char)
+    let Some((open_char, close_char)) = find_empty_pair(line_text, trigger_character, quote_char)
     else {
         return Value::Null; // not an auto-paired empty string
     };
@@ -909,7 +920,11 @@ fn rebuild_index(state: &ServerState) -> Result<ProjectIndex, String> {
     };
 
     let overrides = collect_overrides(state, &project.root);
-    ProjectIndex::build_with_overrides(project, &overrides)
+    let vendor_index = state
+        .vendor_index
+        .clone()
+        .unwrap_or_else(|| Arc::new(VendorClassIndex::load(&project.root)));
+    ProjectIndex::build_with_overrides_and_vendor_index(project, &overrides, vendor_index)
 }
 
 fn collect_overrides(state: &ServerState, root: &Path) -> FileOverrides {
@@ -937,6 +952,46 @@ fn uri_affects_index(state: &ServerState, uri: &str) -> bool {
     };
 
     path_affects_index(project.root.as_path(), &path)
+}
+
+fn uri_affects_vendor_index(state: &ServerState, uri: &str) -> bool {
+    let Some(project) = state.project.as_ref() else {
+        return false;
+    };
+    let Some(path) = file_uri_to_path(uri) else {
+        return false;
+    };
+    if !path.starts_with(&project.root) {
+        return false;
+    }
+    let Ok(relative) = path.strip_prefix(&project.root) else {
+        return false;
+    };
+
+    relative == Path::new("composer.json")
+        || relative == Path::new("composer.lock")
+        || relative == Path::new("vendor/composer/autoload_classmap.php")
+        || relative == Path::new("vendor/composer/installed.php")
+        || relative == Path::new("vendor/composer/installed.json")
+}
+
+fn reset_vendor_index(state: &mut ServerState) {
+    let Some(project) = state.project.as_ref() else {
+        state.vendor_index = None;
+        return;
+    };
+
+    let vendor_index = Arc::new(VendorClassIndex::load(&project.root));
+    warm_vendor_index_in_background(vendor_index.clone());
+    state.vendor_index = Some(vendor_index);
+}
+
+fn warm_vendor_index_in_background(vendor_index: Arc<VendorClassIndex>) {
+    let _ = std::thread::Builder::new()
+        .name("rust-php-vendor-index".to_string())
+        .spawn(move || {
+            vendor_index.warm_common_laravel_classes();
+        });
 }
 
 fn document_is_reindexable(state: &ServerState, uri: &str) -> bool {
@@ -1133,6 +1188,7 @@ mod tests {
             project_root: Some(project.root.clone()),
             project: Some(project),
             index: Some(index),
+            vendor_index: None,
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::from([uri.clone()]),
             parse_failed_documents: HashSet::new(),
@@ -1195,6 +1251,7 @@ mod tests {
             project_root: Some(project.root.clone()),
             project: Some(project),
             index: Some(index),
+            vendor_index: None,
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::new(),
             parse_failed_documents: HashSet::new(),
@@ -1256,6 +1313,7 @@ mod tests {
             project_root: Some(project.root.clone()),
             project: Some(project),
             index: Some(index),
+            vendor_index: None,
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::new(),
             parse_failed_documents: HashSet::new(),
@@ -1324,6 +1382,7 @@ mod tests {
             project_root: Some(project.root.clone()),
             project: Some(project),
             index: Some(index),
+            vendor_index: None,
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::new(),
             parse_failed_documents: HashSet::new(),
@@ -1384,6 +1443,7 @@ mod tests {
             project_root: Some(project.root.clone()),
             project: Some(project),
             index: Some(index),
+            vendor_index: None,
             documents: HashMap::from([(uri.clone(), source)]),
             dirty_documents: HashSet::new(),
             parse_failed_documents: HashSet::new(),
@@ -1464,6 +1524,7 @@ mod tests {
             project_root: Some(project.root.clone()),
             project: Some(project),
             index: Some(index),
+            vendor_index: None,
             documents: HashMap::from([(uri.clone(), broken)]),
             dirty_documents: HashSet::from([uri.clone()]),
             parse_failed_documents: HashSet::new(),

@@ -1,6 +1,7 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::analyzers::{configs, controllers, models, routes, views};
 use crate::php::env::load_env_entries_with;
@@ -24,7 +25,7 @@ pub struct ProjectIndex {
     view_report: ViewReport,
     public_asset_report: PublicAssetReport,
     model_report: ModelReport,
-    vendor_classmap: HashMap<String, PathBuf>,
+    vendor_index: Arc<foundation_vendor::VendorClassIndex>,
     config_by_key: BTreeMap<String, Vec<usize>>,
     route_by_name: BTreeMap<String, Vec<usize>>,
     env_by_key: BTreeMap<String, Vec<usize>>,
@@ -39,6 +40,18 @@ impl ProjectIndex {
     pub fn build_with_overrides(
         project: &LaravelProject,
         overrides: &FileOverrides,
+    ) -> Result<Self, String> {
+        Self::build_with_overrides_and_vendor_index(
+            project,
+            overrides,
+            Arc::new(foundation_vendor::VendorClassIndex::load(&project.root)),
+        )
+    }
+
+    pub fn build_with_overrides_and_vendor_index(
+        project: &LaravelProject,
+        overrides: &FileOverrides,
+        vendor_index: Arc<foundation_vendor::VendorClassIndex>,
     ) -> Result<Self, String> {
         let config_report = configs::analyze_with_overrides(project, overrides)?;
         let controller_report = controllers::analyze_with_overrides(project, overrides)?;
@@ -70,7 +83,6 @@ impl ProjectIndex {
             model_count: 0,
             models: Vec::new(),
         });
-        let vendor_classmap = foundation_vendor::load_classmap(&project.root);
         let mut config_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut route_by_name: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut env_by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -152,7 +164,7 @@ impl ProjectIndex {
             view_report,
             public_asset_report,
             model_report,
-            vendor_classmap,
+            vendor_index,
             config_by_key,
             route_by_name,
             env_by_key,
@@ -371,7 +383,11 @@ impl ProjectIndex {
             .collect()
     }
 
-    pub fn blade_variable_class_for_file(&self, file: &std::path::Path, var_name: &str) -> Option<String> {
+    pub fn blade_variable_class_for_file(
+        &self,
+        file: &std::path::Path,
+        var_name: &str,
+    ) -> Option<String> {
         self.view_report
             .views
             .iter()
@@ -481,23 +497,24 @@ impl ProjectIndex {
     }
 
     pub fn vendor_class_path(&self, fqn: &str) -> Option<&Path> {
-        self.vendor_classmap.get(fqn).map(PathBuf::as_path)
+        self.vendor_index.class_path(fqn)
     }
 
     pub fn vendor_chainable_methods(&self, fqn: &str) -> Vec<String> {
-        foundation_vendor::collect_chainable_methods(fqn, &self.vendor_classmap)
+        self.vendor_index.collect_chainable_methods(fqn)
     }
 
     pub fn vendor_class_properties(&self, fqn: &str) -> Vec<String> {
-        foundation_vendor::collect_class_properties(fqn, &self.vendor_classmap)
+        self.vendor_index.collect_class_properties(fqn)
     }
 
     pub fn vendor_class_properties_with_source(&self, fqn: &str) -> Vec<(String, String)> {
-        foundation_vendor::collect_class_properties_with_source(fqn, &self.vendor_classmap)
+        self.vendor_index.collect_class_properties_with_source(fqn)
     }
 
     pub fn vendor_class_property_stubs(&self, fqn: &str) -> Vec<(String, String, String)> {
-        foundation_vendor::collect_class_property_stubs_with_source(fqn, &self.vendor_classmap)
+        self.vendor_index
+            .collect_class_property_stubs_with_source(fqn)
     }
 
     pub fn model_columns_for_class<'a>(&'a self, class_name: &str) -> Vec<&'a ColumnEntry> {
@@ -511,7 +528,10 @@ impl ProjectIndex {
 
         indices
             .into_iter()
-            .flat_map(|idxs| idxs.iter().flat_map(|&i| self.model_report.models[i].columns.iter()))
+            .flat_map(|idxs| {
+                idxs.iter()
+                    .flat_map(|&i| self.model_report.models[i].columns.iter())
+            })
             .collect()
     }
 
