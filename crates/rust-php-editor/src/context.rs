@@ -1,3 +1,11 @@
+use std::collections::HashMap;
+
+use bumpalo::Bump;
+use php_parser::ast::{ClassMember, Expr, ExprId, Name, Stmt, StmtId, UseKind};
+use php_parser::lexer::Lexer;
+use php_parser::parser::Parser;
+use rust_php_foundation::php::ast::{expr_to_string, span_text};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SymbolKind {
     Config,
@@ -1599,7 +1607,10 @@ pub fn detect_class_property_context(
 
     // After `$` must be valid identifier chars only
     let after_dollar = &before[dollar_byte + 1..];
-    if !after_dollar.chars().all(|c| c.is_alphanumeric() || c == '_') {
+    if !after_dollar
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_')
+    {
         return None;
     }
     let prefix = after_dollar.to_string();
@@ -1632,7 +1643,11 @@ pub fn detect_class_property_context(
                 .split_whitespace()
                 .next()?
                 .trim_matches(|c| c == '{' || c == ',');
-            if word.is_empty() { None } else { Some(word.to_string()) }
+            if word.is_empty() {
+                None
+            } else {
+                Some(word.to_string())
+            }
         } else {
             None
         }
@@ -2117,7 +2132,9 @@ pub fn detect_builder_arg_context(
     })?;
 
     let after_closing_quote = quote_end + quote_char.len_utf8();
-    let has_trailing_comma = line_text[after_closing_quote..].trim_start().starts_with(',');
+    let has_trailing_comma = line_text[after_closing_quote..]
+        .trim_start()
+        .starts_with(',');
     let quote_start_character = line_text[..quote_start].chars().count();
     let quote_end_character = line_text[..after_closing_quote].chars().count();
 
@@ -2152,12 +2169,115 @@ const MODEL_PROPERTY_ARRAY_METHODS: &[&str] = &[
     "setAppends",
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelDefinitionArrayCompletionKind {
+    Column,
+    Attribute,
+    Relation,
+    Accessor,
+    CastValue,
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelDefinitionArrayContext {
+    pub model_class: String,
+    pub property_name: String,
+    pub kind: ModelDefinitionArrayCompletionKind,
+    pub prefix: String,
+    pub start_character: usize,
+    pub end_character: usize,
+    pub existing_values: Vec<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ModelPropertyArrayContext {
     pub model_class: String,
     pub prefix: String,
     pub start_character: usize,
     pub end_character: usize,
+}
+
+/// Detect strings inside Eloquent model definition arrays, such as `$fillable`,
+/// `$casts`, `$with`, `$appends`, and modern `casts(): array` return arrays.
+pub fn detect_model_definition_array_context(
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<ModelDefinitionArrayContext> {
+    let line_text = source.lines().nth(line)?;
+    let cursor = character_to_byte_index(line_text, character)?;
+    let (quote_start, quote_char) = find_quote_start(line_text, cursor)?;
+    let quote_end = find_quote_end(line_text, quote_start + quote_char.len_utf8(), quote_char)?;
+    let inner_start = quote_start + quote_char.len_utf8();
+    let inner_end = quote_end;
+
+    if cursor < inner_start || cursor > inner_end {
+        return None;
+    }
+
+    let cursor_offset = source_position_to_byte_index(source, line, character)?;
+    let line_start = cursor_offset.checked_sub(cursor)?;
+    let quote_offset = line_start + quote_start;
+    let prefix = source_chars_slice(line_text, inner_start, cursor.min(inner_end));
+
+    let bytes = source.as_bytes();
+    let arena = Bump::new();
+    let lexer = Lexer::new(bytes);
+    let mut parser = Parser::new(lexer, &arena);
+    let program = parser.parse_program();
+
+    let mut imports = HashMap::new();
+
+    for stmt in program.statements.iter() {
+        match stmt {
+            Stmt::Use { uses, kind, .. } => {
+                if *kind != UseKind::Normal {
+                    continue;
+                }
+                for item in *uses {
+                    let fqn = item
+                        .name
+                        .parts
+                        .iter()
+                        .map(|token| span_text(token.span, bytes))
+                        .collect::<String>()
+                        .trim_start_matches('\\')
+                        .to_string();
+                    let key = if let Some(alias) = item.alias {
+                        span_text(alias.span, bytes)
+                    } else {
+                        fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
+                    };
+                    imports.insert(key, fqn);
+                }
+            }
+            Stmt::Class {
+                name,
+                extends,
+                members,
+                span,
+                ..
+            } if span.start <= quote_offset && quote_offset <= span.end => {
+                if !looks_like_eloquent_model_extends(extends, bytes, &imports) {
+                    continue;
+                }
+
+                let model_class = span_text(name.span, bytes);
+                return detect_model_member_array_context(
+                    &model_class,
+                    members,
+                    bytes,
+                    quote_offset,
+                    prefix,
+                    line_text[..inner_start].chars().count(),
+                    line_text[..inner_end].chars().count(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 /// Detect when the cursor is inside a string in an array argument of a model instance method
@@ -2234,7 +2354,10 @@ pub fn detect_builder_relation_hover_context(
 
     let lines: Vec<&str> = source.lines().collect();
     let before_quote = &line_text[..quote_start];
-    let compact_before: String = before_quote.chars().filter(|c| !c.is_whitespace()).collect();
+    let compact_before: String = before_quote
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
 
     let (call_separator, call_line, call_pos) = BUILDER_STRING_ARG_METHODS
         .iter()
@@ -2267,7 +2390,11 @@ pub fn detect_builder_relation_hover_context(
             } else {
                 find_chain_origin_class(&lines, call_line, call_line_text, call_pos)?
             };
-            if is_model_like_class(&class_short) { Some(class_short) } else { None }
+            if is_model_like_class(&class_short) {
+                Some(class_short)
+            } else {
+                None
+            }
         })?;
 
     // Use only the part before any ':' (ignore column-selection suffix like 'rel:col,col').
@@ -2329,6 +2456,206 @@ fn find_enclosing_model_property_array_call(
         }
     }
     None
+}
+
+fn detect_model_member_array_context(
+    model_class: &str,
+    members: &[ClassMember<'_>],
+    source: &[u8],
+    quote_offset: usize,
+    prefix: String,
+    start_character: usize,
+    end_character: usize,
+) -> Option<ModelDefinitionArrayContext> {
+    for member in members {
+        match member {
+            ClassMember::Property { entries, .. } => {
+                for entry in entries.iter() {
+                    let property_name = span_text(entry.name.span, source)
+                        .trim_start_matches('$')
+                        .to_string();
+                    let Some(default) = entry.default else {
+                        continue;
+                    };
+                    if !span_contains(default.span(), quote_offset) {
+                        continue;
+                    }
+
+                    let Some((role, existing_values)) =
+                        array_string_role_and_values(default, source, quote_offset)
+                    else {
+                        continue;
+                    };
+                    let kind = model_property_completion_kind(&property_name, role)?;
+
+                    return Some(ModelDefinitionArrayContext {
+                        model_class: model_class.to_string(),
+                        property_name,
+                        kind,
+                        prefix,
+                        start_character,
+                        end_character,
+                        existing_values,
+                    });
+                }
+            }
+            ClassMember::Method { name, body, .. } => {
+                let method_name = span_text(name.span, source);
+                if method_name != "casts" {
+                    continue;
+                }
+                let Some(return_expr) = method_return_array_expr_containing(body, quote_offset)
+                else {
+                    continue;
+                };
+                let Some((role, existing_values)) =
+                    array_string_role_and_values(return_expr, source, quote_offset)
+                else {
+                    continue;
+                };
+                let kind = match role {
+                    ModelArrayStringRole::Key => ModelDefinitionArrayCompletionKind::Column,
+                    ModelArrayStringRole::ListValue => ModelDefinitionArrayCompletionKind::Column,
+                    ModelArrayStringRole::Value => ModelDefinitionArrayCompletionKind::CastValue,
+                };
+
+                return Some(ModelDefinitionArrayContext {
+                    model_class: model_class.to_string(),
+                    property_name: method_name.to_string(),
+                    kind,
+                    prefix,
+                    start_character,
+                    end_character,
+                    existing_values,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelArrayStringRole {
+    Key,
+    ListValue,
+    Value,
+}
+
+fn model_property_completion_kind(
+    property_name: &str,
+    role: ModelArrayStringRole,
+) -> Option<ModelDefinitionArrayCompletionKind> {
+    match property_name {
+        "fillable" | "guarded" => Some(ModelDefinitionArrayCompletionKind::Column),
+        "hidden" | "visible" => Some(ModelDefinitionArrayCompletionKind::Attribute),
+        "with" | "withCount" | "touches" => Some(ModelDefinitionArrayCompletionKind::Relation),
+        "appends" => Some(ModelDefinitionArrayCompletionKind::Accessor),
+        "casts" => match role {
+            ModelArrayStringRole::Key => Some(ModelDefinitionArrayCompletionKind::Column),
+            ModelArrayStringRole::ListValue => Some(ModelDefinitionArrayCompletionKind::Column),
+            ModelArrayStringRole::Value => Some(ModelDefinitionArrayCompletionKind::CastValue),
+        },
+        _ => None,
+    }
+}
+
+fn method_return_array_expr_containing<'a>(
+    body: &[StmtId<'a>],
+    quote_offset: usize,
+) -> Option<ExprId<'a>> {
+    for stmt in body {
+        if let Stmt::Return {
+            expr: Some(expr), ..
+        } = stmt
+        {
+            if span_contains(expr.span(), quote_offset) {
+                return Some(*expr);
+            }
+        }
+    }
+
+    None
+}
+
+fn array_string_role_and_values(
+    expr: ExprId<'_>,
+    source: &[u8],
+    quote_offset: usize,
+) -> Option<(ModelArrayStringRole, Vec<String>)> {
+    let Expr::Array { items, .. } = expr else {
+        return None;
+    };
+
+    let mut role = None;
+    let mut keyed_values = Vec::new();
+    let mut list_values = Vec::new();
+
+    for item in items.iter() {
+        if let Some(key) = item.key {
+            if let Some(value) = expr_to_string(key, source) {
+                keyed_values.push(value);
+            }
+            if span_contains(key.span(), quote_offset) {
+                role = Some(ModelArrayStringRole::Key);
+            }
+        }
+
+        if let Some(value) = expr_to_string(item.value, source) {
+            list_values.push(value);
+        }
+        if span_contains(item.value.span(), quote_offset) {
+            role = Some(if item.key.is_some() {
+                ModelArrayStringRole::Value
+            } else {
+                ModelArrayStringRole::ListValue
+            });
+        }
+    }
+
+    let existing_values = if keyed_values.is_empty() {
+        list_values
+    } else {
+        keyed_values
+    };
+
+    Some((role?, existing_values))
+}
+
+fn span_contains(span: php_parser::Span, offset: usize) -> bool {
+    span.start <= offset && offset <= span.end
+}
+
+fn looks_like_eloquent_model_extends(
+    extends: &Option<Name<'_>>,
+    source: &[u8],
+    imports: &HashMap<String, String>,
+) -> bool {
+    let Some(extends) = extends else {
+        return false;
+    };
+
+    let raw = extends
+        .parts
+        .iter()
+        .map(|token| span_text(token.span, source))
+        .collect::<String>()
+        .trim_start_matches('\\')
+        .to_string();
+    let resolved = if raw.contains('\\') {
+        raw.clone()
+    } else {
+        imports.get(&raw).cloned().unwrap_or_else(|| raw.clone())
+    };
+    let short = resolved.rsplit('\\').next().unwrap_or(&resolved);
+
+    short.ends_with("Model")
+        || short == "Authenticatable"
+        || short == "Pivot"
+        || short == "MorphPivot"
+        || resolved == "Illuminate\\Database\\Eloquent\\Model"
+        || resolved == "Illuminate\\Foundation\\Auth\\User"
 }
 
 fn find_enclosing_builder_array_call(
@@ -2583,11 +2910,67 @@ fn source_chars_slice(text: &str, byte_start: usize, byte_end: usize) -> String 
 #[cfg(test)]
 mod tests {
     use super::{
-        RouteActionKind, SymbolKind, ViewDataKind, detect_blade_component_attr_context,
-        detect_blade_model_property_context, detect_blade_variable_context,
-        detect_builder_arg_context, detect_route_action_context, detect_symbol_context,
+        ModelDefinitionArrayCompletionKind, RouteActionKind, SymbolKind, ViewDataKind,
+        detect_blade_component_attr_context, detect_blade_model_property_context,
+        detect_blade_variable_context, detect_builder_arg_context,
+        detect_model_definition_array_context, detect_route_action_context, detect_symbol_context,
         detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
     };
+
+    #[test]
+    fn detects_model_fillable_definition_array_context() {
+        let source = "<?php\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Article extends Model {\n    protected $fillable = ['tit'];\n}\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("'tit'").expect("fillable string") + "'tit".len();
+
+        let ctx = detect_model_definition_array_context(source, line, character)
+            .expect("model definition array context");
+
+        assert_eq!(ctx.model_class, "Article");
+        assert_eq!(ctx.property_name, "fillable");
+        assert_eq!(ctx.kind, ModelDefinitionArrayCompletionKind::Column);
+        assert_eq!(ctx.prefix, "tit");
+    }
+
+    #[test]
+    fn detects_model_casts_method_key_and_value_contexts() {
+        let source = "<?php\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Article extends Model {\n    protected function casts(): array\n    {\n        return ['published_at' => 'dat'];\n    }\n}\n";
+        let line = 5;
+        let line_text = source.lines().nth(line).expect("line should exist");
+
+        let key_character =
+            line_text.find("'published_at'").expect("cast key") + "'published".len();
+        let key_ctx = detect_model_definition_array_context(source, line, key_character)
+            .expect("casts key context");
+        assert_eq!(key_ctx.property_name, "casts");
+        assert_eq!(key_ctx.kind, ModelDefinitionArrayCompletionKind::Column);
+
+        let value_character = line_text.find("'dat'").expect("cast value") + "'dat".len();
+        let value_ctx = detect_model_definition_array_context(source, line, value_character)
+            .expect("casts value context");
+        assert_eq!(value_ctx.property_name, "casts");
+        assert_eq!(
+            value_ctx.kind,
+            ModelDefinitionArrayCompletionKind::CastValue
+        );
+        assert_eq!(value_ctx.prefix, "dat");
+    }
+
+    #[test]
+    fn detects_unkeyed_casts_method_string_as_column_context() {
+        let source = "<?php\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Article extends Model {\n    protected function casts(): array\n    {\n        return [\n            'slug' => 'boolean',\n            '',\n        ];\n    }\n}\n";
+        let line = 7;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("''").expect("empty cast key") + 1;
+
+        let ctx = detect_model_definition_array_context(source, line, character)
+            .expect("casts list item context");
+
+        assert_eq!(ctx.property_name, "casts");
+        assert_eq!(ctx.kind, ModelDefinitionArrayCompletionKind::Column);
+        assert_eq!(ctx.existing_values, vec!["slug"]);
+    }
 
     #[test]
     fn detects_variable_context_inside_foreach_directive() {

@@ -16,9 +16,9 @@ use super::context::{
     detect_blade_model_property_context, detect_blade_variable_context, detect_builder_arg_context,
     detect_builder_relation_hover_context, detect_class_property_context,
     detect_foreach_alias_context, detect_helper_context, detect_livewire_component_tag_context,
-    detect_livewire_directive_value_context, detect_model_property_array_context,
-    detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
-    detect_vendor_make_context, detect_view_data_context,
+    detect_livewire_directive_value_context, detect_model_definition_array_context,
+    detect_model_property_array_context, detect_route_action_context, detect_symbol_context,
+    detect_vendor_chain_context, detect_vendor_make_context, detect_view_data_context,
 };
 use super::index::ProjectIndex;
 use super::overrides::FileOverrides;
@@ -322,6 +322,20 @@ fn completion_result(state: &ServerState, params: Option<&Value>) -> Value {
                 .as_deref()
                 .map(|file| query::complete_blade_view_variables(index, file, &context, line))
                 .unwrap_or_default(),
+            true,
+        )
+    } else if let Some(context) = detect_model_definition_array_context(source, line, character) {
+        log_lsp_event(format!(
+            "completion uri={uri} line={} char={} context=model-definition-array model={:?} property={:?} kind={:?} prefix={:?}",
+            line,
+            character,
+            context.model_class,
+            context.property_name,
+            context.kind,
+            context.prefix
+        ));
+        (
+            query::complete_model_definition_array(index, &context, line),
             true,
         )
     } else if let Some(context) = detect_model_property_array_context(uri, source, line, character)

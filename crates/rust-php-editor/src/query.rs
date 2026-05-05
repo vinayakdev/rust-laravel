@@ -7,9 +7,10 @@ use super::context::{
     BladeComponentAttrContext, BladeComponentTagContext, BladeModelPropertyContext,
     BladeVariableContext, BuilderArgContext, BuilderRelationHoverContext, ClassPropertyContext,
     ForeachAliasContext, HelperContext, HelperStyle, LivewireComponentTagContext,
-    LivewireDirectiveValueContext, LivewireDirectiveValueKind, ModelPropertyArrayContext,
-    RouteActionContext, RouteActionKind, SymbolContext, SymbolKind, VendorChainContext,
-    VendorMakeContext, ViewDataContext, ViewDataKind, builder_method_uses_relation_name,
+    LivewireDirectiveValueContext, LivewireDirectiveValueKind, ModelDefinitionArrayCompletionKind,
+    ModelDefinitionArrayContext, ModelPropertyArrayContext, RouteActionContext, RouteActionKind,
+    SymbolContext, SymbolKind, VendorChainContext, VendorMakeContext, ViewDataContext,
+    ViewDataKind, builder_method_uses_relation_name,
 };
 use super::index::ProjectIndex;
 use super::index::fuzzy_score;
@@ -3363,6 +3364,188 @@ pub fn complete_model_property_array(
         .collect()
 }
 
+/// Complete Eloquent model definition arrays such as `$fillable`, `$casts`,
+/// `$with`, `$appends`, and `casts(): array` return values.
+pub fn complete_model_definition_array(
+    index: &ProjectIndex,
+    context: &ModelDefinitionArrayContext,
+    line: usize,
+) -> Vec<Value> {
+    let Some(model) = index.model_for_class(&context.model_class) else {
+        return Vec::new();
+    };
+
+    match context.kind {
+        ModelDefinitionArrayCompletionKind::Column => {
+            let mut matches: Vec<(u32, usize, String, String)> = model
+                .columns
+                .iter()
+                .filter(|col| {
+                    !already_present(&context.existing_values, &col.name, &context.prefix)
+                })
+                .filter_map(|col| {
+                    let score = fuzzy_score(&col.name, &context.prefix)?;
+                    let detail = format!(
+                        "{} {}",
+                        col.column_type,
+                        if col.nullable { "nullable" } else { "" }
+                    )
+                    .trim()
+                    .to_string();
+                    Some((score, col.name.len(), col.name.clone(), detail))
+                })
+                .collect();
+            matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, label.clone()));
+            matches.dedup_by(|a, b| a.2 == b.2);
+            matches
+                .into_iter()
+                .map(|(_, _, name, detail)| {
+                    model_definition_completion_item(&name, 5, &detail, context, line)
+                })
+                .collect()
+        }
+        ModelDefinitionArrayCompletionKind::Attribute => {
+            let mut candidates = Vec::new();
+            candidates.extend(model.columns.iter().map(|col| {
+                (
+                    col.name.clone(),
+                    format!(
+                        "{} {}",
+                        col.column_type,
+                        if col.nullable { "nullable" } else { "" }
+                    )
+                    .trim()
+                    .to_string(),
+                    5,
+                )
+            }));
+            candidates.extend(model.relations.iter().map(|rel| {
+                (
+                    rel.method.clone(),
+                    format!("{} relation", rel.relation_type),
+                    18,
+                )
+            }));
+            candidates.extend(
+                model
+                    .accessors
+                    .iter()
+                    .map(|name| (name.clone(), "Accessor attribute".to_string(), 10)),
+            );
+            complete_model_definition_candidates(candidates, context, line)
+        }
+        ModelDefinitionArrayCompletionKind::Relation => {
+            let candidates = model.relations.iter().map(|rel| {
+                (
+                    rel.method.clone(),
+                    format!("{} {}", rel.relation_type, rel.related_model),
+                    18,
+                )
+            });
+            complete_model_definition_candidates(candidates.collect(), context, line)
+        }
+        ModelDefinitionArrayCompletionKind::Accessor => {
+            let candidates = model
+                .accessors
+                .iter()
+                .map(|name| (name.clone(), "Accessor attribute".to_string(), 10));
+            complete_model_definition_candidates(candidates.collect(), context, line)
+        }
+        ModelDefinitionArrayCompletionKind::CastValue => complete_model_cast_values(context, line),
+    }
+}
+
+fn complete_model_definition_candidates(
+    candidates: Vec<(String, String, i32)>,
+    context: &ModelDefinitionArrayContext,
+    line: usize,
+) -> Vec<Value> {
+    let mut matches: Vec<(u32, usize, String, String, i32)> = candidates
+        .into_iter()
+        .filter(|(name, _, _)| !already_present(&context.existing_values, name, &context.prefix))
+        .filter_map(|(name, detail, kind)| {
+            let score = fuzzy_score(&name, &context.prefix)?;
+            Some((score, name.len(), name, detail, kind))
+        })
+        .collect();
+
+    matches.sort_by_key(|(score, len, label, _, _)| (Reverse(*score), *len, label.clone()));
+    matches.dedup_by(|a, b| a.2 == b.2);
+    matches
+        .into_iter()
+        .map(|(_, _, name, detail, kind)| {
+            model_definition_completion_item(&name, kind, &detail, context, line)
+        })
+        .collect()
+}
+
+fn complete_model_cast_values(context: &ModelDefinitionArrayContext, line: usize) -> Vec<Value> {
+    const CAST_TYPES: &[(&str, &str)] = &[
+        ("array", "Laravel cast"),
+        ("AsStringable::class", "Laravel cast class"),
+        ("boolean", "Laravel cast"),
+        ("collection", "Laravel cast"),
+        ("date", "Laravel cast"),
+        ("datetime", "Laravel cast"),
+        ("decimal:2", "Laravel cast"),
+        ("double", "Laravel cast"),
+        ("encrypted", "Laravel cast"),
+        ("encrypted:array", "Laravel cast"),
+        ("encrypted:collection", "Laravel cast"),
+        ("float", "Laravel cast"),
+        ("immutable_date", "Laravel cast"),
+        ("immutable_datetime", "Laravel cast"),
+        ("integer", "Laravel cast"),
+        ("json", "Laravel cast"),
+        ("object", "Laravel cast"),
+        ("real", "Laravel cast"),
+        ("string", "Laravel cast"),
+        ("timestamp", "Laravel cast"),
+    ];
+
+    let mut matches: Vec<(u32, usize, &str, &str)> = CAST_TYPES
+        .iter()
+        .filter_map(|(name, detail)| {
+            let score = fuzzy_score(name, &context.prefix)?;
+            Some((score, name.len(), *name, *detail))
+        })
+        .collect();
+    matches.sort_by_key(|(score, len, label, _)| (Reverse(*score), *len, *label));
+    matches
+        .into_iter()
+        .map(|(_, _, name, detail)| {
+            model_definition_completion_item(name, 14, detail, context, line)
+        })
+        .collect()
+}
+
+fn already_present(existing_values: &[String], candidate: &str, current_prefix: &str) -> bool {
+    existing_values
+        .iter()
+        .any(|value| value == candidate && value != current_prefix)
+}
+
+fn model_definition_completion_item(
+    label: &str,
+    kind: i32,
+    detail: &str,
+    context: &ModelDefinitionArrayContext,
+    line: usize,
+) -> Value {
+    json!({
+        "label": label,
+        "kind": kind,
+        "detail": format!("{} · {}", context.property_name, detail),
+        "textEdit": {
+            "range": {
+                "start": { "line": line, "character": context.start_character },
+                "end":   { "line": line, "character": context.end_character }
+            },
+            "newText": label
+        }
+    })
+}
+
 /// Methods that accept `'relation as alias' => fn($q)` key-value pairs in their array argument.
 const AGGREGATE_RELATION_METHODS: &[&str] = &[
     "withCount",
@@ -3716,7 +3899,8 @@ mod tests {
         HelperContext, HelperStyle, SymbolKind, detect_blade_component_tag_context,
         detect_blade_variable_context, detect_builder_arg_context,
         detect_livewire_component_tag_context, detect_livewire_directive_value_context,
-        detect_route_action_context, detect_symbol_context, detect_vendor_chain_context,
+        detect_model_definition_array_context, detect_route_action_context, detect_symbol_context,
+        detect_vendor_chain_context,
     };
     use crate::lsp::index::ProjectIndex;
     use crate::lsp::overrides::FileOverrides;
@@ -3725,10 +3909,10 @@ mod tests {
     use super::{
         blade_component_definitions, complete, complete_blade_view_variables,
         complete_builder_arg_columns, complete_livewire_components,
-        complete_livewire_directive_values, complete_route_actions, complete_vendor_chain_methods,
-        complete_view_data_variables, definitions, helper_snippets, hover,
-        livewire_component_definitions, route_action_code_actions, route_action_definitions,
-        route_diagnostics,
+        complete_livewire_directive_values, complete_model_definition_array,
+        complete_route_actions, complete_vendor_chain_methods, complete_view_data_variables,
+        definitions, helper_snippets, hover, livewire_component_definitions,
+        route_action_code_actions, route_action_definitions, route_diagnostics,
     };
 
     fn workspace_root() -> PathBuf {
@@ -3897,10 +4081,17 @@ class Panel
     fn proposal_services_project() -> project::LaravelProject {
         let root = unique_temp_project_root();
         fs::create_dir_all(&root).expect("fixture root should exist");
-        write_file(&root, "composer.json", r#"{"autoload":{"psr-4":{"App\\":"app/"}}}"#);
+        write_file(
+            &root,
+            "composer.json",
+            r#"{"autoload":{"psr-4":{"App\\":"app/"}}}"#,
+        );
         write_file(&root, "config/app.php", "<?php\n\nreturn [];\n");
         write_file(&root, "routes/web.php", "<?php\n");
-        write_file(&root, "database/migrations/2024_01_01_000000_create_proposals_table.php", r#"<?php
+        write_file(
+            &root,
+            "database/migrations/2024_01_01_000000_create_proposals_table.php",
+            r#"<?php
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -3913,8 +4104,12 @@ return new class extends Migration {
         });
     }
 };
-"#);
-        write_file(&root, "database/migrations/2024_01_01_000001_create_proposal_services_table.php", r#"<?php
+"#,
+        );
+        write_file(
+            &root,
+            "database/migrations/2024_01_01_000001_create_proposal_services_table.php",
+            r#"<?php
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -3928,8 +4123,12 @@ return new class extends Migration {
         });
     }
 };
-"#);
-        write_file(&root, "database/migrations/2024_01_01_000002_create_menu_items_table.php", r#"<?php
+"#,
+        );
+        write_file(
+            &root,
+            "database/migrations/2024_01_01_000002_create_menu_items_table.php",
+            r#"<?php
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -3943,8 +4142,12 @@ return new class extends Migration {
         });
     }
 };
-"#);
-        write_file(&root, "app/Models/Proposal.php", r#"<?php
+"#,
+        );
+        write_file(
+            &root,
+            "app/Models/Proposal.php",
+            r#"<?php
 namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 class Proposal extends Model {
@@ -3952,8 +4155,12 @@ class Proposal extends Model {
         return $this->hasMany(ProposalService::class);
     }
 }
-"#);
-        write_file(&root, "app/Models/ProposalService.php", r#"<?php
+"#,
+        );
+        write_file(
+            &root,
+            "app/Models/ProposalService.php",
+            r#"<?php
 namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 class ProposalService extends Model {
@@ -3961,12 +4168,17 @@ class ProposalService extends Model {
         return $this->hasMany(MenuItem::class);
     }
 }
-"#);
-        write_file(&root, "app/Models/MenuItem.php", r#"<?php
+"#,
+        );
+        write_file(
+            &root,
+            "app/Models/MenuItem.php",
+            r#"<?php
 namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 class MenuItem extends Model {}
-"#);
+"#,
+        );
         project::from_root(root).expect("fixture project should resolve")
     }
 
@@ -4734,7 +4946,8 @@ class ContactForm extends Component
         );
         let line = 4;
         let line_text = source.lines().nth(line).expect("line should exist");
-        let character = line_text.find("'proposalServices.'").expect("token") + "'proposalServices.".len();
+        let character =
+            line_text.find("'proposalServices.'").expect("token") + "'proposalServices.".len();
         let context =
             detect_builder_arg_context(source, line, character).expect("builder arg context");
 
@@ -4745,7 +4958,9 @@ class ContactForm extends Component
             .expect("should suggest ProposalService relations (menuItems) after dot");
 
         assert_eq!(
-            menu_items.pointer("/textEdit/newText").and_then(|v| v.as_str()),
+            menu_items
+                .pointer("/textEdit/newText")
+                .and_then(|v| v.as_str()),
             Some("proposalServices.menuItems")
         );
     }
@@ -4758,8 +4973,8 @@ class ContactForm extends Component
         let source = "<?php\nuse App\\Models\\Venue;\n\nVenue::query()->with('proposals.')\n";
         let line = 3;
         let line_text = source.lines().nth(line).expect("line should exist");
-        let character = line_text.find("->with('proposals.')").expect("token")
-            + "->with('proposals.".len();
+        let character =
+            line_text.find("->with('proposals.')").expect("token") + "->with('proposals.".len();
         let context =
             detect_builder_arg_context(source, line, character).expect("builder arg context");
 
@@ -4770,7 +4985,9 @@ class ContactForm extends Component
             .expect("should suggest nested relations when fragment is empty after dot");
 
         assert_eq!(
-            comments.pointer("/textEdit/newText").and_then(|v| v.as_str()),
+            comments
+                .pointer("/textEdit/newText")
+                .and_then(|v| v.as_str()),
             Some("proposals.comments")
         );
     }
@@ -4791,10 +5008,14 @@ class ContactForm extends Component
         let comments = items
             .iter()
             .find(|item| item.get("label").and_then(|v| v.as_str()) == Some("comments"))
-            .expect("multiline array: should suggest nested relations when fragment is empty after dot");
+            .expect(
+                "multiline array: should suggest nested relations when fragment is empty after dot",
+            );
 
         assert_eq!(
-            comments.pointer("/textEdit/newText").and_then(|v| v.as_str()),
+            comments
+                .pointer("/textEdit/newText")
+                .and_then(|v| v.as_str()),
             Some("proposals.comments")
         );
     }
@@ -4810,7 +5031,7 @@ class ContactForm extends Component
             "<?php\nuse App\\Models\\Venue;\n\n",
             "Venue::with([\n",
             "    'name',\n",
-            "    'proposals.',\n",   // ← cursor here
+            "    'proposals.',\n", // ← cursor here
             "])->with(['name'])->withCount(['proposals'])->latest();\n",
         );
         let line = 5;
@@ -4826,7 +5047,9 @@ class ContactForm extends Component
             .expect("chained call: should suggest nested relations after dot");
 
         assert_eq!(
-            comments.pointer("/textEdit/newText").and_then(|v| v.as_str()),
+            comments
+                .pointer("/textEdit/newText")
+                .and_then(|v| v.as_str()),
             Some("proposals.comments")
         );
     }
@@ -4933,6 +5156,91 @@ class ContactForm extends Component
             name.pointer("/textEdit/newText")
                 .and_then(|value| value.as_str()),
             Some("proposals:id,name")
+        );
+    }
+
+    #[test]
+    fn model_fillable_definition_array_suggests_columns() {
+        let project = builder_column_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Article extends Model {\n    protected $fillable = ['tit'];\n}\n";
+        let line = 3;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("'tit'").expect("fillable string") + "'tit".len();
+        let context = detect_model_definition_array_context(source, line, character)
+            .expect("model definition array context");
+
+        let items = complete_model_definition_array(&index, &context, line);
+        let title = items
+            .iter()
+            .find(|item| item.get("label").and_then(|value| value.as_str()) == Some("title"))
+            .expect("title column completion should exist");
+
+        assert_eq!(
+            title
+                .pointer("/textEdit/newText")
+                .and_then(|value| value.as_str()),
+            Some("title")
+        );
+    }
+
+    #[test]
+    fn model_casts_method_suggests_column_keys_and_cast_values() {
+        let project = builder_column_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Article extends Model {\n    protected function casts(): array\n    {\n        return ['tit' => 'dat'];\n    }\n}\n";
+        let line = 5;
+        let line_text = source.lines().nth(line).expect("line should exist");
+
+        let key_character = line_text.find("'tit'").expect("cast key") + "'tit".len();
+        let key_context = detect_model_definition_array_context(source, line, key_character)
+            .expect("casts key context");
+        let key_items = complete_model_definition_array(&index, &key_context, line);
+        assert!(
+            key_items
+                .iter()
+                .any(|item| item.get("label").and_then(|value| value.as_str()) == Some("title")),
+            "casts keys should suggest model columns"
+        );
+
+        let value_character = line_text.find("'dat'").expect("cast value") + "'dat".len();
+        let value_context = detect_model_definition_array_context(source, line, value_character)
+            .expect("casts value context");
+        let value_items = complete_model_definition_array(&index, &value_context, line);
+        assert!(
+            value_items.iter().any(|item| {
+                item.get("label").and_then(|value| value.as_str()) == Some("datetime")
+            }),
+            "casts values should suggest Laravel cast types"
+        );
+    }
+
+    #[test]
+    fn model_casts_method_unkeyed_string_suggests_column_keys() {
+        let project = builder_column_project();
+        let index = ProjectIndex::build_with_overrides(&project, &FileOverrides::default())
+            .expect("index should build");
+        let source = "<?php\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Article extends Model {\n    protected function casts(): array\n    {\n        return [\n            'title' => 'string',\n            '',\n        ];\n    }\n}\n";
+        let line = 7;
+        let line_text = source.lines().nth(line).expect("line should exist");
+        let character = line_text.find("''").expect("empty cast key") + 1;
+        let context = detect_model_definition_array_context(source, line, character)
+            .expect("casts list item context");
+
+        let items = complete_model_definition_array(&index, &context, line);
+        assert!(
+            items
+                .iter()
+                .any(|item| item.get("label").and_then(|value| value.as_str()) == Some("phone")),
+            "unkeyed casts entries should suggest remaining model columns"
+        );
+        assert!(
+            !items
+                .iter()
+                .any(|item| item.get("label").and_then(|value| value.as_str()) == Some("title")),
+            "existing casts keys should be filtered from suggestions"
         );
     }
 
@@ -5408,8 +5716,14 @@ class ProposalController
             .filter_map(|item| item.get("label").and_then(|v| v.as_str()))
             .collect();
 
-        assert!(labels.contains(&"proposals"), "should suggest $proposals from outer function");
-        assert!(labels.contains(&"paginate"), "should suggest $paginate from outer function");
+        assert!(
+            labels.contains(&"proposals"),
+            "should suggest $proposals from outer function"
+        );
+        assert!(
+            labels.contains(&"paginate"),
+            "should suggest $paginate from outer function"
+        );
     }
 
     #[test]
@@ -5425,7 +5739,7 @@ class ProposalController
             "        $proposals = Proposal::with([\n",
             "            'client',\n",
             "            'venue',\n",
-            "        ])->latest();\n",    // ends with ';' — statement boundary
+            "        ])->latest();\n", // ends with ';' — statement boundary
             "        return view('proposals.index', compact('proposals'));\n",
             "    }\n",
             "}\n",
@@ -5441,9 +5755,8 @@ class ProposalController
             + 1;
 
         // Must NOT fire — view() strings are not relation strings.
-        let result = crate::lsp::context::detect_builder_relation_hover_context(
-            source, line, character,
-        );
+        let result =
+            crate::lsp::context::detect_builder_relation_hover_context(source, line, character);
         assert!(
             result.is_none(),
             "detect_builder_relation_hover_context should not fire on a view() string"
