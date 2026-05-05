@@ -165,9 +165,13 @@ fn handle_connection(mut stream: TcpStream, state: Arc<State>) -> Result<(), Str
             };
             match super::vendor::class_detail(&project.root, class_fqn) {
                 Some(detail) => {
-                    let body = serde_json::to_string(&detail)
-                        .map_err(|e| e.to_string())?;
-                    write_response(&mut stream, "200 OK", "application/json; charset=utf-8", &body)?;
+                    let body = serde_json::to_string(&detail).map_err(|e| e.to_string())?;
+                    write_response(
+                        &mut stream,
+                        "200 OK",
+                        "application/json; charset=utf-8",
+                        &body,
+                    )?;
                 }
                 None => {
                     write_response(
@@ -178,34 +182,6 @@ fn handle_connection(mut stream: TcpStream, state: Arc<State>) -> Result<(), Str
                     )?;
                 }
             }
-        }
-        "/api/class-props-list" => {
-            let params = parse_query(query);
-            let Some(project_id) = params.get("project") else {
-                write_response(
-                    &mut stream,
-                    "400 Bad Request",
-                    "application/json; charset=utf-8",
-                    &error_json("missing query param: project"),
-                )?;
-                return Ok(());
-            };
-            let Some(project) = state
-                .projects
-                .iter()
-                .find(|p| p.root.to_string_lossy() == project_id)
-            else {
-                write_response(
-                    &mut stream,
-                    "404 Not Found",
-                    "application/json; charset=utf-8",
-                    &error_json("unknown project"),
-                )?;
-                return Ok(());
-            };
-            let entries = super::vendor::list_class_properties(&project.root);
-            let body = serde_json::to_string(&entries).map_err(|e| e.to_string())?;
-            write_response(&mut stream, "200 OK", "application/json; charset=utf-8", &body)?;
         }
         "/api/report" => {
             let params = parse_query(query);

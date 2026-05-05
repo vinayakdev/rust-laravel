@@ -83,9 +83,6 @@ pub(crate) fn render_text_report(
         DebugCommand::VendorList => Err(
             "vendor:list is only available in the web debugger".to_string(),
         ),
-        DebugCommand::ClassPropsList => Err(
-            "class-props:list is only available in the web debugger".to_string(),
-        ),
     }
 }
 
@@ -197,15 +194,11 @@ pub(crate) fn render_json_report(
             let classes = crate::vendor::list_vendor_classes(&project.root);
             let count = classes.len();
             (
-                json_payload(project, command, json!({ "report": { "class_count": count, "classes": classes } })),
-                Some(count),
-            )
-        }
-        DebugCommand::ClassPropsList => {
-            let entries = crate::vendor::list_class_properties(&project.root);
-            let count = entries.len();
-            (
-                json_payload(project, command, json!({ "report": { "class_count": count, "classes": entries } })),
+                json_payload(
+                    project,
+                    command,
+                    json!({ "report": { "class_count": count, "classes": classes } }),
+                ),
                 Some(count),
             )
         }
@@ -309,6 +302,12 @@ fn build_dashboard_report(project: &LaravelProject) -> Result<DashboardReport, S
         measure_feature("public", "Public Files", || {
             analyzers::public_assets::analyze(project)
                 .map(|report| summarize_public_assets(&report, &mut total_files))
+        })?,
+        measure_feature("vendor", "Vendor Classes", || {
+            Ok(summarize_vendor_classes(
+                &crate::vendor::list_vendor_classes(&project.root),
+                &mut total_files,
+            ))
         })?,
     ];
 
@@ -616,6 +615,25 @@ fn summarize_public_assets(
         files_scanned: files.len(),
         items_found: report.file_count,
         autocomplete_suggestions: report.file_count + report.usage_count,
+    }
+}
+
+fn summarize_vendor_classes(
+    classes: &[crate::vendor::VendorClass],
+    total_files: &mut BTreeSet<String>,
+) -> DashboardFeatureCounts {
+    let mut files = BTreeSet::new();
+
+    for class in classes {
+        add_path(&mut files, Path::new(&class.file));
+    }
+
+    total_files.extend(files.iter().cloned());
+
+    DashboardFeatureCounts {
+        files_scanned: files.len(),
+        items_found: classes.len(),
+        autocomplete_suggestions: classes.len(),
     }
 }
 
